@@ -1,0 +1,86 @@
+FIESTACONTROL V16 - VERSION PARA RED LOCAL
+
+1) Descomprima toda esta carpeta en la PC que quedara como SERVIDOR.
+2) Esa PC debe tener Python 3 instalado.
+3) Haga doble clic en INICIAR_FIESTACONTROL.bat.
+4) Se abrira FiestaControl en esa PC y la ventana negra mostrara una direccion similar a:
+   http://192.168.1.50:8080
+5) Desde cualquier otra PC/celular de la MISMA RED, abra Chrome/Edge y escriba exactamente esa direccion.
+6) NO abra index.html directamente en las otras PCs. Siempre entre por http://IP:8080.
+7) Deje abierta la ventana del servidor.
+
+TODOS LOS EQUIPOS COMPARTEN LA MISMA BASE:
+- Salones y solicitudes
+- Proveedores
+- Fiestas y agenda
+- Invitaciones y confirmaciones
+- Pedidos y mensajes
+- Comunidad
+- Pagos
+
+ADMIN INICIAL
+Email: admin@fiestacontrol.com
+Clave: admin123
+Cambiela desde el panel de administrador.
+
+IMPORTANTE
+Si Windows pregunta si permite el acceso de Python a redes privadas, marque PERMITIR.
+Si otra PC no abre la pagina, verifique Firewall de Windows y que ambos equipos esten en la misma red.
+
+La base queda guardada en fiestacontrol.db. No la borre si quiere conservar los datos.
+
+
+
+VERIFICACION MULTI-PC
+=====================
+1. En TODAS las PCs use exactamente la direccion que muestra el servidor, por ejemplo:
+   http://192.168.1.50:8080
+   NO abra index.html directamente en ninguna PC.
+
+2. Desde la PC cliente abra:
+   http://IP-DEL-SERVIDOR:8080/api/status
+   Debe mostrar JSON con ok:true y el mismo nombre de servidor.
+
+3. Registre un salon/proveedor desde la PC cliente.
+   En /api/status los contadores salons/providers deben aumentar.
+   El Super Admin se actualiza automaticamente.
+
+4. Si no abre /api/status desde otra PC, revise Firewall de Windows y permita Python en Redes privadas.
+
+CORRECCION V17
+==============
+Se corrigio una condicion de carrera de la V16: el refresco automatico podia leer el estado del
+servidor antes de que terminara de guardarse un alta y pisar el registro recien creado.
+Ahora las escrituras se serializan y la sincronizacion espera a que termine el guardado.
+
+
+FIESTACONTROL V18 - BASE LIMPIA Y ALTAS REMOTAS
+===============================================
+Esta carpeta NO incluye fiestacontrol.db. La primera vez que se inicia el servidor se crea una base nueva, vacia.
+El unico usuario inicial es:
+  admin@fiestacontrol.com / admin123
+
+IMPORTANTE PARA OTRAS PCs
+-------------------------
+- En la PC servidor ejecutar INICIAR_FIESTACONTROL.bat.
+- En las otras PCs NO abrir index.html.
+- Entrar siempre a http://IP-DEL-SERVIDOR:8080
+- El alta de Salon y Proveedor se guarda directamente en el servidor central.
+- El Super Admin actualiza Solicitudes automaticamente, sin F5.
+
+PRUEBA RAPIDA
+-------------
+1) En servidor entrar al Admin y abrir Solicitudes.
+2) En otra PC entrar a http://IP-DEL-SERVIDOR:8080 y registrar un salon.
+3) Debe aparecer como Pendiente en el Admin.
+4) Repetir con un proveedor.
+5) Desde la PC cliente abrir http://IP-DEL-SERVIDOR:8080/api/status y comprobar que salons/providers aumentan.
+
+
+V19: Las invitaciones tienen boton directo de confirmacion. La URL publica se genera automaticamente con la IP LAN del servidor cuando se abre localmente, y con el dominio/HTTPS cuando se publica detras de un proxy que reenvia Host y X-Forwarded-Proto.
+
+
+V20: Las observaciones/restricciones informadas por invitados quedan destacadas con alerta en la ficha de la fiesta.
+
+
+V21: Marketplace global para todos los salones. Cada pedido tiene chat interno, fecha de entrega, condición de pago y estado de pago.
