@@ -1510,3 +1510,95 @@ showModal=function(html){
 
 /* Al entrar por URL normal, mostrar portada pública si no hay sesión */
 setTimeout(()=>{if(!session && !new URLSearchParams(location.search).has('invitacion')) renderAuth('home')},0);
+
+
+/* ===================== V27: directorio público independiente y funcional ===================== */
+function fcV27ApprovedSalons(){
+  fcEnsureV26();
+  return (data.salons||[]).filter(s=>s.status==='Aprobado' && s.publicProfileEnabled!==false);
+}
+function fcV27DirectoryCard(s){
+  let rating=fcSalonRating(s.id),reviews=fcSalonReviews(s.id),cover=(s.publicGallery&&s.publicGallery[0])||s.publicPhoto||s.logo||'';
+  return `<article class="v27-salon-card">
+    <div class="v27-salon-photo">${cover?`<img src="${cover}" alt="${esc(s.name)}">`:`<div class="fc-salon-letter">${esc((s.name||'S').slice(0,1))}</div>`}</div>
+    <div class="v27-salon-info">
+      <span class="fc-zone-chip">📍 ${esc(s.zone||'Sin zona')}</span>
+      <h3>${esc(s.name)}</h3>
+      <p>${esc(s.publicDescription||'Conocé este salón y la información que decidió compartir.')}</p>
+      ${s.publicCapacity?`<small>👥 ${esc(s.publicCapacity)}</small>`:''}
+      <div class="fc-rating">${rating?`<b>${fcStars(rating)}</b><span>${rating.toFixed(1)} · ${reviews.length} reseña${reviews.length===1?'':'s'}</span>`:'<span>Sin reseñas todavía</span>'}</div>
+      <button class="primary w100" onclick="renderPublicSalonPage('${s.id}')">Entrar al salón →</button>
+    </div>
+  </article>`;
+}
+function renderPublicSalonDirectory(){
+  fcEnsureV26();
+  let salons=fcV27ApprovedSalons(),zones=[...new Set(salons.map(s=>s.zone).filter(Boolean))].sort();
+  $('#app').innerHTML=`<div class="v27-public-page">
+    <header class="v27-public-header">
+      <button class="ghost" onclick="renderAuth('home')">← Volver al inicio</button>
+      <div class="auth-brand"><div class="mark">FC</div><b>FiestaControl</b></div>
+    </header>
+    <section class="v27-directory-hero">
+      <span class="eyebrow">USUARIO FINAL</span>
+      <h1>Encontrá el salón ideal</h1>
+      <p>Todos los salones aprobados de FiestaControl. Filtrá por zona, mirá fotos, capacidad, dirección, servicios y opiniones.</p>
+    </section>
+    <section class="v27-directory-controls card">
+      <div class="field"><label>Buscar por nombre</label><input id="v27-search" placeholder="Ej.: Salón Estrella"></div>
+      <div class="field"><label>Filtrar por zona</label><select id="v27-zone"><option value="">Todas las zonas</option>${zones.map(z=>`<option value="${esc(z)}">${esc(z)}</option>`).join('')}</select></div>
+    </section>
+    <div id="v27-results" class="v27-salon-grid">${salons.map(fcV27DirectoryCard).join('')||'<div class="card empty">Todavía no hay salones aprobados publicados.</div>'}</div>
+  </div><dialog id="modal"><div id="modal-body"></div></dialog><div id="toast" class="toast"></div>`;
+  let q=$('#v27-search'),z=$('#v27-zone'),draw=()=>{let text=(q.value||'').trim().toLowerCase(),zone=z.value;let list=fcV27ApprovedSalons().filter(s=>(!text||(s.name||'').toLowerCase().includes(text))&&(!zone||s.zone===zone));$('#v27-results').innerHTML=list.map(fcV27DirectoryCard).join('')||'<div class="card empty">No encontramos salones con esos filtros.</div>'};
+  q.oninput=draw;z.onchange=draw;
+}
+window.renderPublicSalonDirectory=renderPublicSalonDirectory;
+
+function renderPublicSalonPage(sid){
+  fcEnsureV26();let s=data.salons.find(x=>x.id===sid);
+  if(!s||s.status!=='Aprobado')return renderPublicSalonDirectory();
+  let reviews=fcSalonReviews(sid).slice().sort((a,b)=>(b.created||'').localeCompare(a.created||'')),rating=fcSalonRating(sid),gallery=s.publicGallery||[];
+  let address=s.publicAddressVisible!==false?(s.address||'Dirección no cargada'):'Dirección disponible al consultar';
+  $('#app').innerHTML=`<div class="v27-public-page">
+    <header class="v27-public-header"><button class="ghost" onclick="renderPublicSalonDirectory()">← Volver a salones</button><div class="auth-brand"><div class="mark">FC</div><b>FiestaControl</b></div></header>
+    <section class="v27-salon-page-head">
+      <span class="fc-zone-chip">📍 ${esc(s.zone||'Sin zona')}</span><h1>${esc(s.name)}</h1><p>${esc(address)}</p>
+      ${rating?`<div class="fc-rating large"><b>${fcStars(rating)}</b><span>${rating.toFixed(1)} · ${reviews.length} reseña${reviews.length===1?'':'s'}</span></div>`:''}
+    </section>
+    ${gallery.length?`<section class="fc-gallery v27-gallery">${gallery.map((img,i)=>`<img src="${img}" alt="${esc(s.name)} foto ${i+1}">`).join('')}</section>`:`<section class="v27-no-gallery card">${s.publicPhoto?`<img src="${s.publicPhoto}" alt="${esc(s.name)}">`:s.logo?`<img src="${s.logo}" alt="${esc(s.name)}">`:`<div class="fc-salon-letter big">${esc((s.name||'S')[0])}</div>`}</section>`}
+    <section class="grid two v27-salon-details">
+      <div class="card"><h3>Sobre el salón</h3><p>${esc(s.publicDescription||'Este salón todavía no cargó una descripción pública.')}</p>${s.publicCapacity?`<p><b>👥 Capacidad:</b> ${esc(s.publicCapacity)}</p>`:''}${s.publicServices?`<p><b>✨ Servicios:</b> ${esc(s.publicServices)}</p>`:''}${s.publicInstagram?`<p><b>📸 Instagram:</b> ${esc(s.publicInstagram)}</p>`:''}</div>
+      <div class="card"><h3>Contacto y disponibilidad</h3><p><b>📍 Dirección:</b> ${esc(address)}</p><div class="v27-action-stack">${s.publicAvailabilityEnabled?`<button class="primary" onclick="openPublicAvailability('${s.id}')">📅 Ver fechas disponibles</button>`:''}${s.publicPhoneVisible!==false&&s.phone?`<button class="secondary" onclick="askSalonWhatsApp('${s.id}')">💬 Consultar por WhatsApp</button>`:''}<button class="ghost" onclick="openSalonReviewForm('${s.id}')">⭐ Dejar puntuación</button></div></div>
+    </section>
+    <section class="card fc-reviews-card"><div class="section-title"><h3>Opiniones de clientes</h3><small>${reviews.length} reseña${reviews.length===1?'':'s'}</small></div>${reviews.map(r=>`<div class="fc-review"><div class="fc-review-top"><b>${esc(r.name||'Cliente')}</b><span>${fcStars(r.stars)}</span></div><p>${esc(r.comment||'')}</p><small>${r.created?new Date(r.created).toLocaleDateString('es-AR'):''}</small></div>`).join('')||'<div class="empty">Todavía no tiene opiniones.</div>'}</section>
+    <div class="v27-bottom-back"><button class="ghost" onclick="renderPublicSalonDirectory()">← Volver a salones</button></div>
+  </div><dialog id="modal"><div id="modal-body"></div></dialog><div id="toast" class="toast"></div>`;
+}
+window.renderPublicSalonPage=renderPublicSalonPage;
+
+/* La portada llama DIRECTAMENTE al directorio, sin depender de la pantalla de auth */
+renderPublicHome=function(){
+  fcEnsureV26();
+  $('#app').innerHTML=`<div class="fc-home">
+    <header class="fc-home-header"><div class="auth-brand"><div class="mark">FC</div><b>FiestaControl</b></div><button class="ghost" onclick="renderAuth('login')">Ingresar</button></header>
+    <section class="fc-home-hero"><div><span class="eyebrow">SALONES · PROVEEDORES · FAMILIAS</span><h1>Todo para organizar una fiesta en un solo lugar.</h1><p>Registrá tu salón, ofrecé tus servicios como proveedor o buscá salones por zona para encontrar el lugar ideal.</p><div class="fc-home-actions"><button class="primary" onclick="renderAuth('register')">🏪 Registrar salón</button><button class="secondary" onclick="renderAuth('provider-register')">🚚 Registrar proveedor</button><button class="fc-home-public-btn" onclick="renderPublicSalonDirectory()">🎈 Ver salones</button></div></div>
+    <div class="fc-home-card"><div class="fc-home-icon">🎉</div><h3>¿Buscás dónde festejar?</h3><p>No necesitás registrarte. Entrá, filtrá por zona y conocé cada salón.</p><button class="primary w100" onclick="renderPublicSalonDirectory()">Ver todos los salones</button></div></section>
+    <section class="fc-home-features"><div><span>🏪</span><b>Para salones</b><small>Agenda, reservas, caja y perfil público.</small></div><div><span>🚚</span><b>Para proveedores</b><small>Productos, pedidos y contacto por zona.</small></div><div><span>🎈</span><b>Para familias</b><small>Fotos, dirección, capacidad, servicios y opiniones.</small></div></section>
+  </div><dialog id="modal"><div id="modal-body"></div></dialog><div id="toast" class="toast"></div>`;
+};window.renderPublicHome=renderPublicHome;
+
+/* Compatibilidad: cualquier botón viejo "availability" también va al directorio nuevo */
+const _v27Auth=renderAuth;
+renderAuth=function(mode='home'){
+  if(mode==='availability') return renderPublicSalonDirectory();
+  if(mode==='home') return renderPublicHome();
+  return _v27Auth(mode);
+};window.renderAuth=renderAuth;
+
+/* Las reseñas vuelven al perfil del salón, no a un modal perdido */
+openSalonReviewForm=function(sid){
+ let s=data.salons.find(x=>x.id===sid);if(!s)return;
+ showModal(`<div class="modal-title"><div><h2>Calificar ${esc(s.name)}</h2><p>Tu experiencia ayuda a otras familias.</p></div><button class="ghost small" onclick="closeModal()">✕</button></div><form id="fc-review-form"><div class="form-grid"><div class="field"><label>Tu nombre</label><input name="name" required></div><div class="field"><label>Puntuación</label><select name="stars" required><option value="">Elegir</option><option value="5">★★★★★ Excelente</option><option value="4">★★★★☆ Muy bueno</option><option value="3">★★★☆☆ Bueno</option><option value="2">★★☆☆☆ Regular</option><option value="1">★☆☆☆☆ Malo</option></select></div><div class="field span2"><label>Comentario</label><textarea name="comment" rows="4" required placeholder="Contá brevemente cómo fue tu experiencia..."></textarea></div></div><div class="form-actions"><button type="button" class="ghost" onclick="closeModal()">← Volver</button><button class="primary">Publicar opinión</button></div></form>`);
+ $('#fc-review-form').onsubmit=e=>{e.preventDefault();let f=Object.fromEntries(new FormData(e.target));data.salonReviews=data.salonReviews||[];data.salonReviews.push({id:id(),salonId:sid,name:f.name,stars:Number(f.stars),comment:f.comment,status:'Publicado',created:new Date().toISOString()});save();closeModal();toast('Gracias por tu opinión');setTimeout(()=>renderPublicSalonPage(sid),50)};
+};window.openSalonReviewForm=openSalonReviewForm;

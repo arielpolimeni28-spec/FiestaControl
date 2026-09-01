@@ -168,3 +168,18 @@
 .fc-capacity{display:block;margin-top:8px;color:#475569;font-weight:700}
 @media(max-width:800px){.fc-home-hero{grid-template-columns:1fr;margin-top:28px}.fc-home-features{grid-template-columns:1fr}.fc-gallery{grid-template-columns:1fr 1fr}.fc-gallery img:first-child{grid-column:1/-1;grid-row:auto;height:220px}.fc-gallery-preview{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:520px){.fc-home{padding:14px}.fc-home-actions>*{width:100%}.fc-gallery{grid-template-columns:1fr}.fc-gallery img,.fc-gallery img:first-child{height:210px}.fc-gallery-preview{grid-template-columns:1fr}}
+
+/* V27 directorio independiente */
+.v27-public-page{min-height:100vh;background:#f8fafc;padding:24px}
+.v27-public-header{max-width:1180px;margin:0 auto 24px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.v27-directory-hero,.v27-salon-page-head{max-width:1180px;margin:0 auto 18px}.v27-directory-hero h1,.v27-salon-page-head h1{font-size:clamp(32px,5vw,52px);margin:8px 0}.v27-directory-hero p,.v27-salon-page-head p{color:#64748b}
+.v27-directory-controls{max-width:1180px;margin:0 auto 18px;display:grid;grid-template-columns:1fr 260px;gap:12px}
+.v27-salon-grid{max-width:1180px;margin:auto;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+.v27-salon-card{background:#fff;border:1px solid #e2e8f0;border-radius:20px;overflow:hidden;box-shadow:0 10px 28px rgba(15,23,42,.06)}
+.v27-salon-photo{height:190px;background:linear-gradient(135deg,#ede9fe,#ddd6fe);display:grid;place-items:center;overflow:hidden}.v27-salon-photo img{width:100%;height:100%;object-fit:cover}
+.v27-salon-info{padding:16px}.v27-salon-info h3{font-size:21px;margin:8px 0}.v27-salon-info p{color:#64748b;min-height:42px}.v27-salon-info small{display:block;margin:8px 0;color:#475569}
+.v27-gallery,.v27-salon-details,.v27-no-gallery,.v27-bottom-back,.v27-public-page>.fc-reviews-card{max-width:1180px;margin-left:auto;margin-right:auto}
+.v27-no-gallery{min-height:220px;display:grid;place-items:center}.v27-no-gallery img{max-width:100%;max-height:260px;border-radius:18px}
+.v27-salon-details{margin-top:16px}.v27-action-stack{display:flex;flex-direction:column;gap:8px;margin-top:12px}.v27-bottom-back{padding:20px 0}
+@media(max-width:900px){.v27-salon-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:650px){.v27-public-page{padding:14px}.v27-directory-controls{grid-template-columns:1fr}.v27-salon-grid{grid-template-columns:1fr}.v27-public-header{align-items:flex-start}.v27-public-header .auth-brand{display:none}}

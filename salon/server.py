@@ -61,13 +61,17 @@ def register_entity(kind, payload):
                 'owner':str(payload.get('owner','')).strip(),
                 'phone':str(payload.get('phone','')).strip(),
                 'address':str(payload.get('address','')).strip(),
+                'zone':str(payload.get('zone','')).strip(),
                 'email':email,
                 'password':str(payload.get('password','')),
                 'status':'Pendiente','plan':'Inicial',
                 'created':time.strftime('%Y-%m-%d'),
-                'brandColor':'#7257ff','logo':'','publicAvailabilityEnabled':False
+                'brandColor':'#7257ff','logo':'','publicAvailabilityEnabled':False,
+                'publicProfileEnabled':True,'publicAddressVisible':True,'publicPhoneVisible':True,
+                'publicDescription':'','publicServices':'','publicCapacity':'','publicInstagram':'',
+                'publicGallery':[]
             }
-            if not item['name'] or not item['owner'] or not item['address'] or not item['password']:
+            if not item['name'] or not item['owner'] or not item['address'] or not item['zone'] or not item['password']:
                 c.close(); raise ValueError('Faltan datos obligatorios')
             arr.append(item)
         else:
