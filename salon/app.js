@@ -801,3 +801,389 @@ renderSuppliers=function(){
  ${orders.slice().sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||'')).map(o=>`<div class="order-row ${o.salonUnread?'order-unread':''}"><div class="order-main"><div class="order-title"><strong>${esc(orderProviderName(o))}</strong>${o.salonUnread?'<span class="new-dot">MENSAJE NUEVO</span>':''}</div><small>${esc(o.detail)}</small><div class="order-meta"><span class="pill ${orderStatusClass(o.status)}">${esc(o.status)}</span>${o.deliveryDate?`<span>📅 ${fmtDate(o.deliveryDate)}</span>`:''}<span>💳 ${esc(o.paymentStatus||'Pendiente')}</span><span>${money(o.amount)}</span></div></div><button class="primary small" onclick="openSalonOrderThread('${o.id}')">💬 Abrir chat</button></div>`).join('')||'<div class="empty">Todavía no hiciste pedidos.</div>'}</div>
  <div class="grid two" style="margin-top:18px"><div class="card"><div class="section-title"><h3>Mis proveedores particulares</h3></div>${ps.map(p=>`<div class="list-item"><div><strong>${esc(p.name)}</strong><small>${esc(p.category)}</small></div></div>`).join('')||'<div class="empty">Sin proveedores particulares.</div>'}</div><div class="card"><h3>Cómo funciona</h3><p class="muted">Los proveedores de Comunidad son globales. Los particulares solo pertenecen a tu salón.</p></div></div>`;
 };window.renderSuppliers=renderSuppliers;
+
+
+/* ===================== V22: Agenda / reservas con navegación por meses ===================== */
+let fcCalendarCursor = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+let fcPublicCalendarCursor = {};
+
+const FC_MONTHS = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+
+function fcMonthKey(year,month){ return `${year}-${String(month+1).padStart(2,'0')}`; }
+function fcDateKey(year,month,day){ return `${fcMonthKey(year,month)}-${String(day).padStart(2,'0')}`; }
+
+function fcCalendarControls(cursor, prefix){
+  const y=cursor.getFullYear(), m=cursor.getMonth(), currentYear=new Date().getFullYear();
+  const years=[];
+  for(let yy=currentYear-1; yy<=currentYear+6; yy++) years.push(yy);
+  return `<div class="fc-calendar-nav">
+    <button class="ghost small" onclick="${prefix}MoveMonth(-1)">← Mes anterior</button>
+    <div class="fc-calendar-selectors">
+      <select onchange="${prefix}SelectMonth(this.value)">
+        ${FC_MONTHS.map((name,i)=>`<option value="${i}" ${i===m?'selected':''}>${name}</option>`).join('')}
+      </select>
+      <select onchange="${prefix}SelectYear(this.value)">
+        ${years.map(yy=>`<option value="${yy}" ${yy===y?'selected':''}>${yy}</option>`).join('')}
+      </select>
+    </div>
+    <button class="ghost small" onclick="${prefix}Today()">Mes actual</button>
+    <button class="ghost small" onclick="${prefix}MoveMonth(1)">Mes siguiente →</button>
+  </div>`;
+}
+
+function renderCalendar(){
+  setTitle('Agenda','Consultá reservas y disponibilidad de cualquier mes');
+  const year=fcCalendarCursor.getFullYear(), month=fcCalendarCursor.getMonth();
+  const first=new Date(year,month,1).getDay(), days=new Date(year,month+1,0).getDate(), cells=[];
+  for(let i=0;i<first;i++) cells.push('<div class="day off"></div>');
+  for(let n=1;n<=days;n++){
+    const ds=fcDateKey(year,month,n), ev=se().filter(e=>e.date===ds);
+    cells.push(`<div class="day ${ev.length?'has-events':''}">
+      <div class="day-number">${n}</div>
+      ${ev.map(e=>`<button class="event-chip" onclick="openEvent('${e.id}')">${esc(e.start||'')} · ${esc(e.child||e.client||'Reserva')}</button>`).join('')}
+      ${!ev.length?`<button class="fc-free-day" onclick="openEventFormWithDate('${ds}')" title="Crear reserva">Disponible</button>`:''}
+    </div>`);
+  }
+  $('#content').innerHTML=`<div class="card">
+    <div class="calendar-head fc-calendar-head">
+      <div><h3>${FC_MONTHS[month]} ${year}</h3><small class="muted">Podés avanzar o retroceder tantos meses como necesites.</small></div>
+      <div><span class="pill confirmada">Reservado</span> <span class="pill consulta">Disponible</span></div>
+    </div>
+    ${fcCalendarControls(fcCalendarCursor,'fcAgenda')}
+    <div class="calendar">${['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'].map(x=>`<div class="weekday">${x}</div>`).join('')}${cells.join('')}</div>
+  </div>`;
+}
+window.renderCalendar=renderCalendar;
+
+function fcAgendaMoveMonth(delta){fcCalendarCursor=new Date(fcCalendarCursor.getFullYear(),fcCalendarCursor.getMonth()+Number(delta),1);renderCalendar()}
+function fcAgendaSelectMonth(v){fcCalendarCursor=new Date(fcCalendarCursor.getFullYear(),Number(v),1);renderCalendar()}
+function fcAgendaSelectYear(v){fcCalendarCursor=new Date(Number(v),fcCalendarCursor.getMonth(),1);renderCalendar()}
+function fcAgendaToday(){let d=new Date();fcCalendarCursor=new Date(d.getFullYear(),d.getMonth(),1);renderCalendar()}
+window.fcAgendaMoveMonth=fcAgendaMoveMonth;window.fcAgendaSelectMonth=fcAgendaSelectMonth;window.fcAgendaSelectYear=fcAgendaSelectYear;window.fcAgendaToday=fcAgendaToday;
+
+function openEventFormWithDate(date){
+  openEventForm();
+  setTimeout(()=>{let f=document.querySelector('#event-form'); if(f?.elements?.date) f.elements.date.value=date;},20);
+}
+window.openEventFormWithDate=openEventFormWithDate;
+
+function openPublicAvailability(sid, yearArg, monthArg){
+  let s=data.salons.find(x=>x.id===sid);if(!s||!s.publicAvailabilityEnabled)return toast('Agenda no disponible');
+  if(!fcPublicCalendarCursor[sid]){
+    let d=new Date();
+    fcPublicCalendarCursor[sid]=new Date(d.getFullYear(),d.getMonth(),1);
+  }
+  if(Number.isInteger(yearArg)&&Number.isInteger(monthArg)) fcPublicCalendarCursor[sid]=new Date(yearArg,monthArg,1);
+  let cur=fcPublicCalendarCursor[sid], year=cur.getFullYear(), month=cur.getMonth();
+  let days=new Date(year,month+1,0).getDate(),first=new Date(year,month,1).getDay(),cells=[];
+  for(let i=0;i<first;i++)cells.push('<div class="day off"></div>');
+  for(let n=1;n<=days;n++){
+    let ds=fcDateKey(year,month,n);
+    let busy=data.events.some(e=>e.salonId===sid&&e.date===ds&&['Señada','Confirmada'].includes(e.status));
+    cells.push(`<div class="day public-day ${busy?'busy':'available'}">
+      <div class="day-number">${n}</div><b>${busy?'Ocupado':'Disponible'}</b>
+      ${!busy?`<button class="secondary small" onclick="askDateWhatsApp('${sid}','${ds}')">Consultar</button>`:''}
+    </div>`);
+  }
+  showModal(`<div class="modal-title"><div><h2>${esc(s.name)}</h2><p>Disponibilidad · ${FC_MONTHS[month]} ${year}</p></div><button class="ghost small" onclick="closeModal()">✕</button></div>
+    <div class="availability-legend"><span>🟢 Disponible</span><span>🔴 Ocupado</span></div>
+    <div class="fc-calendar-nav public">
+      <button class="ghost small" onclick="fcPublicMoveMonth('${sid}',-1)">← Anterior</button>
+      <div class="fc-calendar-selectors">
+        <select onchange="fcPublicSelectMonth('${sid}',this.value)">${FC_MONTHS.map((name,i)=>`<option value="${i}" ${i===month?'selected':''}>${name}</option>`).join('')}</select>
+        <select onchange="fcPublicSelectYear('${sid}',this.value)">${Array.from({length:8},(_,i)=>new Date().getFullYear()-1+i).map(yy=>`<option value="${yy}" ${yy===year?'selected':''}>${yy}</option>`).join('')}</select>
+      </div>
+      <button class="ghost small" onclick="fcPublicMoveMonth('${sid}',1)">Siguiente →</button>
+    </div>
+    <div class="calendar public-calendar">${['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'].map(x=>`<div class="weekday">${x}</div>`).join('')}${cells.join('')}</div>`);
+}
+window.openPublicAvailability=openPublicAvailability;
+
+function fcPublicMoveMonth(sid,delta){let c=fcPublicCalendarCursor[sid]||new Date();fcPublicCalendarCursor[sid]=new Date(c.getFullYear(),c.getMonth()+Number(delta),1);openPublicAvailability(sid)}
+function fcPublicSelectMonth(sid,v){let c=fcPublicCalendarCursor[sid]||new Date();fcPublicCalendarCursor[sid]=new Date(c.getFullYear(),Number(v),1);openPublicAvailability(sid)}
+function fcPublicSelectYear(sid,v){let c=fcPublicCalendarCursor[sid]||new Date();fcPublicCalendarCursor[sid]=new Date(Number(v),c.getMonth(),1);openPublicAvailability(sid)}
+window.fcPublicMoveMonth=fcPublicMoveMonth;window.fcPublicSelectMonth=fcPublicSelectMonth;window.fcPublicSelectYear=fcPublicSelectYear;
+
+
+/* ===================== V23: Gestión integral - finanzas, caja, personal, comunidad e invitaciones ===================== */
+function fcEnsureV23(){
+  data.cashMovements=data.cashMovements||[];
+  data.communityPosts=data.communityPosts||[];
+  data.events=data.events||[];
+  data.staff=data.staff||[];
+  data.events.forEach(e=>{
+    e.extras=e.extras||[];
+    e.payments=e.payments||[];
+    e.rsvps=e.rsvps||[];
+  });
+  data.communityPosts.forEach(p=>{
+    p.comments=p.comments||[];
+    p.reactions=p.reactions||[];
+  });
+}
+fcEnsureV23();
+
+function fcEventBaseTotal(e){ return Number(e.baseTotal ?? e.total ?? 0); }
+function fcEventExtrasTotal(e){ return (e.extras||[]).reduce((a,x)=>a+Number(x.amount||0),0); }
+function fcEventContracted(e){
+  if(typeof e.baseTotal==='undefined') e.baseTotal=Number(e.total||0)-fcEventExtrasTotal(e);
+  return Number(e.baseTotal||0)+fcEventExtrasTotal(e);
+}
+function fcEventCollected(e){
+  if((e.payments||[]).length) return (e.payments||[]).reduce((a,p)=>a+Number(p.amount||0),0);
+  return Number(e.paid||0);
+}
+function fcSyncEventTotals(e){
+  e.total=fcEventContracted(e);
+  e.paid=fcEventCollected(e);
+}
+function fcPaymentMethods(){return ['Efectivo','Mercado Pago','Transferencia','Débito','Crédito','Otro']}
+function fcToday(){return new Date().toISOString().slice(0,10)}
+function fcSalonCash(){return (data.cashMovements||[]).filter(x=>x.salonId===session.salonId)}
+function fcGeneralIncome(){return fcSalonCash().filter(x=>x.type==='Ingreso').reduce((a,x)=>a+Number(x.amount||0),0)}
+function fcExpenses(){return fcSalonCash().filter(x=>x.type==='Egreso').reduce((a,x)=>a+Number(x.amount||0),0)}
+function fcEventIncome(){return se().reduce((a,e)=>a+fcEventCollected(e),0)}
+function fcPaymentHistory(e){
+  let rows=(e.payments||[]).slice().sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  if(!rows.length && Number(e.paid||0)>0) return `<div class="list-item"><div><strong>Cobro anterior</strong><small>Importe acumulado antes del historial detallado</small></div><b>${money(e.paid)}</b></div>`;
+  return rows.map(p=>`<div class="list-item"><div><strong>${fmtDate(p.date||fcToday())} · ${esc(p.method||'Sin medio')}</strong><small>${esc(p.note||'Sin observación')}</small></div><b>${money(p.amount)}</b></div>`).join('')||'<div class="empty">Todavía no hay cobros registrados.</div>';
+}
+
+/* 2, 3 y 4: cobros reales + medios de pago */
+openPayment=function(eid){
+  fcEnsureV23();let e=data.events.find(x=>x.id===eid);if(!e)return;
+  let saldo=Math.max(0,fcEventContracted(e)-fcEventCollected(e));
+  showModal(`<div class="modal-title"><div><h2>Registrar cobro</h2><p>Saldo pendiente ${money(saldo)}</p></div><button class="ghost small" onclick="openEvent('${eid}')">✕</button></div>
+  <form id="pf"><div class="form-grid">
+    <div class="field"><label>Fecha del cobro</label><input name="date" type="date" value="${fcToday()}" required></div>
+    <div class="field"><label>Importe</label><input name="amount" type="number" min="1" max="${saldo||999999999}" required></div>
+    <div class="field"><label>Medio de pago</label><select name="method">${fcPaymentMethods().map(m=>`<option>${m}</option>`).join('')}</select></div>
+    <div class="field"><label>Concepto</label><select name="concept"><option>Seña</option><option>Cuota</option><option>Saldo final</option><option>Otro</option></select></div>
+    <div class="field span2"><label>Observación</label><input name="note" placeholder="Ej.: seña recibida por transferencia"></div>
+  </div><div class="form-actions"><button class="ghost" type="button" onclick="openEvent('${eid}')">Volver</button><button class="primary">Registrar cobro</button></div></form>`);
+  $('#pf').onsubmit=x=>{x.preventDefault();let f=Object.fromEntries(new FormData(x.target));e.payments=e.payments||[];
+    if(!e.payments.length && Number(e.paid||0)>0)e.payments.push({id:id(),date:e.date||fcToday(),amount:Number(e.paid),method:'Anterior',concept:'Cobro anterior',note:'Importe existente antes del historial detallado'});
+    e.payments.push({id:id(),...f,amount:Number(f.amount||0),createdAt:new Date().toISOString()});fcSyncEventTotals(e);save();toast('Cobro registrado');openEvent(eid)};
+};window.openPayment=openPayment;
+
+/* 5 y 6: caja e ingresos/egresos */
+function openCashMovement(type='Egreso'){
+  showModal(`<div class="modal-title"><div><h2>${type==='Ingreso'?'Registrar ingreso':'Registrar egreso'}</h2><p>Movimiento independiente de una reserva.</p></div></div>
+  <form id="cash-form"><div class="form-grid">
+  <div class="field"><label>Fecha</label><input name="date" type="date" value="${fcToday()}" required></div>
+  <div class="field"><label>Importe</label><input name="amount" type="number" min="1" required></div>
+  <div class="field"><label>Concepto</label><input name="concept" required placeholder="${type==='Ingreso'?'Ej.: alquiler extra':'Ej.: bebidas, limpieza, reparación'}"></div>
+  <div class="field"><label>Categoría</label><select name="category">${(type==='Ingreso'?['Ingreso general','Extra','Servicio adicional','Otro']:['Bebidas','Limpieza','Personal','Proveedor','Mantenimiento','Servicios','Impuestos','Otro']).map(x=>`<option>${x}</option>`).join('')}</select></div>
+  <div class="field"><label>Medio de pago</label><select name="method">${fcPaymentMethods().map(m=>`<option>${m}</option>`).join('')}</select></div>
+  <div class="field"><label>Observación</label><input name="note" placeholder="Detalle opcional"></div>
+  </div><div class="form-actions"><button type="button" class="ghost" onclick="closeModal()">Cancelar</button><button class="primary">Guardar movimiento</button></div></form>`);
+  $('#cash-form').onsubmit=e=>{e.preventDefault();let f=Object.fromEntries(new FormData(e.target));data.cashMovements.push({id:id(),salonId:session.salonId,type,...f,amount:Number(f.amount||0),createdAt:new Date().toISOString()});save();closeModal();renderFinance();toast('Movimiento registrado')};
+}
+window.openCashMovement=openCashMovement;
+
+function fcFinanceRows(rows){
+  return rows.slice().sort((a,b)=>(b.date||'').localeCompare(a.date||'')).map(x=>`<tr><td>${fmtDate(x.date)}</td><td><span class="pill ${x.type==='Ingreso'?'aprobado':'suspendido'}">${x.type}</span></td><td>${esc(x.concept)}</td><td>${esc(x.category||'')}</td><td>${esc(x.method||'')}</td><td class="${x.type==='Ingreso'?'good':'bad'}"><b>${x.type==='Ingreso'?'+':'-'} ${money(x.amount)}</b></td><td>${esc(x.note||'')}</td></tr>`).join('')||'<tr><td colspan="7" class="empty">Sin movimientos en este período.</td></tr>';
+}
+function renderFinance(){
+  fcEnsureV23();setTitle('Ingresos y Finanzas','Cobros reales, saldos pendientes, caja y gastos');
+  let ev=se();ev.forEach(fcSyncEventTotals);
+  let contracted=ev.reduce((a,e)=>a+fcEventContracted(e),0), eventIncome=fcEventIncome(), otherIncome=fcGeneralIncome(), expenses=fcExpenses(), collected=eventIncome+otherIncome, pending=Math.max(0,contracted-eventIncome), net=collected-expenses;
+  let rows=fcSalonCash();
+  $('#content').innerHTML=`<div class="grid stats finance-kpis">
+    <div class="card stat"><div class="stat-icon">🧾</div><small>Contratado</small><strong>${money(contracted)}</strong><em>Valor de reservas + extras</em></div>
+    <div class="card stat"><div class="stat-icon">✅</div><small>Ingresado</small><strong>${money(collected)}</strong><em>Cobros reales + otros ingresos</em></div>
+    <div class="card stat"><div class="stat-icon">⏳</div><small>Pendiente de cobro</small><strong>${money(pending)}</strong><em>Saldo de reservas</em></div>
+    <div class="card stat"><div class="stat-icon">📤</div><small>Egresos</small><strong>${money(expenses)}</strong><em>Gastos registrados</em></div>
+    <div class="card stat"><div class="stat-icon">💰</div><small>Resultado neto</small><strong class="${net<0?'bad':'good'}">${money(net)}</strong><em>Ingresos - egresos</em></div>
+  </div>
+  <div class="card finance-explainer"><b>Importante</b><p>“Contratado” es el valor de las fiestas reservadas. “Ingresado” muestra únicamente el dinero efectivamente cobrado.</p></div>
+  <div class="toolbar finance-toolbar"><button class="primary" onclick="openCashMovement('Ingreso')">+ Otro ingreso</button><button class="secondary" onclick="openCashMovement('Egreso')">− Nuevo egreso</button></div>
+  <div class="grid two">
+    <div class="card"><div class="section-title"><h3>Cobros de reservas</h3><small class="muted">Historial por fiesta</small></div>
+    ${ev.slice().sort((a,b)=>a.date.localeCompare(b.date)).map(e=>`<div class="list-item"><div><strong>${esc(e.child)} · ${fmtDate(e.date)}</strong><small>Contratado ${money(fcEventContracted(e))} · Cobrado ${money(fcEventCollected(e))}</small></div><div class="actions"><b class="${fcEventContracted(e)-fcEventCollected(e)>0?'bad':'good'}">${money(fcEventContracted(e)-fcEventCollected(e))}</b><button class="secondary small" onclick="openEvent('${e.id}')">Ver</button></div></div>`).join('')||'<div class="empty">No hay reservas.</div>'}</div>
+    <div class="card"><div class="section-title"><h3>Resumen por medio de pago</h3></div>
+    ${fcPaymentMethods().map(method=>{let sum=ev.flatMap(e=>e.payments||[]).filter(p=>p.method===method).reduce((a,p)=>a+Number(p.amount||0),0)+rows.filter(x=>x.type==='Ingreso'&&x.method===method).reduce((a,x)=>a+Number(x.amount||0),0);return `<div class="list-item"><span>${method}</span><b>${money(sum)}</b></div>`}).join('')}</div>
+  </div>
+  <div class="card" style="margin-top:18px"><div class="section-title"><div><h3>Caja · ingresos y egresos</h3><small class="muted">Movimientos generales del salón</small></div></div>
+  <div class="table-wrap"><table class="table"><thead><tr><th>Fecha</th><th>Tipo</th><th>Concepto</th><th>Categoría</th><th>Medio</th><th>Importe</th><th>Observación</th></tr></thead><tbody>${fcFinanceRows(rows)}</tbody></table></div></div>`;
+}
+window.renderFinance=renderFinance;
+
+/* 7: personal con lenguaje claro y seguimiento de pago */
+openStaffForm=function(){
+ showModal(`<div class="modal-title"><div><h2>Agregar personal</h2><p>Registrá el costo habitual para poder estimar cada evento.</p></div></div><form id="sf"><div class="form-grid"><div class="field"><label>Nombre</label><input name="name" required></div><div class="field"><label>Rol / tarea</label><input name="role" required placeholder="Ej.: mozo, animación, cocina"></div><div class="field"><label>WhatsApp</label><input name="phone"></div><div class="field"><label>Pago habitual por evento</label><input name="defaultFee" type="number" min="0"></div></div><div class="form-actions"><button class="ghost" type="button" onclick="closeModal()">Cancelar</button><button class="primary">Guardar</button></div></form>`);
+ $('#sf').onsubmit=x=>{x.preventDefault();let f=Object.fromEntries(new FormData(x.target));f.defaultFee=Number(f.defaultFee||0);data.staff.push({id:id(),salonId:session.salonId,...f});save();closeModal();renderSalonShell()}
+};window.openStaffForm=openStaffForm;
+
+/* Extras de una reserva */
+function openExtraForm(eid){
+ let e=data.events.find(x=>x.id===eid);if(!e)return;
+ showModal(`<div class="modal-title"><div><h2>Agregar extra</h2><p>${esc(e.child)} · aumenta el valor contratado.</p></div></div><form id="extra-form"><div class="form-grid"><div class="field span2"><label>Concepto</label><input name="concept" required placeholder="Ej.: hora adicional, gaseosas, decoración"></div><div class="field"><label>Importe</label><input name="amount" type="number" min="0" required></div><div class="field"><label>Observación</label><input name="note" placeholder="Detalle opcional"></div></div><div class="form-actions"><button type="button" class="ghost" onclick="openEvent('${eid}')">Volver</button><button class="primary">Agregar extra</button></div></form>`);
+ $('#extra-form').onsubmit=x=>{x.preventDefault();let f=Object.fromEntries(new FormData(x.target));e.extras=e.extras||[];if(typeof e.baseTotal==='undefined')e.baseTotal=Number(e.total||0)-fcEventExtrasTotal(e);e.extras.push({id:id(),...f,amount:Number(f.amount||0),createdAt:new Date().toISOString()});fcSyncEventTotals(e);save();toast('Extra agregado');openEvent(eid)}
+}
+window.openExtraForm=openExtraForm;
+
+/* Ficha de fiesta integral + punto 8 navegación clara */
+openEvent=function(eid){
+ fcEnsureV23();let e=data.events.find(x=>x.id===eid);if(!e)return;fcSyncEventTotals(e);let r=e.rsvps||[], notes=rsvpObservationCount? rsvpObservationCount(e):(r.filter(x=>String(x.note||'').trim()).length), yes=r.filter(x=>x.status==='Sí').length;
+ let extras=(e.extras||[]);
+ showModal(`<div class="modal-title"><div><h2>${esc(e.child)} · ${fmtDate(e.date)}</h2><p>${esc(e.client)} · ${e.start} a ${e.end}</p></div><button class="ghost small" onclick="closeModal()">✕ Cerrar</button></div>
+ ${notes?`<div class="rsvp-warning-banner"><div class="rsvp-warning-icon">⚠️</div><div><b>${notes} invitado${notes===1?'':'s'} con observaciones</b><span>Revisá alimentación, alergias u otros comentarios.</span></div></div>`:''}
+ <div class="grid stats" style="grid-template-columns:repeat(4,1fr)"><div class="card"><small class="muted">Contratado</small><strong>${money(fcEventContracted(e))}</strong></div><div class="card"><small class="muted">Cobrado</small><strong class="good">${money(fcEventCollected(e))}</strong></div><div class="card"><small class="muted">Pendiente</small><strong class="${fcEventContracted(e)-fcEventCollected(e)>0?'bad':'good'}">${money(Math.max(0,fcEventContracted(e)-fcEventCollected(e)))}</strong></div><div class="card"><small class="muted">Confirmados</small><strong>${yes}</strong></div></div>
+ <div class="toolbar" style="margin-top:16px"><button class="primary small" onclick="openPayment('${eid}')">+ Registrar cobro</button><button class="secondary small" onclick="openExtraForm('${eid}')">+ Agregar extra</button><button class="secondary small" onclick="openInvitation('${eid}')">Invitación</button><button class="ghost small" onclick="openEventForm('${eid}')">Editar reserva</button></div>
+ <div class="grid two" style="margin-top:16px"><div class="card"><h3>Detalle</h3><div class="list"><div class="list-item"><div><strong>Paquete ${esc(e.package)}</strong><small>${e.guests} invitados estimados</small></div><span class="pill ${e.status.toLowerCase()}">${e.status}</span></div><div class="list-item"><div><strong>Observaciones internas</strong><small>${esc(e.notes||'Sin observaciones')}</small></div></div></div></div>
+ <div class="card"><h3>Extras</h3>${extras.map(x=>`<div class="list-item"><div><strong>${esc(x.concept)}</strong><small>${esc(x.note||'')}</small></div><b>${money(x.amount)}</b></div>`).join('')||'<div class="empty">Sin extras.</div>'}</div></div>
+ <div class="grid two" style="margin-top:16px"><div class="card"><div class="section-title"><h3>Historial de cobros</h3></div>${fcPaymentHistory(e)}</div><div class="card"><div class="section-title"><h3>Confirmaciones</h3><small>${r.length} respuestas</small></div>${typeof rsvpRowsHTML==='function'?rsvpRowsHTML(e):r.map(x=>`<div class="list-item"><div><b>${esc(x.name)}</b><small>${esc(x.note||'')}</small></div><span>${esc(x.status)}</span></div>`).join('')}</div></div>
+ <div class="form-actions sticky-modal-actions"><button class="ghost" onclick="closeModal()">← Volver al panel</button></div>`);
+};window.openEvent=openEvent;
+
+/* 9: comunidad participativa: publicar, comentar y reaccionar */
+function openSalonCommunityPostForm(){
+ let s=salon();
+ showModal(`<div class="modal-title"><div><h2>Publicar en la comunidad</h2><p>Tu publicación será visible para los salones de FiestaControl.</p></div></div><form id="salon-post-form"><div class="form-grid"><div class="field span2"><label>Título</label><input name="title" required></div><div class="field"><label>Tipo</label><select name="type"><option>Idea</option><option>Consulta</option><option>Recomendación</option><option>Experiencia</option></select></div><div class="field"><label>Valoración opcional</label><select name="rating"><option value="">Sin estrellas</option>${[5,4,3,2,1].map(n=>`<option value="${n}">${'⭐'.repeat(n)}</option>`).join('')}</select></div><div class="field span2"><label>Publicación</label><textarea name="body" rows="5" required></textarea></div></div><div class="form-actions"><button type="button" class="ghost" onclick="closeModal()">Cancelar</button><button class="primary">Publicar</button></div></form>`);
+ $('#salon-post-form').onsubmit=e=>{e.preventDefault();let f=Object.fromEntries(new FormData(e.target));data.communityPosts.push({id:id(),...f,target:'Todos',author:s.name,authorSalonId:s.id,created:new Date().toISOString(),pinned:false,readBy:[s.id],comments:[],reactions:[]});save();closeModal();renderCommunity();toast('Publicado en la comunidad')};
+}
+window.openSalonCommunityPostForm=openSalonCommunityPostForm;
+function toggleCommunityReaction(pid){
+ let p=data.communityPosts.find(x=>x.id===pid),s=salon();if(!p)return;p.reactions=p.reactions||[];let i=p.reactions.indexOf(s.id);if(i>=0)p.reactions.splice(i,1);else p.reactions.push(s.id);save();renderCommunity();
+}
+window.toggleCommunityReaction=toggleCommunityReaction;
+
+renderCommunity=function(){
+ fcEnsureV23();setTitle('Comunidad','Publicaciones, consultas y experiencias entre salones');
+ let s=salon(),posts=[...(data.communityPosts||[])].filter(p=>p.target==='Todos'||p.target===s.plan||p.target===s.id).sort((a,b)=>Number(b.pinned)-Number(a.pinned)||(b.created||'').localeCompare(a.created||''));
+ $('#content').innerHTML=`<div class="community-hero"><div><div class="eyebrow light">COMUNIDAD FIESTACONTROL</div><h2>Una red activa de salones.</h2><p>Compartí ideas, consultas, experiencias y recomendaciones con otros salones.</p><button class="hero-btn" onclick="openSalonCommunityPostForm()">+ Crear publicación</button></div><div class="community-badge"><b>${posts.length}</b><small>publicaciones</small><span>${data.salons.filter(x=>x.status==='Aprobado').length} salones</span></div></div>
+ <div class="community-layout"><div class="community-feed">${posts.map(p=>{let comments=p.comments||[],react=p.reactions||[],mine=react.includes(s.id);return `<article class="card community-post ${p.pinned?'pinned':''}"><div class="post-head"><div><span class="post-type">${esc(p.type||'Comunidad')}</span>${p.pinned?'<span class="pin">📌 Fijado</span>':''}</div><small>${p.created?new Date(p.created).toLocaleString('es-AR'):''}</small></div><h3>${esc(p.title||'')}</h3>${p.rating?`<div class="community-rating">${'⭐'.repeat(Number(p.rating))}</div>`:''}<p>${esc(p.body||'').replace(/\n/g,'<br>')}</p><div class="post-foot"><span>Por <b>${esc(p.author||'FiestaControl')}</b></span><div class="actions"><button class="${mine?'secondary':'ghost'} small" onclick="toggleCommunityReaction('${p.id}')">👍 ${react.length} Me sirve</button><button class="ghost small" onclick="toggleComments('${p.id}')">💬 ${comments.length}</button></div></div><div class="comments" id="comments-${p.id}" style="display:none">${comments.map(c=>`<div class="comment"><b>${esc(c.salonName)}</b><span>${esc(c.text)}</span><small>${new Date(c.created).toLocaleString('es-AR')}</small></div>`).join('')||'<div class="muted">Sin comentarios todavía.</div>'}<form onsubmit="addCommunityComment(event,'${p.id}')"><input name="text" placeholder="Escribí un comentario..." required><button class="secondary small">Enviar</button></form></div></article>`}).join('')||'<div class="card empty">Todavía no hay publicaciones.</div>'}</div><aside class="community-side"><div class="card"><h3>Participá</h3><p class="muted">Los salones pueden publicar, comentar y reaccionar. El administrador mantiene la moderación general.</p><button class="primary w100" onclick="openSalonCommunityPostForm()">Publicar</button></div></aside></div>`;
+ posts.forEach(p=>{p.readBy=p.readBy||[];if(!p.readBy.includes(s.id))p.readBy.push(s.id)});save();
+};window.renderCommunity=renderCommunity;
+
+/* 10: estilos profesionales de tarjeta */
+const fcInviteStyles={
+  moderna:{name:'Moderna',desc:'Impactante y visual'},
+  elegante:{name:'Elegante',desc:'Tipografía limpia y sofisticada'},
+  minimal:{name:'Minimal',desc:'Simple y clara'}
+};
+function fcStyledCardHTML(e,c,compact=false){
+ let html=cardHTML(e,c,compact),style=c?.layoutStyle||'moderna';
+ return html.replace('virtual-card photo-card',`virtual-card photo-card invite-style-${style}`);
+}
+renderCards=function(){
+ setTitle('Tarjetas virtuales','Invitaciones profesionales optimizadas para celular y WhatsApp');let ev=se().sort((a,b)=>a.date.localeCompare(b.date));
+ if(!ev.length){$('#content').innerHTML='<div class="card empty">Primero creá una fiesta.<br><br><button class="primary" onclick="openEventForm()">+ Crear fiesta</button></div>';return}
+ $('#content').innerHTML=`<div class="cards-intro"><div><h2>💌 Invitaciones digitales</h2><p>Elegí temática, estilo, imagen y mensaje. El invitado podrá confirmar asistencia y ver cómo llegar.</p></div></div><div class="card-gallery">${ev.map(e=>{let c=cardFor(e.id);return `<div class="card card-project"><div class="project-head"><div><small>${fmtDate(e.date)} · ${e.start}</small><h3>${esc(e.child)} · ${e.age} años</h3></div><span class="pill aprobado">✅ ${confirmedCount(e)} confirmados</span></div>${fcStyledCardHTML(e,c,true)}<div class="card-actions"><button class="secondary" onclick="openCardEditor('${e.id}')">🎨 Diseñar</button><button class="ghost" onclick="openInvitation('${e.id}')">👁 Vista previa</button><button class="secondary" onclick="openPublicInvitationTab('${e.id}')">🎟️ Invitación pública</button><button class="primary" onclick="shareCardWhatsApp('${e.id}')">📲 WhatsApp</button></div></div>`}).join('')}</div>`;
+};window.renderCards=renderCards;
+
+const _fcOldOpenCardEditor=openCardEditor;
+openCardEditor=function(eid){
+ let e=data.events.find(x=>x.id===eid),c=cardFor(eid)||{theme:'superheroes',emoji:'🦸',title:`¡${e.child} cumple ${e.age}!`,message:'Te esperamos para compartir una tarde llena de diversión.',extra:'¡No faltes!',customImage:'',layoutStyle:'moderna'};
+ showModal(`<div class="modal-title"><div><h2>Diseñar invitación</h2><p>${esc(e.child)} · ${fmtDate(e.date)}</p></div><button class="ghost small" onclick="closeModal()">✕</button></div><form id="v23-card-form">
+ <div class="field"><label>Estilo visual</label><div class="invite-style-picker">${Object.entries(fcInviteStyles).map(([k,v])=>`<label class="invite-style-option"><input type="radio" name="layoutStyle" value="${k}" ${(c.layoutStyle||'moderna')===k?'checked':''}><b>${v.name}</b><small>${v.desc}</small></label>`).join('')}</div></div>
+ <div class="field"><label>Temática</label><div class="theme-grid visual-themes">${Object.entries(cardThemes).map(([k,t])=>`<label class="theme-option visual ${c.theme===k?'selected':''}"><input type="radio" name="theme" value="${k}" ${c.theme===k?'checked':''}><img src="${t.image}" alt="${esc(t.name)}"><span><b>${t.name}</b><small>${t.icon}</small></span></label>`).join('')}</div></div>
+ <div class="upload-theme"><div><b>Imagen personalizada</b><small>Podés usar una foto o diseño propio.</small></div><label class="secondary file-button">📷 Subir imagen<input id="v23-card-image" type="file" accept="image/*" hidden></label></div><input type="hidden" name="customImage" value="${esc(c.customImage||'')}">
+ <div class="form-grid"><div class="field"><label>Emoji / ícono</label><input name="emoji" value="${esc(c.emoji||'🎉')}"></div><div class="field"><label>Título</label><input name="title" value="${esc(c.title||`¡${e.child} cumple ${e.age}!`)}"></div><div class="field span2"><label>Mensaje</label><textarea name="message" rows="3">${esc(c.message||'Te esperamos para compartir una tarde llena de diversión.')}</textarea></div><div class="field span2"><label>Frase final</label><input name="extra" value="${esc(c.extra||'¡No faltes!')}"></div></div>
+ <div class="form-actions"><button type="button" class="ghost" onclick="closeModal()">← Volver</button><button class="primary">Guardar invitación</button></div></form>`);
+ let file=$('#v23-card-image'),form=$('#v23-card-form');file.onchange=()=>{let f=file.files[0];if(!f)return;let rd=new FileReader();rd.onload=()=>form.elements.customImage.value=rd.result;rd.readAsDataURL(f)};
+ form.onsubmit=x=>{x.preventDefault();let f=Object.fromEntries(new FormData(x.target)),old=cardFor(eid);if(old)Object.assign(old,f);else data.cards.push({id:id(),eventId:eid,salonId:session.salonId,...f});save();closeModal();renderCards();toast('Invitación guardada')};
+};window.openCardEditor=openCardEditor;
+
+/* Vista previa y página pública: botón de regreso visible */
+openInvitation=function(eid){let e=data.events.find(x=>x.id===eid),c=cardFor(eid),s=salonForEvent?salonForEvent(e):salon();showModal(`<div class="invite-preview-top"><button class="ghost small" onclick="closeModal()">← Volver al panel</button></div>${typeof invitationPublicHTML==='function'?invitationPublicHTML(e,c,s):fcStyledCardHTML(e,c)}<div class="form-actions"><button class="secondary" onclick="openPublicInvitationTab('${eid}')">🎟️ Abrir invitación pública</button><button class="primary" onclick="shareCardWhatsApp('${eid}')">📲 Compartir WhatsApp</button></div>`)};window.openInvitation=openInvitation;
+
+const _v23RenderPublicInvitationPage=typeof renderPublicInvitationPage==='function'?renderPublicInvitationPage:null;
+renderPublicInvitationPage=function(eid){
+ let e=data.events.find(x=>x.id===eid);if(!e){$('#app').innerHTML='<div class="public-invite-page"><div class="card empty">La invitación no está disponible.</div></div>';return}
+ let c=data.cards.find(x=>x.eventId===eid),s=salonForEvent(e);session=null;sessionStorage.removeItem(SESSION);
+ $('#app').innerHTML=`<main class="public-invite-page"><div class="public-backbar"><button onclick="history.length>1?history.back():location.href='/'">← Volver</button></div>${invitationPublicHTML(e,c,s)}</main><dialog id="modal"><div id="modal-body"></div></dialog><div id="toast" class="toast"></div>`;
+};window.renderPublicInvitationPage=renderPublicInvitationPage;
+
+/* Dashboard: terminología clara */
+renderDashboard=function(){
+ fcEnsureV23();setTitle('Dashboard','Resumen operativo y económico del salón');let ev=se(), upcoming=ev.filter(e=>e.date>=todayKey()).sort((a,b)=>a.date.localeCompare(b.date));ev.forEach(fcSyncEventTotals);
+ let contracted=ev.reduce((a,e)=>a+fcEventContracted(e),0),eventIncome=fcEventIncome(),otherIncome=fcGeneralIncome(),expenses=fcExpenses(),collected=eventIncome+otherIncome,pending=Math.max(0,contracted-eventIncome),confirmed=ev.filter(e=>['Confirmada','Señada'].includes(e.status)).length;
+ $('#content').innerHTML=`${todayEvents().length?`<div class="today-dashboard-alert"><div class="today-dashboard-icon">🎉</div><div><span class="eyebrow">AGENDA DE HOY</span><h2>Tenés ${todayEvents().length} fiesta${todayEvents().length>1?'s':''} programada${todayEvents().length>1?'s':''}</h2></div><button class="primary" onclick="view='events';renderSalonShell()">Ver</button></div>`:''}
+ <div class="grid stats"><div class="card stat"><div class="stat-icon">🎉</div><small>Fiestas activas</small><strong>${confirmed}</strong><em>${upcoming.length} próximas</em></div><div class="card stat"><div class="stat-icon">🧾</div><small>Contratado</small><strong>${money(contracted)}</strong><em>Reservas + extras</em></div><div class="card stat"><div class="stat-icon">✅</div><small>Ingresado</small><strong>${money(collected)}</strong><em>Dinero realmente cobrado</em></div><div class="card stat"><div class="stat-icon">⏳</div><small>Pendiente</small><strong>${money(pending)}</strong><em>Por cobrar de reservas</em></div><div class="card stat"><div class="stat-icon">📤</div><small>Egresos</small><strong>${money(expenses)}</strong><em>Gastos registrados</em></div></div>
+ <div class="card" style="margin-top:16px"><div class="section-title"><h3>Acciones rápidas</h3></div><div class="quick-grid"><button class="quick" onclick="openEventForm()"><span>➕</span><strong>Nueva reserva</strong><small>Cargar una fiesta</small></button><button class="quick" onclick="view='calendar';renderSalonShell()"><span>📅</span><strong>Ver agenda</strong><small>Meses y años</small></button><button class="quick" onclick="view='finance';renderSalonShell()"><span>💰</span><strong>Caja</strong><small>Cobros y gastos</small></button><button class="quick" onclick="view='community';renderSalonShell()"><span>🌐</span><strong>Comunidad</strong><small>Publicar y comentar</small></button><button class="quick" onclick="view='cards';renderSalonShell()"><span>💌</span><strong>Invitaciones</strong><small>Diseños profesionales</small></button></div></div>
+ <div class="grid two" style="margin-top:16px"><div class="card"><div class="section-title"><h3>Próximas fiestas</h3><button class="ghost small" onclick="view='events';renderSalonShell()">Ver todas</button></div>${upcoming.slice(0,6).map(e=>`<div class="list-item"><div><strong>${esc(e.child)} · ${fmtDate(e.date)}</strong><small>${esc(e.client)} · ${e.start}</small></div><b class="${fcEventContracted(e)-fcEventCollected(e)>0?'bad':'good'}">${money(fcEventContracted(e)-fcEventCollected(e))}</b></div>`).join('')||'<div class="empty">Sin próximas fiestas.</div>'}</div><div class="card"><div class="section-title"><h3>Resultado de caja</h3></div><div class="cash-big"><small>Ingresos</small><b>${money(collected)}</b><small>Egresos</small><b>${money(expenses)}</b><hr><small>Resultado</small><strong class="${collected-expenses<0?'bad':'good'}">${money(collected-expenses)}</strong></div></div></div>`;
+};window.renderDashboard=renderDashboard;
+
+
+/* ===================== V24: privacidad entre salones + zonas ===================== */
+function fcZoneOptions(){return ['CABA','Zona Oeste','Zona Norte','Zona Sur','La Plata / Gran La Plata','Interior PBA','Otra']}
+function fcZoneLabel(s){return s?.zone||'Sin zona'}
+function fcNormalizeZones(){(data.salons||[]).forEach(s=>{if(typeof s.zone==='undefined')s.zone=''});(data.marketSuppliers||[]).forEach(p=>{if(typeof p.zone==='undefined')p.zone=''});}
+fcNormalizeZones();
+
+/* Los salones NO pueden navegar información interna de otros salones.
+   La comunidad muestra publicaciones, pero no precios, reservas, caja, clientes ni datos operativos. */
+function fcPublicSalonName(id){let s=(data.salons||[]).find(x=>x.id===id);return s?`${s.name} · ${fcZoneLabel(s)}`:'Salón'}
+
+/* Perfil: agrega zona general para ordenar la red */
+editSalonProfile=function(){
+ let s=salon();fcNormalizeZones();
+ showModal(`<div class="modal-title"><div><h2>Editar salón</h2><p>Datos visibles de tu propio salón.</p></div></div><form id="ep">
+ <div class="logo-upload-box">${s.logo?`<img id="logo-preview" src="${s.logo}" alt="Logo">`:`<div id="logo-preview" class="logo-preview-placeholder">${esc((s.name||'S').slice(0,1))}</div>`}<div><b>Logo del salón</b><small>PNG o JPG.</small><label class="secondary file-button">📷 Elegir logo<input id="salon-logo-file" type="file" accept="image/*" hidden></label><button type="button" class="ghost small" onclick="removeSalonLogo()">Quitar logo</button></div></div>
+ <input type="hidden" name="logo" value="${esc(s.logo||'')}"><div class="form-grid">
+ <div class="field span2"><label>Nombre</label><input name="name" value="${esc(s.name)}"></div>
+ <div class="field"><label>Responsable</label><input name="owner" value="${esc(s.owner)}"></div>
+ <div class="field"><label>WhatsApp</label><input name="phone" value="${esc(s.phone||'')}"></div>
+ <div class="field span2"><label>Dirección</label><input name="address" value="${esc(s.address||'')}"></div>
+ <div class="field"><label>Zona</label><select name="zone"><option value="">Seleccionar zona</option>${fcZoneOptions().map(z=>`<option ${s.zone===z?'selected':''}>${z}</option>`).join('')}</select><small class="muted">Se usa para ordenar proveedores y comunidad, sin exponer información privada.</small></div>
+ <div class="field"><label>Color de marca</label><input name="brandColor" type="color" value="${esc(s.brandColor||'#7257ff')}"></div>
+ </div><div class="form-actions"><button class="ghost" type="button" onclick="closeModal()">Cancelar</button><button class="primary">Guardar cambios</button></div></form>`);
+ let form=$('#ep'),file=$('#salon-logo-file');file.onchange=()=>{let f=file.files[0];if(!f)return;let r=new FileReader();r.onload=()=>{form.elements.logo.value=r.result;let p=$('#logo-preview');if(p.outerHTML.includes('placeholder'))p.outerHTML=`<img id="logo-preview" src="${r.result}" alt="Logo">`;else p.src=r.result};r.readAsDataURL(f)};
+ form.onsubmit=e=>{e.preventDefault();Object.assign(s,Object.fromEntries(new FormData(e.target)));save();closeModal();renderSalonShell();toast('Datos del salón actualizados')};
+};window.editSalonProfile=editSalonProfile;
+
+/* Registro de salón: zona desde el alta */
+const _v24OpenSalonRegister=typeof openSalonRegister==='function'?openSalonRegister:null;
+if(_v24OpenSalonRegister){
+  openSalonRegister=function(){
+    _v24OpenSalonRegister();
+    setTimeout(()=>{let form=document.querySelector('form');if(!form||form.querySelector('[name="zone"]'))return;let grid=form.querySelector('.form-grid');if(grid){let div=document.createElement('div');div.className='field';div.innerHTML=`<label>Zona</label><select name="zone"><option value="">Seleccionar zona</option>${fcZoneOptions().map(z=>`<option>${z}</option>`).join('')}</select>`;grid.appendChild(div)}},0)
+  };window.openSalonRegister=openSalonRegister;
+}
+
+/* Proveedores: zona para filtrar alcance comercial */
+const _v24ProviderRegister=typeof openProviderRegister==='function'?openProviderRegister:null;
+if(_v24ProviderRegister){
+ openProviderRegister=function(){
+  _v24ProviderRegister();
+  setTimeout(()=>{let form=document.querySelector('form');if(!form||form.querySelector('[name="zone"]'))return;let grid=form.querySelector('.form-grid');if(grid){let div=document.createElement('div');div.className='field';div.innerHTML=`<label>Zona principal de trabajo</label><select name="zone"><option value="">Todas / sin definir</option>${fcZoneOptions().map(z=>`<option>${z}</option>`).join('')}</select>`;grid.appendChild(div)}},0)
+ };window.openProviderRegister=openProviderRegister;
+}
+
+/* Marketplace por zona: prioriza proveedores de la misma zona, sin impedir proveedores que trabajen en varias áreas */
+function fcSupplierZone(p){return p.zone||p.serviceZone||''}
+function fcMarketplaceApproved(){let s=salon();return (data.marketSuppliers||[]).filter(p=>p.status==='Aprobado').sort((a,b)=>{let az=fcSupplierZone(a)===s.zone?0:1,bz=fcSupplierZone(b)===s.zone?0:1;return az-bz||(a.business||a.name||'').localeCompare(b.business||b.name||'')})}
+
+/* Comunidad V24: interacción sí; acceso a otro salón no. Filtro de zona. */
+renderCommunity=function(){
+ fcEnsureV23();fcNormalizeZones();setTitle('Comunidad','Ideas y experiencias, sin exponer información privada de otros salones');
+ let s=salon(),filter=sessionStorage.getItem('fc_community_zone')||'Mi zona';
+ let posts=[...(data.communityPosts||[])].filter(p=>p.target==='Todos'||p.target===s.plan||p.target===s.id);
+ if(filter==='Mi zona')posts=posts.filter(p=>!p.authorSalonId||((data.salons||[]).find(x=>x.id===p.authorSalonId)?.zone||'')===(s.zone||''));
+ else if(filter!=='Todas')posts=posts.filter(p=>!p.authorSalonId||((data.salons||[]).find(x=>x.id===p.authorSalonId)?.zone||'')===filter);
+ posts.sort((a,b)=>Number(b.pinned)-Number(a.pinned)||(b.created||'').localeCompare(a.created||''));
+ $('#content').innerHTML=`<div class="community-hero"><div><div class="eyebrow light">COMUNIDAD FIESTACONTROL</div><h2>Compartir sin invadir la gestión de otro salón.</h2><p>Los salones pueden publicar, comentar y recomendar. Nunca ven precios, reservas, clientes, caja ni información interna de otro salón.</p><button class="hero-btn" onclick="openSalonCommunityPostForm()">+ Crear publicación</button></div><div class="community-badge"><b>${posts.length}</b><small>publicaciones</small><span>${esc(fcZoneLabel(s))}</span></div></div>
+ <div class="card zone-filter"><div><b>📍 Filtrar comunidad por zona</b><small>Ayuda a encontrar información cercana sin cargar una lista enorme de localidades.</small></div><select id="community-zone-filter"><option>Mi zona</option><option>Todas</option>${fcZoneOptions().map(z=>`<option ${filter===z?'selected':''}>${z}</option>`).join('')}</select></div>
+ <div class="privacy-note">🔒 Cada salón mantiene privada su operación. La comunidad comparte únicamente lo que cada usuario decide publicar.</div>
+ <div class="community-layout"><div class="community-feed">${posts.map(p=>{let comments=p.comments||[],react=p.reactions||[],mine=react.includes(s.id),author=(data.salons||[]).find(x=>x.id===p.authorSalonId);return `<article class="card community-post ${p.pinned?'pinned':''}"><div class="post-head"><div><span class="post-type">${esc(p.type||'Comunidad')}</span>${p.pinned?'<span class="pin">📌 Fijado</span>':''}</div><small>${p.created?new Date(p.created).toLocaleString('es-AR'):''}</small></div><h3>${esc(p.title||'')}</h3>${p.rating?`<div class="community-rating">${'⭐'.repeat(Number(p.rating))}</div>`:''}<p>${esc(p.body||'').replace(/\n/g,'<br>')}</p><div class="post-foot"><span>Por <b>${esc(p.author||'FiestaControl')}</b>${author?.zone?` · 📍 ${esc(author.zone)}`:''}</span><div class="actions"><button class="${mine?'secondary':'ghost'} small" onclick="toggleCommunityReaction('${p.id}')">👍 ${react.length}</button><button class="ghost small" onclick="toggleComments('${p.id}')">💬 ${comments.length}</button></div></div><div class="comments" id="comments-${p.id}" style="display:none">${comments.map(c=>`<div class="comment"><b>${esc(c.salonName)}</b><span>${esc(c.text)}</span><small>${new Date(c.created).toLocaleString('es-AR')}</small></div>`).join('')||'<div class="muted">Sin comentarios todavía.</div>'}<form onsubmit="addCommunityComment(event,'${p.id}')"><input name="text" placeholder="Escribí un comentario..." required><button class="secondary small">Enviar</button></form></div></article>`}).join('')||'<div class="card empty">No hay publicaciones para este filtro.</div>'}</div><aside class="community-side"><div class="card"><h3>Privacidad entre salones</h3><p class="muted">No existe un botón para entrar al panel de otro salón. Solo se comparte contenido publicado en Comunidad y disponibilidad pública cuando el propio salón la habilita.</p></div></aside></div>`;
+ let z=$('#community-zone-filter');if(z){z.value=filter;z.onchange=()=>{sessionStorage.setItem('fc_community_zone',z.value);renderCommunity()}}
+ posts.forEach(p=>{p.readBy=p.readBy||[];if(!p.readBy.includes(s.id))p.readBy.push(s.id)});save();
+};window.renderCommunity=renderCommunity;
+
+/* Publicación incluye alcance geográfico opcional, sin datos internos */
+openSalonCommunityPostForm=function(){
+ let s=salon();
+ showModal(`<div class="modal-title"><div><h2>Publicar en la comunidad</h2><p>Compartí solo la información que quieras hacer pública para la red.</p></div></div><form id="salon-post-form"><div class="form-grid"><div class="field span2"><label>Título</label><input name="title" required></div><div class="field"><label>Tipo</label><select name="type"><option>Idea</option><option>Consulta</option><option>Recomendación</option><option>Experiencia</option></select></div><div class="field"><label>Valoración opcional</label><select name="rating"><option value="">Sin estrellas</option>${[5,4,3,2,1].map(n=>`<option value="${n}">${'⭐'.repeat(n)}</option>`).join('')}</select></div><div class="field span2"><label>Publicación</label><textarea name="body" rows="5" required></textarea></div></div><div class="privacy-note">🔒 No se comparte automáticamente ningún precio, reserva, cliente ni dato financiero de tu salón.</div><div class="form-actions"><button type="button" class="ghost" onclick="closeModal()">Cancelar</button><button class="primary">Publicar</button></div></form>`);
+ $('#salon-post-form').onsubmit=e=>{e.preventDefault();let f=Object.fromEntries(new FormData(e.target));data.communityPosts.push({id:id(),...f,target:'Todos',author:s.name,authorSalonId:s.id,created:new Date().toISOString(),pinned:false,readBy:[s.id],comments:[],reactions:[]});save();closeModal();renderCommunity();toast('Publicado en la comunidad')};
+};window.openSalonCommunityPostForm=openSalonCommunityPostForm;
+
+/* Marketplace: agrega selector de zona encima de la vista existente, cuando corresponda */
+const _v24RenderSuppliers=typeof renderSuppliers==='function'?renderSuppliers:null;
+if(_v24RenderSuppliers){
+ renderSuppliers=function(){
+   _v24RenderSuppliers();
+   setTimeout(()=>{let c=$('#content');if(!c||c.querySelector('.market-zone-info'))return;let s=salon(),box=document.createElement('div');box.className='card market-zone-info';box.innerHTML=`<div><b>📍 Proveedores por zona</b><small>Tu zona: ${esc(fcZoneLabel(s))}. Los proveedores cercanos se priorizan para evitar resultados poco útiles.</small></div></div>`;c.prepend(box)},0)
+ };window.renderSuppliers=renderSuppliers;
+}
