@@ -1187,3 +1187,326 @@ if(_v24RenderSuppliers){
    setTimeout(()=>{let c=$('#content');if(!c||c.querySelector('.market-zone-info'))return;let s=salon(),box=document.createElement('div');box.className='card market-zone-info';box.innerHTML=`<div><b>📍 Proveedores por zona</b><small>Tu zona: ${esc(fcZoneLabel(s))}. Los proveedores cercanos se priorizan para evitar resultados poco útiles.</small></div></div>`;c.prepend(box)},0)
  };window.renderSuppliers=renderSuppliers;
 }
+
+
+/* ===================== V25: zona obligatoria + portal público de salones + reseñas ===================== */
+function fcEnsureV25(){
+  data.salonReviews=data.salonReviews||[];
+  (data.salons||[]).forEach(s=>{
+    if(typeof s.zone==='undefined')s.zone='';
+    if(typeof s.publicDescription==='undefined')s.publicDescription='';
+    if(typeof s.publicPhoneVisible==='undefined')s.publicPhoneVisible=true;
+    if(typeof s.publicAddressVisible==='undefined')s.publicAddressVisible=true;
+    if(typeof s.publicProfileEnabled==='undefined')s.publicProfileEnabled=true;
+    if(typeof s.publicPhoto==='undefined')s.publicPhoto='';
+  });
+}
+fcEnsureV25();
+
+function fcZones(){return ['CABA','Zona Oeste','Zona Norte','Zona Sur','La Plata / Gran La Plata','Interior PBA','Otra']}
+
+/* 1) Alta de salón: zona obligatoria */
+registerForm=function(){return `<form id="auth-form"><div class="form-grid">
+<div class="field span2"><label>Nombre del salón</label><input name="name" required></div>
+<div class="field"><label>Responsable</label><input name="owner" required></div>
+<div class="field"><label>WhatsApp</label><input name="phone"></div>
+<div class="field span2"><label>Dirección</label><input name="address" required></div>
+<div class="field"><label>Zona</label><select name="zone" required><option value="">Seleccionar zona</option>${fcZones().map(z=>`<option value="${z}">${z}</option>`).join('')}</select><small class="muted">La zona permite que las familias encuentren el salón más fácilmente.</small></div>
+<div class="field"><label>Email</label><input name="email" type="email" required></div>
+<div class="field span2"><label>Contraseña</label><input name="password" type="password" required minlength="4"></div>
+</div><button class="primary w100">Crear cuenta del salón</button></form>`};
+window.registerForm=registerForm;
+
+/* 2) Portal usuario final: búsqueda por zona y entrada a cada salón */
+function fcSalonReviews(sid){return (data.salonReviews||[]).filter(r=>r.salonId===sid&&r.status!=='Oculto')}
+function fcSalonRating(sid){let r=fcSalonReviews(sid);return r.length?r.reduce((a,x)=>a+Number(x.stars||0),0)/r.length:0}
+function fcStars(n){let v=Math.round(Number(n||0));return '★'.repeat(v)+'☆'.repeat(Math.max(0,5-v))}
+function fcPublicSalonCard(s){
+  let rating=fcSalonRating(s.id),count=fcSalonReviews(s.id).length;
+  return `<article class="fc-public-salon-card">
+    <div class="fc-public-salon-cover">${s.publicPhoto?`<img src="${s.publicPhoto}" alt="${esc(s.name)}">`:s.logo?`<img src="${s.logo}" alt="${esc(s.name)}">`:`<div class="fc-salon-letter">${esc((s.name||'S')[0])}</div>`}</div>
+    <div class="fc-public-salon-body"><div><span class="fc-zone-chip">📍 ${esc(s.zone||'Sin zona')}</span><h3>${esc(s.name)}</h3>${rating?`<div class="fc-rating"><b>${fcStars(rating)}</b><span>${rating.toFixed(1)} · ${count} reseña${count===1?'':'s'}</span></div>`:`<div class="fc-rating empty-rating">Sin reseñas todavía</div>`}<p>${esc(s.publicDescription||'Conocé este salón y consultá su disponibilidad.')}</p></div><button class="primary" onclick="openPublicSalonProfile('${s.id}')">Ver salón →</button></div>
+  </article>`;
+}
+function publicAvailabilityHome(){
+  fcEnsureV25();
+  let salons=(data.salons||[]).filter(s=>s.status==='Aprobado'&&s.publicProfileEnabled!==false);
+  let zones=[...new Set(salons.map(s=>s.zone).filter(Boolean))].sort();
+  return `<div class="public-directory-v25">
+    <div class="public-directory-head"><div><span class="eyebrow">USUARIO FINAL</span><h2>Encontrá tu salón</h2><p>Buscá por zona, mirá la información que cada salón decidió publicar y consultá fechas disponibles.</p></div></div>
+    <div class="public-searchbar"><input id="fc-public-search" placeholder="Buscar salón por nombre..."><select id="fc-public-zone"><option value="">Todas las zonas</option>${zones.map(z=>`<option>${esc(z)}</option>`).join('')}</select></div>
+    <div id="fc-public-results" class="fc-public-salon-grid">${salons.map(fcPublicSalonCard).join('')||'<div class="empty">Todavía no hay salones publicados.</div>'}</div>
+  </div>`;
+}
+window.publicAvailabilityHome=publicAvailabilityHome;
+
+function fcBindPublicDirectory(){
+  let q=$('#fc-public-search'),z=$('#fc-public-zone');if(!q||!z)return;
+  let draw=()=>{let text=q.value.trim().toLowerCase(),zone=z.value;let salons=(data.salons||[]).filter(s=>s.status==='Aprobado'&&s.publicProfileEnabled!==false&&(!zone||s.zone===zone)&&(!text||(s.name||'').toLowerCase().includes(text)));$('#fc-public-results').innerHTML=salons.map(fcPublicSalonCard).join('')||'<div class="empty">No encontramos salones con ese filtro.</div>'};
+  q.oninput=draw;z.onchange=draw;
+}
+
+/* Reemplaza la pantalla de "fechas" por un verdadero acceso para familias */
+const _v25RenderAuth=renderAuth;
+renderAuth=function(mode='login'){
+  _v25RenderAuth(mode);
+  if(mode==='availability'){
+    setTimeout(fcBindPublicDirectory,0);
+    let h=document.querySelector('.auth-card > h2');if(h)h.textContent='Buscar salones';
+    let p=h?.nextElementSibling;if(p&&p.classList.contains('muted'))p.textContent='Entrá como usuario final, filtrá por zona y conocé cada salón.';
+  }
+  setTimeout(()=>{let btns=[...document.querySelectorAll('.entry-actions button')];let b=btns.find(x=>x.textContent.includes('Ver fechas disponibles'));if(b)b.innerHTML='🎈 Buscar salón / Usuario final'},0);
+};window.renderAuth=renderAuth;
+
+function openPublicSalonProfile(sid){
+  fcEnsureV25();let s=data.salons.find(x=>x.id===sid);if(!s||s.status!=='Aprobado'||s.publicProfileEnabled===false)return toast('Perfil no disponible');
+  let reviews=fcSalonReviews(sid).slice().sort((a,b)=>(b.created||'').localeCompare(a.created||'')),rating=fcSalonRating(sid);
+  let address=s.publicAddressVisible!==false?(s.address||'Dirección no cargada'):'Dirección disponible al consultar';
+  let phoneVisible=s.publicPhoneVisible!==false&&s.phone;
+  showModal(`<div class="fc-public-profile">
+    <div class="modal-title"><div><span class="fc-zone-chip">📍 ${esc(s.zone||'Sin zona')}</span><h2>${esc(s.name)}</h2><p>${esc(address)}</p></div><button class="ghost small" onclick="closeModal()">✕</button></div>
+    <div class="fc-public-profile-hero">${s.publicPhoto?`<img src="${s.publicPhoto}" alt="${esc(s.name)}">`:s.logo?`<img src="${s.logo}" alt="${esc(s.name)}">`:`<div class="fc-salon-letter big">${esc((s.name||'S')[0])}</div>`}<div><h3>Sobre el salón</h3><p>${esc(s.publicDescription||'Este salón todavía no cargó una descripción pública.')}</p>${rating?`<div class="fc-rating large"><b>${fcStars(rating)}</b><span>${rating.toFixed(1)} sobre 5 · ${reviews.length} reseña${reviews.length===1?'':'s'}</span></div>`:'<div class="fc-rating empty-rating">Todavía no tiene reseñas.</div>'}</div></div>
+    <div class="fc-public-actions">${s.publicAvailabilityEnabled?`<button class="primary" onclick="openPublicAvailability('${s.id}')">📅 Ver disponibilidad</button>`:''}${phoneVisible?`<button class="secondary" onclick="askSalonWhatsApp('${s.id}')">💬 Consultar por WhatsApp</button>`:''}<button class="ghost" onclick="openSalonReviewForm('${s.id}')">⭐ Puntuar salón</button></div>
+    <div class="card fc-reviews-card"><div class="section-title"><h3>Opiniones de clientes</h3><small>${reviews.length} reseña${reviews.length===1?'':'s'}</small></div>${reviews.map(r=>`<div class="fc-review"><div class="fc-review-top"><b>${esc(r.name||'Cliente')}</b><span>${fcStars(r.stars)}</span></div><p>${esc(r.comment||'')}</p><small>${r.created?new Date(r.created).toLocaleDateString('es-AR'):''}</small></div>`).join('')||'<div class="empty">Sé el primero en dejar una opinión.</div>'}</div>
+    <div class="form-actions"><button class="ghost" onclick="closeModal()">← Volver a buscar salones</button></div>
+  </div>`);
+}
+window.openPublicSalonProfile=openPublicSalonProfile;
+
+function askSalonWhatsApp(sid){let s=data.salons.find(x=>x.id===sid);if(!s||!s.phone)return;let t=`Hola ${s.name}, los encontré en FiestaControl y quisiera consultar por una fiesta.`;window.open(`https://wa.me/${String(s.phone).replace(/\D/g,'')}?text=${encodeURIComponent(t)}`,'_blank')}
+window.askSalonWhatsApp=askSalonWhatsApp;
+
+/* 3) Reseñas: estrellas + comentario del usuario final */
+function openSalonReviewForm(sid){
+ let s=data.salons.find(x=>x.id===sid);if(!s)return;
+ showModal(`<div class="modal-title"><div><h2>Calificar ${esc(s.name)}</h2><p>Tu experiencia ayuda a otras familias.</p></div></div>
+ <form id="fc-review-form"><div class="form-grid">
+ <div class="field"><label>Tu nombre</label><input name="name" required></div>
+ <div class="field"><label>Puntuación</label><select name="stars" required><option value="">Elegir</option><option value="5">★★★★★ Excelente</option><option value="4">★★★★☆ Muy bueno</option><option value="3">★★★☆☆ Bueno</option><option value="2">★★☆☆☆ Regular</option><option value="1">★☆☆☆☆ Malo</option></select></div>
+ <div class="field span2"><label>Comentario</label><textarea name="comment" rows="4" required placeholder="Contá brevemente cómo fue tu experiencia..."></textarea></div>
+ </div><div class="privacy-note">Las reseñas son públicas. No publiques teléfonos, direcciones particulares ni datos sensibles.</div>
+ <div class="form-actions"><button type="button" class="ghost" onclick="openPublicSalonProfile('${sid}')">Volver</button><button class="primary">Publicar opinión</button></div></form>`);
+ $('#fc-review-form').onsubmit=e=>{e.preventDefault();let f=Object.fromEntries(new FormData(e.target));data.salonReviews.push({id:id(),salonId:sid,name:f.name,stars:Number(f.stars),comment:f.comment,status:'Publicado',created:new Date().toISOString()});save();toast('Gracias por tu opinión');openPublicSalonProfile(sid)};
+}
+window.openSalonReviewForm=openSalonReviewForm;
+
+/* 4) El salón decide qué información mostrar públicamente */
+editSalonProfile=function(){
+ let s=salon();fcEnsureV25();
+ showModal(`<div class="modal-title"><div><h2>Editar salón</h2><p>Configurá tus datos y lo que verán las familias.</p></div></div><form id="ep">
+ <div class="logo-upload-box">${s.logo?`<img id="logo-preview" src="${s.logo}" alt="Logo">`:`<div id="logo-preview" class="logo-preview-placeholder">${esc((s.name||'S').slice(0,1))}</div>`}<div><b>Logo del salón</b><small>Se muestra en tu perfil e invitaciones.</small><label class="secondary file-button">📷 Elegir logo<input id="salon-logo-file" type="file" accept="image/*" hidden></label></div></div>
+ <input type="hidden" name="logo" value="${esc(s.logo||'')}"><input type="hidden" name="publicPhoto" value="${esc(s.publicPhoto||'')}">
+ <div class="form-grid">
+ <div class="field span2"><label>Nombre</label><input name="name" value="${esc(s.name)}" required></div>
+ <div class="field"><label>Responsable</label><input name="owner" value="${esc(s.owner)}"></div>
+ <div class="field"><label>WhatsApp</label><input name="phone" value="${esc(s.phone||'')}"></div>
+ <div class="field span2"><label>Dirección</label><input name="address" value="${esc(s.address||'')}" required></div>
+ <div class="field"><label>Zona</label><select name="zone" required><option value="">Seleccionar zona</option>${fcZones().map(z=>`<option value="${z}" ${s.zone===z?'selected':''}>${z}</option>`).join('')}</select></div>
+ <div class="field"><label>Color de marca</label><input name="brandColor" type="color" value="${esc(s.brandColor||'#7257ff')}"></div>
+ <div class="field span2"><label>Descripción pública</label><textarea name="publicDescription" rows="4" placeholder="Contá qué ofrece tu salón, capacidad, tipo de eventos, servicios incluidos...">${esc(s.publicDescription||'')}</textarea></div>
+ </div>
+ <div class="upload-theme"><div><b>Foto principal del perfil público</b><small>La verán las familias cuando busquen salones.</small></div><label class="secondary file-button">📷 Subir foto<input id="fc-public-photo" type="file" accept="image/*" hidden></label></div>
+ <div class="card fc-public-controls"><h3>Información visible para familias</h3>
+ <label class="fc-check"><input type="checkbox" name="publicProfileEnabled" ${s.publicProfileEnabled!==false?'checked':''}> Mostrar mi salón en el buscador público</label>
+ <label class="fc-check"><input type="checkbox" name="publicAddressVisible" ${s.publicAddressVisible!==false?'checked':''}> Mostrar dirección</label>
+ <label class="fc-check"><input type="checkbox" name="publicPhoneVisible" ${s.publicPhoneVisible!==false?'checked':''}> Permitir consultas por WhatsApp</label>
+ </div>
+ <div class="form-actions"><button class="ghost" type="button" onclick="closeModal()">Cancelar</button><button class="primary">Guardar cambios</button></div></form>`);
+ let form=$('#ep'),logoFile=$('#salon-logo-file'),photoFile=$('#fc-public-photo');
+ const readFile=(file,input)=>{if(!file)return;let r=new FileReader();r.onload=()=>form.elements[input].value=r.result;r.readAsDataURL(file)};
+ logoFile.onchange=()=>readFile(logoFile.files[0],'logo');photoFile.onchange=()=>readFile(photoFile.files[0],'publicPhoto');
+ form.onsubmit=e=>{e.preventDefault();let f=Object.fromEntries(new FormData(e.target));f.publicProfileEnabled=form.elements.publicProfileEnabled.checked;f.publicAddressVisible=form.elements.publicAddressVisible.checked;f.publicPhoneVisible=form.elements.publicPhoneVisible.checked;Object.assign(s,f);save();closeModal();renderSalonShell();toast('Perfil público actualizado')};
+};window.editSalonProfile=editSalonProfile;
+
+renderProfile=function(){
+ fcEnsureV25();let s=salon(),rating=fcSalonRating(s.id),reviews=fcSalonReviews(s.id).length;setTitle('Mi salón','Identidad, zona y perfil público');
+ $('#content').innerHTML=`<div class="profile-hero"><div class="profile-brand-preview">${s.logo?`<img src="${s.logo}" alt="Logo">`:`<div class="profile-logo-placeholder">${esc((s.name||'S').slice(0,1))}</div>`}<div><small>IDENTIDAD DEL SALÓN</small><h2>${esc(s.name)}</h2><p>📍 ${esc(s.zone||'Zona sin definir')} · ${esc(s.address||'')}</p></div></div><button class="primary" onclick="editSalonProfile()">✏️ Editar perfil público</button></div>
+ <div class="grid two"><div class="card"><div class="section-title"><h3>Datos del salón</h3></div><div class="list"><div class="list-item"><div><strong>Zona</strong><small>${esc(s.zone||'Sin definir')}</small></div></div><div class="list-item"><div><strong>Perfil en buscador</strong><small>${s.publicProfileEnabled!==false?'Visible para familias':'Oculto'}</small></div><span class="pill ${s.publicProfileEnabled!==false?'aprobado':'pendiente'}">${s.publicProfileEnabled!==false?'Publicado':'Oculto'}</span></div><div class="list-item"><div><strong>WhatsApp público</strong><small>${s.publicPhoneVisible!==false?'Habilitado':'Oculto'}</small></div></div><div class="list-item"><div><strong>Dirección pública</strong><small>${s.publicAddressVisible!==false?'Visible':'Oculta'}</small></div></div></div></div>
+ <div class="card"><div class="section-title"><h3>Reputación pública</h3></div><div class="fc-rating-profile"><strong>${rating?rating.toFixed(1):'—'}</strong><span>${rating?fcStars(rating):'Sin reseñas'}</span><small>${reviews} comentario${reviews===1?'':'s'} de clientes</small></div><button class="secondary w100" onclick="openPublicSalonProfile('${s.id}')">👁 Ver cómo me ven las familias</button></div></div>`;
+};window.renderProfile=renderProfile;
+
+
+/* ===================== V26: navegación volver + portada pública + perfil enriquecido ===================== */
+function fcEnsureV26(){
+  data.salonReviews=data.salonReviews||[];
+  (data.salons||[]).forEach(s=>{
+    if(!Array.isArray(s.publicGallery)) s.publicGallery=[];
+    if(typeof s.publicDescription==='undefined') s.publicDescription='';
+    if(typeof s.publicServices==='undefined') s.publicServices='';
+    if(typeof s.publicCapacity==='undefined') s.publicCapacity='';
+    if(typeof s.publicInstagram==='undefined') s.publicInstagram='';
+    if(typeof s.publicProfileEnabled==='undefined') s.publicProfileEnabled=true;
+  });
+}
+fcEnsureV26();
+
+function fcBackButton(label='Volver'){
+  return `<button class="ghost fc-back-btn" type="button" onclick="history.length>1?history.back():renderAuth('home')">← ${label}</button>`;
+}
+
+/* PORTADA PRINCIPAL */
+function renderPublicHome(){
+  fcEnsureV26();
+  $('#app').innerHTML=`<div class="fc-home">
+    <header class="fc-home-header">
+      <div class="auth-brand"><div class="mark">FC</div><b>FiestaControl</b></div>
+      <button class="ghost" onclick="renderAuth('login')">Ingresar</button>
+    </header>
+    <section class="fc-home-hero">
+      <div>
+        <span class="eyebrow">SALONES · PROVEEDORES · FAMILIAS</span>
+        <h1>Todo para organizar una fiesta en un solo lugar.</h1>
+        <p>Registrá tu salón, ofrecé tus servicios como proveedor o buscá salones por zona para encontrar el lugar ideal.</p>
+        <div class="fc-home-actions">
+          <button class="primary" onclick="renderAuth('register')">🏪 Registrar salón</button>
+          <button class="secondary" onclick="renderAuth('provider-register')">🚚 Registrar proveedor</button>
+          <button class="fc-home-public-btn" onclick="renderAuth('availability')">🎈 Ver salones</button>
+        </div>
+      </div>
+      <div class="fc-home-card">
+        <div class="fc-home-icon">🎉</div>
+        <h3>¿Buscás dónde festejar?</h3>
+        <p>Entrá sin registrarte, filtrá por zona y conocé cada salón.</p>
+        <button class="primary w100" onclick="renderAuth('availability')">Ver todos los salones</button>
+      </div>
+    </section>
+    <section class="fc-home-features">
+      <div><span>🏪</span><b>Para salones</b><small>Agenda, reservas, caja, proveedores y perfil público.</small></div>
+      <div><span>🚚</span><b>Para proveedores</b><small>Productos, pedidos y contacto con salones por zona.</small></div>
+      <div><span>🎈</span><b>Para familias</b><small>Buscador por zona, fotos, información y opiniones reales.</small></div>
+    </section>
+  </div><dialog id="modal"><div id="modal-body"></div></dialog><div id="toast" class="toast"></div>`;
+}
+window.renderPublicHome=renderPublicHome;
+
+/* Reemplazamos la portada de login por home cuando no se pasa modo */
+const _v26BaseRenderAuth=renderAuth;
+renderAuth=function(mode='home'){
+  if(mode==='home') return renderPublicHome();
+  _v26BaseRenderAuth(mode);
+  setTimeout(()=>{
+    let card=document.querySelector('.auth-card');
+    if(card && !card.querySelector('.fc-auth-back')){
+      let wrap=document.createElement('div');
+      wrap.className='fc-auth-back';
+      wrap.innerHTML=`<button class="ghost small" onclick="renderAuth('home')">← Volver al inicio</button>`;
+      card.prepend(wrap);
+    }
+    if(mode==='availability'){
+      let h=document.querySelector('.auth-card > h2'); if(h) h.textContent='Ver salones';
+      let p=h?.nextElementSibling; if(p && p.classList.contains('muted')) p.textContent='Buscá por zona y entrá al perfil de cada salón.';
+      setTimeout(fcBindPublicDirectory,0);
+    }
+  },0);
+};window.renderAuth=renderAuth;
+
+/* Al cerrar sesión vuelve a la portada */
+logout=function(){setSession(null);renderAuth('home')};window.logout=logout;
+
+/* PERFIL PÚBLICO ENRIQUECIDO */
+function fcPublicSalonCard(s){
+  let rating=fcSalonRating(s.id),count=fcSalonReviews(s.id).length;
+  let cover=(s.publicGallery&&s.publicGallery[0])||s.publicPhoto||s.logo||'';
+  return `<article class="fc-public-salon-card">
+    <div class="fc-public-salon-cover">${cover?`<img src="${cover}" alt="${esc(s.name)}">`:`<div class="fc-salon-letter">${esc((s.name||'S')[0])}</div>`}</div>
+    <div class="fc-public-salon-body">
+      <div>
+        <span class="fc-zone-chip">📍 ${esc(s.zone||'Sin zona')}</span>
+        <h3>${esc(s.name)}</h3>
+        ${rating?`<div class="fc-rating"><b>${fcStars(rating)}</b><span>${rating.toFixed(1)} · ${count} reseña${count===1?'':'s'}</span></div>`:`<div class="fc-rating empty-rating">Sin reseñas todavía</div>`}
+        <p>${esc(s.publicDescription||'Conocé este salón y todo lo que ofrece.')}</p>
+        ${s.publicCapacity?`<small class="fc-capacity">👥 Capacidad: ${esc(s.publicCapacity)}</small>`:''}
+      </div>
+      <button class="primary" onclick="openPublicSalonProfile('${s.id}')">Ver salón →</button>
+    </div>
+  </article>`;
+}
+window.fcPublicSalonCard=fcPublicSalonCard;
+
+function publicAvailabilityHome(){
+  fcEnsureV26();
+  let salons=(data.salons||[]).filter(s=>s.status==='Aprobado'&&s.publicProfileEnabled!==false);
+  let zones=[...new Set(salons.map(s=>s.zone).filter(Boolean))].sort();
+  return `<div class="public-directory-v25">
+    <div class="public-directory-head"><div><span class="eyebrow">DIRECTORIO PÚBLICO</span><h2>Salones registrados</h2><p>Filtrá por zona y conocé la información que cada salón decidió publicar.</p></div></div>
+    <div class="public-searchbar">
+      <input id="fc-public-search" placeholder="Buscar salón por nombre...">
+      <select id="fc-public-zone"><option value="">Todas las zonas</option>${zones.map(z=>`<option>${esc(z)}</option>`).join('')}</select>
+    </div>
+    <div id="fc-public-results" class="fc-public-salon-grid">${salons.map(fcPublicSalonCard).join('')||'<div class="empty">Todavía no hay salones publicados.</div>'}</div>
+  </div>`;
+};window.publicAvailabilityHome=publicAvailabilityHome;
+
+function openPublicSalonProfile(sid){
+  fcEnsureV26();
+  let s=data.salons.find(x=>x.id===sid);if(!s||s.status!=='Aprobado'||s.publicProfileEnabled===false)return toast('Perfil no disponible');
+  let reviews=fcSalonReviews(sid).slice().sort((a,b)=>(b.created||'').localeCompare(a.created||'')),rating=fcSalonRating(sid),gallery=s.publicGallery||[];
+  let address=s.publicAddressVisible!==false?(s.address||'Dirección no cargada'):'Dirección disponible al consultar';
+  let phoneVisible=s.publicPhoneVisible!==false&&s.phone;
+  showModal(`<div class="fc-public-profile">
+    <div class="fc-public-top-actions"><button class="ghost small" onclick="closeModal()">← Volver a salones</button></div>
+    <div class="modal-title"><div><span class="fc-zone-chip">📍 ${esc(s.zone||'Sin zona')}</span><h2>${esc(s.name)}</h2><p>${esc(address)}</p></div><button class="ghost small" onclick="closeModal()">✕ Cerrar</button></div>
+    ${gallery.length?`<div class="fc-gallery">${gallery.map((img,i)=>`<img src="${img}" alt="${esc(s.name)} foto ${i+1}">`).join('')}</div>`:`<div class="fc-public-profile-hero">${s.publicPhoto?`<img src="${s.publicPhoto}" alt="${esc(s.name)}">`:s.logo?`<img src="${s.logo}" alt="${esc(s.name)}">`:`<div class="fc-salon-letter big">${esc((s.name||'S')[0])}</div>`}</div>`}
+    <div class="grid two fc-public-info-grid">
+      <div class="card"><h3>Sobre el salón</h3><p>${esc(s.publicDescription||'Este salón todavía no cargó una descripción pública.')}</p>${s.publicCapacity?`<p><b>👥 Capacidad:</b> ${esc(s.publicCapacity)}</p>`:''}${s.publicServices?`<p><b>✨ Servicios:</b> ${esc(s.publicServices)}</p>`:''}${s.publicInstagram?`<p><b>📸 Instagram:</b> ${esc(s.publicInstagram)}</p>`:''}</div>
+      <div class="card"><h3>Reputación</h3>${rating?`<div class="fc-rating large"><b>${fcStars(rating)}</b><span>${rating.toFixed(1)} sobre 5 · ${reviews.length} reseña${reviews.length===1?'':'s'}</span></div>`:'<div class="fc-rating empty-rating">Todavía no tiene reseñas.</div>'}</div>
+    </div>
+    <div class="fc-public-actions">${s.publicAvailabilityEnabled?`<button class="primary" onclick="openPublicAvailability('${s.id}')">📅 Ver disponibilidad</button>`:''}${phoneVisible?`<button class="secondary" onclick="askSalonWhatsApp('${s.id}')">💬 Consultar por WhatsApp</button>`:''}<button class="ghost" onclick="openSalonReviewForm('${s.id}')">⭐ Puntuar salón</button></div>
+    <div class="card fc-reviews-card"><div class="section-title"><h3>Opiniones de clientes</h3><small>${reviews.length} reseña${reviews.length===1?'':'s'}</small></div>${reviews.map(r=>`<div class="fc-review"><div class="fc-review-top"><b>${esc(r.name||'Cliente')}</b><span>${fcStars(r.stars)}</span></div><p>${esc(r.comment||'')}</p><small>${r.created?new Date(r.created).toLocaleDateString('es-AR'):''}</small></div>`).join('')||'<div class="empty">Sé el primero en dejar una opinión.</div>'}</div>
+    <div class="form-actions"><button class="ghost" onclick="closeModal()">← Volver a salones</button></div>
+  </div>`);
+};window.openPublicSalonProfile=openPublicSalonProfile;
+
+/* EDICIÓN DEL SALÓN: datos públicos + hasta 6 fotos */
+editSalonProfile=function(){
+ let s=salon();fcEnsureV26();
+ showModal(`<div class="modal-title"><div><h2>Editar perfil público</h2><p>Elegí qué información mostrar a las familias.</p></div><button class="ghost small" onclick="closeModal()">✕</button></div>
+ <form id="ep">
+ <div class="form-grid">
+   <div class="field span2"><label>Nombre del salón</label><input name="name" value="${esc(s.name)}" required></div>
+   <div class="field"><label>Responsable</label><input name="owner" value="${esc(s.owner||'')}"></div>
+   <div class="field"><label>WhatsApp</label><input name="phone" value="${esc(s.phone||'')}"></div>
+   <div class="field span2"><label>Dirección</label><input name="address" value="${esc(s.address||'')}" required></div>
+   <div class="field"><label>Zona</label><select name="zone" required><option value="">Seleccionar zona</option>${fcZones().map(z=>`<option value="${z}" ${s.zone===z?'selected':''}>${z}</option>`).join('')}</select></div>
+   <div class="field"><label>Capacidad</label><input name="publicCapacity" value="${esc(s.publicCapacity||'')}" placeholder="Ej.: hasta 120 personas"></div>
+   <div class="field span2"><label>Descripción pública</label><textarea name="publicDescription" rows="4" placeholder="Contá qué hace especial a tu salón...">${esc(s.publicDescription||'')}</textarea></div>
+   <div class="field span2"><label>Servicios destacados</label><textarea name="publicServices" rows="3" placeholder="Ej.: catering, animación, inflables, estacionamiento...">${esc(s.publicServices||'')}</textarea></div>
+   <div class="field span2"><label>Instagram / red social</label><input name="publicInstagram" value="${esc(s.publicInstagram||'')}" placeholder="@misalon"></div>
+ </div>
+ <div class="card fc-gallery-editor">
+   <div class="section-title"><div><h3>Fotos del salón</h3><small>Podés publicar hasta 6 fotos.</small></div></div>
+   <div id="fc-gallery-preview" class="fc-gallery-preview">${(s.publicGallery||[]).map((img,i)=>`<div><img src="${img}" alt=""><button type="button" class="danger small" onclick="fcRemoveGalleryPhoto(${i})">Quitar</button></div>`).join('')}</div>
+   <label class="secondary file-button">📷 Agregar fotos<input id="fc-gallery-files" type="file" accept="image/*" multiple hidden></label>
+ </div>
+ <div class="card fc-public-controls"><h3>Qué mostrar públicamente</h3>
+   <label class="fc-check"><input type="checkbox" name="publicProfileEnabled" ${s.publicProfileEnabled!==false?'checked':''}> Mostrar mi salón en “Ver salones”</label>
+   <label class="fc-check"><input type="checkbox" name="publicAddressVisible" ${s.publicAddressVisible!==false?'checked':''}> Mostrar dirección</label>
+   <label class="fc-check"><input type="checkbox" name="publicPhoneVisible" ${s.publicPhoneVisible!==false?'checked':''}> Permitir consultas por WhatsApp</label>
+ </div>
+ <div class="form-actions"><button class="ghost" type="button" onclick="closeModal()">← Volver</button><button class="primary">Guardar perfil público</button></div>
+ </form>`);
+ window.__fcGalleryDraft=[...(s.publicGallery||[])];
+ let preview=()=>{let box=$('#fc-gallery-preview');if(box)box.innerHTML=window.__fcGalleryDraft.map((img,i)=>`<div><img src="${img}" alt=""><button type="button" class="danger small" onclick="fcRemoveGalleryPhoto(${i})">Quitar</button></div>`).join('')};
+ let files=$('#fc-gallery-files');files.onchange=()=>{[...files.files].slice(0,Math.max(0,6-window.__fcGalleryDraft.length)).forEach(f=>{let r=new FileReader();r.onload=()=>{window.__fcGalleryDraft.push(r.result);preview()};r.readAsDataURL(f)})};
+ let form=$('#ep');form.onsubmit=e=>{e.preventDefault();let f=Object.fromEntries(new FormData(e.target));f.publicProfileEnabled=form.elements.publicProfileEnabled.checked;f.publicAddressVisible=form.elements.publicAddressVisible.checked;f.publicPhoneVisible=form.elements.publicPhoneVisible.checked;f.publicGallery=[...(window.__fcGalleryDraft||[])];Object.assign(s,f);save();closeModal();renderSalonShell();toast('Perfil público actualizado')};
+};window.editSalonProfile=editSalonProfile;
+function fcRemoveGalleryPhoto(i){if(!window.__fcGalleryDraft)return;window.__fcGalleryDraft.splice(i,1);let box=$('#fc-gallery-preview');if(box)box.innerHTML=window.__fcGalleryDraft.map((img,n)=>`<div><img src="${img}" alt=""><button type="button" class="danger small" onclick="fcRemoveGalleryPhoto(${n})">Quitar</button></div>`).join('')}
+window.fcRemoveGalleryPhoto=fcRemoveGalleryPhoto;
+
+/* BOTÓN VOLVER EN MODALES Y PANTALLAS CLAVE */
+const _v26ShowModal=showModal;
+showModal=function(html){
+  _v26ShowModal(html);
+  setTimeout(()=>{
+    let body=$('#modal-body');
+    if(body && !body.querySelector('.fc-global-modal-back')){
+      let b=document.createElement('div');
+      b.className='fc-global-modal-back';
+      b.innerHTML='<button class="ghost small" onclick="closeModal()">← Volver</button>';
+      body.prepend(b);
+    }
+  },0);
+};window.showModal=showModal;
+
+/* Al entrar por URL normal, mostrar portada pública si no hay sesión */
+setTimeout(()=>{if(!session && !new URLSearchParams(location.search).has('invitacion')) renderAuth('home')},0);

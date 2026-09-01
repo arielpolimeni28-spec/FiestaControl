@@ -125,3 +125,46 @@
 .zone-filter select{min-width:180px}
 .privacy-note{padding:12px 14px;border-radius:12px;background:#f0fdf4;border:1px solid #bbf7d0;color:#166534;margin:12px 0;font-size:13px}
 @media(max-width:700px){.zone-filter,.market-zone-info{align-items:stretch;flex-direction:column}.zone-filter select{width:100%}}
+
+/* V25 portal público de salones y reseñas */
+.public-directory-v25{min-width:0}
+.public-directory-head{margin-bottom:14px}
+.public-searchbar{display:grid;grid-template-columns:1fr 220px;gap:10px;margin:14px 0}
+.fc-public-salon-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.fc-public-salon-card{overflow:hidden;border:1px solid #e2e8f0;border-radius:18px;background:white;box-shadow:0 8px 24px rgba(15,23,42,.06)}
+.fc-public-salon-cover{height:150px;background:linear-gradient(135deg,#ede9fe,#ddd6fe);display:flex;align-items:center;justify-content:center;overflow:hidden}
+.fc-public-salon-cover img{width:100%;height:100%;object-fit:cover}
+.fc-salon-letter{width:78px;height:78px;border-radius:24px;background:#7c3aed;color:#fff;display:grid;place-items:center;font-size:34px;font-weight:900}
+.fc-salon-letter.big{width:110px;height:110px;font-size:46px}
+.fc-public-salon-body{padding:16px;display:flex;flex-direction:column;justify-content:space-between;gap:14px}
+.fc-public-salon-body h3{margin:8px 0 5px;font-size:20px}.fc-public-salon-body p{color:#64748b;font-size:13px}
+.fc-zone-chip{display:inline-flex;padding:5px 9px;border-radius:999px;background:#f1f5f9;color:#475569;font-size:12px;font-weight:800}
+.fc-rating{display:flex;align-items:center;gap:8px;margin:4px 0}.fc-rating b{color:#f59e0b;letter-spacing:1px}.fc-rating span{font-size:12px;color:#64748b}
+.fc-rating.large b{font-size:23px}.empty-rating{color:#94a3b8;font-size:12px}
+.fc-public-profile-hero{display:grid;grid-template-columns:180px 1fr;gap:18px;align-items:center;margin:14px 0}.fc-public-profile-hero>img{width:180px;height:150px;object-fit:cover;border-radius:18px}
+.fc-public-actions{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}
+.fc-reviews-card{margin-top:14px}.fc-review{padding:12px 0;border-bottom:1px solid #eef2f7}.fc-review:last-child{border-bottom:0}.fc-review-top{display:flex;justify-content:space-between;gap:10px}.fc-review-top span{color:#f59e0b}.fc-review p{margin:5px 0;color:#475569}.fc-review small{color:#94a3b8}
+.fc-public-controls{margin:14px 0}.fc-public-controls h3{margin-top:0}.fc-check{display:flex;gap:9px;align-items:center;margin:9px 0;font-weight:600}.fc-check input{width:auto}
+.fc-rating-profile{display:flex;flex-direction:column;align-items:center;gap:4px;padding:22px}.fc-rating-profile strong{font-size:42px}.fc-rating-profile span{color:#f59e0b;font-size:22px}.fc-rating-profile small{color:#64748b}
+@media(max-width:700px){.public-searchbar{grid-template-columns:1fr}.fc-public-salon-grid{grid-template-columns:1fr}.fc-public-profile-hero{grid-template-columns:1fr}.fc-public-profile-hero>img{width:100%;height:190px}}
+
+/* V26 portada, volver y galería pública */
+.fc-home{min-height:100vh;background:linear-gradient(135deg,#f8fafc,#f5f3ff);padding:24px}
+.fc-home-header{max-width:1180px;margin:auto;display:flex;justify-content:space-between;align-items:center}
+.fc-home-hero{max-width:1180px;margin:55px auto 28px;display:grid;grid-template-columns:1.35fr .65fr;gap:34px;align-items:center}
+.fc-home-hero h1{font-size:clamp(38px,5vw,66px);line-height:1.02;margin:12px 0 16px}
+.fc-home-hero p{font-size:18px;color:#64748b;max-width:760px}
+.fc-home-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:24px}
+.fc-home-public-btn{border:0;border-radius:12px;padding:12px 18px;font-weight:900;background:#111827;color:#fff;cursor:pointer}
+.fc-home-card{background:#fff;border:1px solid #e2e8f0;border-radius:24px;padding:28px;box-shadow:0 20px 50px rgba(15,23,42,.08)}
+.fc-home-icon{font-size:54px}
+.fc-home-features{max-width:1180px;margin:30px auto;display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.fc-home-features>div{background:#fff;border:1px solid #e2e8f0;border-radius:18px;padding:20px;display:flex;flex-direction:column;gap:6px}
+.fc-home-features span{font-size:28px}.fc-home-features small{color:#64748b}
+.fc-auth-back,.fc-global-modal-back{display:flex;justify-content:flex-start;margin-bottom:12px}
+.fc-gallery{display:grid;grid-template-columns:2fr 1fr 1fr;gap:8px;margin:12px 0}.fc-gallery img{width:100%;height:190px;object-fit:cover;border-radius:14px}.fc-gallery img:first-child{grid-row:span 2;height:388px}
+.fc-public-info-grid{margin:14px 0}
+.fc-gallery-editor{margin:14px 0}.fc-gallery-preview{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:10px 0}.fc-gallery-preview>div{position:relative}.fc-gallery-preview img{width:100%;height:120px;object-fit:cover;border-radius:12px}.fc-gallery-preview button{position:absolute;right:6px;bottom:6px}
+.fc-capacity{display:block;margin-top:8px;color:#475569;font-weight:700}
+@media(max-width:800px){.fc-home-hero{grid-template-columns:1fr;margin-top:28px}.fc-home-features{grid-template-columns:1fr}.fc-gallery{grid-template-columns:1fr 1fr}.fc-gallery img:first-child{grid-column:1/-1;grid-row:auto;height:220px}.fc-gallery-preview{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:520px){.fc-home{padding:14px}.fc-home-actions>*{width:100%}.fc-gallery{grid-template-columns:1fr}.fc-gallery img,.fc-gallery img:first-child{height:210px}.fc-gallery-preview{grid-template-columns:1fr}}
