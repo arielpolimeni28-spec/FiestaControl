@@ -5,7 +5,7 @@ from pathlib import Path
 
 BASE=Path(__file__).resolve().parent
 DB=BASE/'fiestacontrol.db'
-PORT=int(os.environ.get('FIESTACONTROL_PORT','8080'))
+PORT=int(os.environ.get('PORT', os.environ.get('FIESTACONTROL_PORT','8080')))
 SEED={
  'salons':[],
  'admins':[{'id':'adm1','name':'Administrador General','email':'admin@fiestacontrol.com','password':'admin123'}],
