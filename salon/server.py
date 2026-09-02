@@ -84,12 +84,13 @@ def register_entity(kind, payload):
                 'owner':str(payload.get('owner','')).strip(),
                 'category':str(payload.get('category','')).strip(),
                 'phone':str(payload.get('phone','')).strip(),
+                'zone':str(payload.get('zone','')).strip(),
                 'email':email,
                 'description':str(payload.get('description','')).strip(),
                 'password':str(payload.get('password','')),
                 'status':'Pendiente','created':time.strftime('%Y-%m-%d'),'products':[]
             }
-            if not item['business'] or not item['owner'] or not item['category'] or not item['phone'] or not item['password']:
+            if not item['business'] or not item['owner'] or not item['category'] or not item['phone'] or not item['zone'] or not item['password']:
                 c.close(); raise ValueError('Faltan datos obligatorios')
             arr.append(item)
         raw=json.dumps(st,ensure_ascii=False,separators=(',',':'))
@@ -172,6 +173,36 @@ def reservation_action(action, payload):
         c.execute('UPDATE app_state SET data=?,updated=? WHERE id=1',(raw,time.time()))
         c.commit(); c.close()
         return {'ok':True,'state':st}
+
+def provider_community_action(action, payload):
+    if not isinstance(payload, dict):
+        raise ValueError('Datos inválidos')
+    with LOCK:
+        c=db_connect()
+        row=c.execute('SELECT data FROM app_state WHERE id=1').fetchone()
+        st=json.loads(row[0]) if row else json.loads(json.dumps(SEED))
+        posts=st.setdefault('providerCommunityPosts',[])
+        pid=str(payload.get('providerId',''))
+        if not pid:
+            c.close(); raise ValueError('Proveedor inválido')
+        provider=next((x for x in st.setdefault('marketSuppliers',[]) if x.get('id')==pid and x.get('status')=='Aprobado'),None)
+        if not provider:
+            c.close(); raise ValueError('Proveedor no habilitado')
+        if action=='create':
+            posts.append(dict(payload))
+        elif action=='update':
+            target=next((x for x in posts if x.get('id')==payload.get('id') and x.get('providerId')==pid),None)
+            if not target:
+                c.close(); raise ValueError('Publicación inexistente')
+            target.update(dict(payload))
+        elif action=='delete':
+            posts[:]=[x for x in posts if not (x.get('id')==payload.get('id') and x.get('providerId')==pid)]
+        else:
+            c.close(); raise ValueError('Acción inválida')
+        raw=json.dumps(st,ensure_ascii=False,separators=(',',':'))
+        c.execute('UPDATE app_state SET data=?,updated=? WHERE id=1',(raw,time.time()))
+        c.commit(); c.close()
+        return st
 
 def marketplace_action(action, payload):
     if not isinstance(payload, dict):
@@ -290,6 +321,9 @@ class Handler(SimpleHTTPRequestHandler):
             elif path=='/api/reservation':
                 payload=reservation_action(req.get('action'), req.get('data') or {})
                 code=200 if payload.get('ok') else 409
+            elif path=='/api/provider-community':
+                st=provider_community_action(req.get('action'), req.get('data') or {})
+                payload={'ok':True,'state':st}; code=200
             elif path=='/api/marketplace':
                 st=marketplace_action(req.get('action'), req.get('data') or {})
                 payload={'ok':True,'state':st}; code=200

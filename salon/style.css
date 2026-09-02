@@ -193,3 +193,16 @@
 .booking-conflict-modal{text-align:center}.booking-conflict-modal .big-emoji{font-size:52px}.booking-conflict-modal h2{margin:8px 0}.booking-conflict-modal p{color:#475569}
 .fc-free-ranges{margin:16px 0;padding:14px;border-radius:14px;background:#f8fafc;text-align:left;border:1px solid #e2e8f0}.fc-free-ranges p{margin:7px 0 0;font-weight:700;line-height:1.7}
 .day .event-chip{display:block;width:100%;margin-top:4px}
+
+/* V30 comunidad de proveedores */
+.provider-community-hero{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:16px;padding:22px;border-radius:20px;background:linear-gradient(135deg,#fff7ed,#fffbeb);border:1px solid #fed7aa}
+.provider-post-row{display:flex;justify-content:space-between;gap:16px;padding:16px 0;border-bottom:1px solid #eef2f7}.provider-post-row:last-child{border-bottom:0}.provider-post-row strong{display:block;font-size:18px;margin:7px 0}.provider-post-row p{color:#475569;margin:6px 0}
+.provider-community-section{margin-bottom:18px}.provider-community-card{margin-bottom:12px}.provider-community-card .post-head{display:flex;justify-content:space-between;gap:10px;align-items:center}.provider-community-card .post-foot{margin-top:12px}
+@media(max-width:700px){.provider-community-hero,.provider-post-row{flex-direction:column;align-items:stretch}}
+
+/* V31 horarios configurables + zona proveedores */
+.fc-radio{display:flex;flex-direction:column;gap:3px;padding:12px;border:1px solid #e2e8f0;border-radius:12px;margin-bottom:8px}.fc-radio input{margin-right:8px}.fc-radio small{color:#64748b;margin-left:24px}
+.fc-schedule-row{display:grid;grid-template-columns:1.2fr 1fr 1fr auto;gap:10px;align-items:end;padding:12px 0;border-bottom:1px solid #eef2f7}
+.fc-schedule-settings-card{margin-bottom:16px}
+.provider-zone-v31{display:inline-block;margin-bottom:8px}
+@media(max-width:700px){.fc-schedule-row{grid-template-columns:1fr}.fc-schedule-row button{width:100%}}

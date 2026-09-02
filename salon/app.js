@@ -1700,3 +1700,387 @@ openEventForm=function(eid){
   };
 };
 window.openEventForm=openEventForm;
+
+
+/* ===================== V30: comunidad de proveedores ===================== */
+function fcEnsureV30(){
+  data.providerCommunityPosts=data.providerCommunityPosts||[];
+  (data.marketSuppliers||[]).forEach(p=>{
+    if(typeof p.zone==='undefined')p.zone='';
+    if(typeof p.locationInfo==='undefined')p.locationInfo='';
+  });
+}
+fcEnsureV30();
+
+function fcProviderCommunityPosts(p){
+  fcEnsureV30();
+  return (data.providerCommunityPosts||[])
+    .filter(x=>x.providerId===p.id)
+    .sort((a,b)=>(b.created||'').localeCompare(a.created||''));
+}
+
+function renderProviderCommunity(){
+  fcEnsureV30();
+  let p=provider(),posts=fcProviderCommunityPosts(p);
+  setTitle('Comunidad','Promociones, ofertas y novedades para los salones');
+  $('#content').innerHTML=`
+    <div class="provider-community-hero">
+      <div>
+        <span class="eyebrow">COMUNIDAD DE PROVEEDORES</span>
+        <h2>Publicá promociones y novedades</h2>
+        <p>Compartí ofertas, información de tu negocio, nuevos productos, beneficios y novedades para los salones.</p>
+      </div>
+      <button class="primary" onclick="openProviderCommunityPostForm()">+ Nueva publicación</button>
+    </div>
+    <div class="card">
+      <div class="section-title"><div><h3>Mis publicaciones</h3><small>${posts.length} publicación${posts.length===1?'':'es'}</small></div></div>
+      ${posts.map(x=>`
+        <div class="provider-post-row">
+          <div>
+            <span class="post-type">${esc(x.type||'Novedad')}</span>
+            <strong>${esc(x.title)}</strong>
+            <small>${new Date(x.created).toLocaleString('es-AR')}</small>
+            <p>${esc(x.body||'')}</p>
+            ${x.promoCode?`<div class="promo-code">🎁 ${esc(x.promoCode)}</div>`:''}
+          </div>
+          <div class="actions">
+            <button class="secondary small" onclick="openProviderCommunityPostForm('${x.id}')">Editar</button>
+            <button class="danger small" onclick="deleteProviderCommunityPost('${x.id}')">Borrar</button>
+          </div>
+        </div>`).join('')||'<div class="empty">Todavía no publicaste nada.</div>'}
+    </div>`;
+}
+window.renderProviderCommunity=renderProviderCommunity;
+
+function openProviderCommunityPostForm(pid=''){
+  let p=provider(),post=pid?(data.providerCommunityPosts||[]).find(x=>x.id===pid):null;
+  showModal(`<div class="modal-title"><div><h2>${post?'Editar':'Nueva'} publicación</h2><p>Comunidad de salones</p></div><button class="ghost small" onclick="closeModal()">✕</button></div>
+    <form id="provider-community-form">
+      <div class="form-grid">
+        <div class="field"><label>Tipo</label><select name="type">
+          ${['Promoción','Oferta','Novedad','Información','Nuevo producto'].map(v=>`<option ${post?.type===v?'selected':''}>${v}</option>`).join('')}
+        </select></div>
+        <div class="field"><label>Zona objetivo</label><select name="zone">
+          <option value="">Todas las zonas</option>
+          ${fcZones().map(z=>`<option value="${z}" ${post?.zone===z?'selected':''}>${z}</option>`).join('')}
+        </select></div>
+        <div class="field span2"><label>Título</label><input name="title" required value="${esc(post?.title||'')}"></div>
+        <div class="field span2"><label>Mensaje</label><textarea name="body" rows="5" required placeholder="Contá la promo, oferta o novedad...">${esc(post?.body||'')}</textarea></div>
+        <div class="field"><label>Código / beneficio</label><input name="promoCode" value="${esc(post?.promoCode||'')}" placeholder="Ej.: 10% OFF"></div>
+        <div class="field"><label>Vigencia hasta</label><input name="validUntil" type="date" value="${esc(post?.validUntil||'')}"></div>
+      </div>
+      <div class="form-actions"><button type="button" class="ghost" onclick="closeModal()">← Volver</button><button class="primary">Publicar</button></div>
+    </form>`);
+  $('#provider-community-form').onsubmit=async e=>{
+    e.preventDefault();
+    let f=Object.fromEntries(new FormData(e.target));
+    let payload={id:post?.id||id(),providerId:p.id,providerName:p.business||p.owner,providerZone:p.zone||'',...f,created:post?.created||new Date().toISOString(),updated:new Date().toISOString()};
+    if(SERVER_MODE){
+      try{
+        let r=await fetch('/api/provider-community',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:post?'update':'create',data:payload}),cache:'no-store'});
+        let res=await r.json();
+        if(!r.ok||!res.ok)return toast(res.error||'No se pudo publicar');
+        data=res.state;if(typeof normalizeLiveData==='function')normalizeLiveData();
+      }catch(err){console.error(err);return toast('No se pudo conectar con el servidor central')}
+    }else{
+      data.providerCommunityPosts=data.providerCommunityPosts||[];
+      if(post)Object.assign(post,payload);else data.providerCommunityPosts.push(payload);
+      save();
+    }
+    closeModal();toast('Publicación guardada');renderProviderCommunity();
+  };
+}
+window.openProviderCommunityPostForm=openProviderCommunityPostForm;
+
+async function deleteProviderCommunityPost(pid){
+  let p=provider();
+  if(SERVER_MODE){
+    try{
+      let r=await fetch('/api/provider-community',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'delete',data:{id:pid,providerId:p.id}}),cache:'no-store'});
+      let res=await r.json();if(!r.ok||!res.ok)return toast(res.error||'No se pudo borrar');data=res.state;
+    }catch(err){return toast('No se pudo conectar con el servidor central')}
+  }else{
+    data.providerCommunityPosts=(data.providerCommunityPosts||[]).filter(x=>x.id!==pid||x.providerId!==p.id);save();
+  }
+  toast('Publicación eliminada');renderProviderCommunity();
+}
+window.deleteProviderCommunityPost=deleteProviderCommunityPost;
+
+/* Integración con la comunidad del salón */
+const _v30SalonCommunity=renderCommunity;
+renderCommunity=function(){
+  _v30SalonCommunity();
+  let s=salon(),feed=$('.community-feed');
+  if(!feed)return;
+  let providerPosts=(data.providerCommunityPosts||[])
+    .filter(x=>!x.zone||x.zone===s.zone)
+    .sort((a,b)=>(b.created||'').localeCompare(a.created||''));
+  if(providerPosts.length){
+    let block=document.createElement('div');
+    block.className='provider-community-section';
+    block.innerHTML=`<div class="section-title"><div><small class="eyebrow">PROVEEDORES</small><h3>Promos y novedades para tu zona</h3></div></div>`+
+      providerPosts.map(x=>`<article class="card provider-community-card">
+        <div class="post-head"><div><span class="post-type">${esc(x.type||'Novedad')}</span>${x.zone?`<span class="fc-zone-chip">📍 ${esc(x.zone)}</span>`:''}</div><small>${new Date(x.created).toLocaleString('es-AR')}</small></div>
+        <h3>${esc(x.title)}</h3><p>${esc(x.body||'')}</p>
+        ${x.promoCode?`<div class="promo-code">🎁 Beneficio: <b>${esc(x.promoCode)}</b></div>`:''}
+        ${x.validUntil?`<small class="muted">Vigente hasta ${new Date(x.validUntil+'T12:00:00').toLocaleDateString('es-AR')}</small>`:''}
+        <div class="post-foot"><span>Publicado por <b>${esc(x.providerName||'Proveedor')}</b></span></div>
+      </article>`).join('');
+    feed.prepend(block);
+  }
+};
+window.renderCommunity=renderCommunity;
+
+/* Agrega Comunidad al menú del proveedor */
+if(typeof providerNav!=='undefined' && !providerNav.some(x=>x[0]==='community')){
+  providerNav.splice(2,0,['community','📣','Comunidad']);
+}
+const _v30ProviderView=renderProviderView;
+renderProviderView=function(){
+  if(view==='community')return renderProviderCommunity();
+  return _v30ProviderView();
+};
+window.renderProviderView=renderProviderView;
+
+
+/* ===================== V31: franjas horarias configurables + zona obligatoria proveedores ===================== */
+function fcEnsureV31(){
+  (data.salons||[]).forEach(s=>{
+    if(!Array.isArray(s.bookingTimeSlots)) s.bookingTimeSlots=[];
+    if(typeof s.bookingSlotMode==='undefined') s.bookingSlotMode='free';
+    if(typeof s.bookingFreeStart==='undefined') s.bookingFreeStart='08:00';
+    if(typeof s.bookingFreeEnd==='undefined') s.bookingFreeEnd='23:00';
+  });
+  (data.marketSuppliers||[]).forEach(p=>{
+    if(typeof p.zone==='undefined') p.zone='';
+  });
+}
+fcEnsureV31();
+
+function fcSalonTimeSettings(){
+  let s=salon();fcEnsureV31();return {
+    mode:s.bookingSlotMode||'free',
+    slots:Array.isArray(s.bookingTimeSlots)?s.bookingTimeSlots:[],
+    freeStart:s.bookingFreeStart||'08:00',
+    freeEnd:s.bookingFreeEnd||'23:00'
+  };
+}
+
+function fcSlotIsBusy(date,start,end,excludeId=''){
+  return !!fcConflict(date,start,end,excludeId);
+}
+
+function fcConfiguredSlotsForDate(date,excludeId=''){
+  let cfg=fcSalonTimeSettings();
+  if(cfg.mode!=='slots') return [];
+  return (cfg.slots||[]).map((x,i)=>({
+    id:x.id||String(i),
+    label:x.label||`${x.start} a ${x.end}`,
+    start:x.start,
+    end:x.end,
+    busy:fcSlotIsBusy(date,x.start,x.end,excludeId)
+  }));
+}
+
+function openSalonScheduleSettings(){
+  let s=salon();fcEnsureV31();
+  showModal(`<div class="modal-title"><div><h2>Configurar horarios de reserva</h2><p>Elegí si trabajás por franjas fijas o con horario libre.</p></div><button class="ghost small" onclick="closeModal()">✕</button></div>
+  <form id="fc-schedule-settings">
+    <div class="card">
+      <label class="fc-radio"><input type="radio" name="bookingSlotMode" value="slots" ${s.bookingSlotMode==='slots'?'checked':''}> <b>Franjas horarias</b><small>La reserva solo podrá elegir las franjas que configures.</small></label>
+      <label class="fc-radio"><input type="radio" name="bookingSlotMode" value="free" ${s.bookingSlotMode!=='slots'?'checked':''}> <b>Horario libre</b><small>Se elige hora de inicio dentro del rango que definas.</small></label>
+    </div>
+
+    <div class="card">
+      <h3>Horario libre</h3>
+      <div class="form-grid">
+        <div class="field"><label>Desde</label><input name="bookingFreeStart" type="time" value="${esc(s.bookingFreeStart||'08:00')}"></div>
+        <div class="field"><label>Hasta</label><input name="bookingFreeEnd" type="time" value="${esc(s.bookingFreeEnd||'23:00')}"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-title"><div><h3>Franjas configuradas</h3><small>Ej.: 14:00 a 17:00 / 17:30 a 20:30</small></div><button type="button" class="secondary small" onclick="fcAddScheduleSlot()">+ Agregar franja</button></div>
+      <div id="fc-schedule-slots">${(s.bookingTimeSlots||[]).map((x,i)=>fcScheduleSlotRow(x,i)).join('')||'<div class="empty" id="fc-no-slots">No hay franjas cargadas.</div>'}</div>
+    </div>
+    <div class="form-actions"><button type="button" class="ghost" onclick="closeModal()">← Volver</button><button class="primary">Guardar configuración</button></div>
+  </form>`);
+  window.__fcScheduleSlots=(s.bookingTimeSlots||[]).map(x=>({...x}));
+  $('#fc-schedule-settings').onsubmit=e=>{
+    e.preventDefault();
+    let f=Object.fromEntries(new FormData(e.target));
+    s.bookingSlotMode=f.bookingSlotMode||'free';
+    s.bookingFreeStart=f.bookingFreeStart||'08:00';
+    s.bookingFreeEnd=f.bookingFreeEnd||'23:00';
+    s.bookingTimeSlots=(window.__fcScheduleSlots||[]).filter(x=>x.start&&x.end&&fcTimeToMin(x.end)>fcTimeToMin(x.start));
+    save();closeModal();toast('Horarios de reserva actualizados');renderSalonShell();
+  };
+}
+window.openSalonScheduleSettings=openSalonScheduleSettings;
+
+function fcScheduleSlotRow(x,i){
+  return `<div class="fc-schedule-row" data-slot="${i}">
+    <div class="field"><label>Nombre</label><input value="${esc(x.label||'')}" placeholder="Ej.: Turno tarde" oninput="fcUpdateScheduleSlot(${i},'label',this.value)"></div>
+    <div class="field"><label>Desde</label><input type="time" value="${esc(x.start||'')}" oninput="fcUpdateScheduleSlot(${i},'start',this.value)"></div>
+    <div class="field"><label>Hasta</label><input type="time" value="${esc(x.end||'')}" oninput="fcUpdateScheduleSlot(${i},'end',this.value)"></div>
+    <button type="button" class="danger small" onclick="fcRemoveScheduleSlot(${i})">Quitar</button>
+  </div>`;
+}
+function fcAddScheduleSlot(){
+  window.__fcScheduleSlots=window.__fcScheduleSlots||[];
+  window.__fcScheduleSlots.push({id:id(),label:'',start:'',end:''});
+  fcRenderScheduleSlots();
+}
+function fcUpdateScheduleSlot(i,k,v){if(window.__fcScheduleSlots?.[i])window.__fcScheduleSlots[i][k]=v}
+function fcRemoveScheduleSlot(i){window.__fcScheduleSlots.splice(i,1);fcRenderScheduleSlots()}
+function fcRenderScheduleSlots(){
+  let box=$('#fc-schedule-slots');if(!box)return;
+  box.innerHTML=(window.__fcScheduleSlots||[]).map((x,i)=>fcScheduleSlotRow(x,i)).join('')||'<div class="empty">No hay franjas cargadas.</div>';
+}
+window.fcAddScheduleSlot=fcAddScheduleSlot;window.fcUpdateScheduleSlot=fcUpdateScheduleSlot;window.fcRemoveScheduleSlot=fcRemoveScheduleSlot;
+
+function fcV31EventTimeFields(e,eid=''){
+  let s=salon(),cfg=fcSalonTimeSettings();
+  if(cfg.mode==='slots'){
+    let date=e?.date||'';
+    let slots=fcConfiguredSlotsForDate(date,eid);
+    return `<div class="field span2"><label>Franja horaria</label><select name="slotId" id="fc-slot-select" required>
+      <option value="">Seleccionar franja disponible</option>
+      ${slots.map(x=>`<option value="${esc(x.id)}" ${e?.start===x.start&&e?.end===x.end?'selected':''} ${x.busy?'disabled':''}>${esc(x.label||`${x.start} a ${x.end}`)} · ${x.start} a ${x.end}${x.busy?' · OCUPADA':''}</option>`).join('')}
+    </select><small class="muted">Las franjas ocupadas no se pueden seleccionar.</small></div>
+    <input type="hidden" name="start" value="${esc(e?.start||'')}"><input type="hidden" name="end" value="${esc(e?.end||'')}">`;
+  }
+  return `<div class="field"><label>Hora de inicio</label><input name="start" type="time" min="${esc(cfg.freeStart)}" max="${esc(cfg.freeEnd)}" required value="${e?.start||cfg.freeStart}"></div>
+  <div class="field"><label>Fracción del evento</label><select name="durationBase"><option value="2">2 horas</option><option value="3" selected>3 horas</option><option value="4">4 horas</option></select></div>
+  <div class="field"><label>Hora extra</label><select name="extraHours"><option value="0">Sin hora extra</option><option value="1">+ 1 hora extra</option><option value="2">+ 2 horas extra</option><option value="3">+ 3 horas extra</option></select></div>
+  <div class="field"><label>Hora de finalización</label><input name="end" type="time" readonly></div>`;
+}
+
+openEventForm=function(eid){
+  let e=eid?data.events.find(x=>x.id===eid):null,cfg=fcSalonTimeSettings();
+  showModal(`<div class="modal-title"><div><h2>${e?'Editar fiesta':'Nueva fiesta'}</h2><p>${cfg.mode==='slots'?'Elegí una franja configurada por el salón.':'Elegí el horario dentro del rango permitido.'}</p></div><button class="ghost small" onclick="closeModal()">✕</button></div>
+  <form id="event-form">
+    <div class="form-grid">
+      <div class="field"><label>Cumpleañero/a</label><input name="child" required value="${esc(e?.child||'')}"></div>
+      <div class="field"><label>Edad</label><input name="age" type="number" value="${e?.age||''}"></div>
+      <div class="field"><label>Cliente / responsable</label><input name="client" required value="${esc(e?.client||'')}"></div>
+      <div class="field"><label>WhatsApp</label><input name="phone" value="${esc(e?.phone||'')}"></div>
+      <div class="field"><label>Fecha</label><input name="date" type="date" required value="${e?.date||''}"></div>
+      <div class="field"><label>Estado</label><select name="status">${['Consulta','Señada','Confirmada','Finalizada','Cancelada'].map(x=>`<option ${e?.status===x?'selected':''}>${x}</option>`).join('')}</select></div>
+      <div id="fc-v31-time-fields" class="span2" style="display:contents">${fcV31EventTimeFields(e,eid||'')}</div>
+      <div class="field span2"><div id="fc-event-availability" class="fc-event-availability">Seleccioná fecha y horario.</div></div>
+      <div class="field"><label>Paquete</label><input name="package" value="${esc(e?.package||'Clásico')}"></div>
+      <div class="field"><label>Invitados estimados</label><input name="guests" type="number" value="${e?.guests||0}"></div>
+      <div class="field"><label>Precio total</label><input name="total" type="number" value="${e?.total||0}"></div>
+      <div class="field"><label>Ya cobrado</label><input name="paid" type="number" value="${e?.paid||0}"></div>
+      <div class="field span2"><label>Observaciones</label><textarea name="notes">${esc(e?.notes||'')}</textarea></div>
+    </div>
+    <div class="form-actions"><button type="button" class="ghost" onclick="closeModal()">← Volver</button><button class="primary">Guardar fiesta</button></div>
+  </form>`);
+
+  let form=$('#event-form');
+
+  function refreshSlots(){
+    if(cfg.mode!=='slots') return;
+    let date=form.elements.date.value;
+    let currentStart=form.elements.start.value,currentEnd=form.elements.end.value;
+    let slots=fcConfiguredSlotsForDate(date,eid||'');
+    let sel=$('#fc-slot-select');
+    sel.innerHTML='<option value="">Seleccionar franja disponible</option>'+slots.map(x=>`<option value="${esc(x.id)}" ${currentStart===x.start&&currentEnd===x.end?'selected':''} ${x.busy?'disabled':''}>${esc(x.label||`${x.start} a ${x.end}`)} · ${x.start} a ${x.end}${x.busy?' · OCUPADA':''}</option>`).join('');
+    let free=slots.filter(x=>!x.busy);
+    let box=$('#fc-event-availability');
+    box.className='fc-event-availability ok';
+    box.innerHTML=free.length?`<b>✅ Franjas disponibles:</b><br>${free.map(x=>`${esc(x.label||'Franja')} · ${x.start} a ${x.end}`).join('<br>')}`:'<b>⛔ No quedan franjas disponibles para ese día.</b>';
+  }
+
+  form.elements.date.addEventListener('change',()=>{
+    if(cfg.mode==='slots')refreshSlots(); else fcUpdateEventAvailability(eid||'');
+  });
+
+  if(cfg.mode==='slots'){
+    $('#fc-slot-select').addEventListener('change',e=>{
+      let slot=fcConfiguredSlotsForDate(form.elements.date.value,eid||'').find(x=>x.id===e.target.value);
+      if(slot){form.elements.start.value=slot.start;form.elements.end.value=slot.end}
+    });
+    refreshSlots();
+  }else{
+    ['start','durationBase','extraHours'].forEach(n=>form.elements[n]?.addEventListener('change',()=>fcUpdateEventAvailability(eid||'')));
+    fcUpdateEventAvailability(eid||'');
+  }
+
+  form.onsubmit=async x=>{
+    x.preventDefault();
+    let f=Object.fromEntries(new FormData(x.target));
+    if(cfg.mode==='slots'){
+      let slot=fcConfiguredSlotsForDate(f.date,eid||'').find(z=>z.id===f.slotId);
+      if(!slot)return toast('Seleccioná una franja disponible');
+      f.start=slot.start;f.end=slot.end;f.durationHours=(fcTimeToMin(f.end)-fcTimeToMin(f.start))/60;
+    }else{
+      f.end=fcCalcEnd(f.start,f.durationBase,f.extraHours);
+      f.durationHours=fcDurationHours(f.durationBase,f.extraHours);
+      if(fcTimeToMin(f.start)<fcTimeToMin(cfg.freeStart)||fcTimeToMin(f.end)>fcTimeToMin(cfg.freeEnd)){
+        return showModal(`<h2>Horario fuera de rango</h2><p>El salón permite reservas entre <b>${cfg.freeStart}</b> y <b>${cfg.freeEnd}</b>.</p><div class="form-actions"><button class="primary" onclick="closeModal();openEventForm('${eid||''}')">Elegir otro horario</button></div>`);
+      }
+    }
+    ['age','guests','total','paid','durationHours'].forEach(k=>f[k]=Number(f[k]||0));
+    let conflict=fcConflict(f.date,f.start,f.end,eid||'');
+    if(conflict){
+      let msg=cfg.mode==='slots'?'La franja seleccionada ya está ocupada.':'Ese horario se superpone con otra fiesta confirmada.';
+      return showModal(`<div class="booking-conflict-modal"><div class="big-emoji">⛔</div><h2>Horario no disponible</h2><p>${msg}</p><div class="form-actions"><button class="primary" onclick="closeModal();openEventForm('${eid||''}')">Elegir otro horario</button></div></div>`);
+    }
+    let payload={...f,id:eid||id(),salonId:session.salonId,rsvps:e?.rsvps||[],extras:e?.extras||[],payments:e?.payments||[]};
+    if(SERVER_MODE){
+      try{
+        let r=await fetch('/api/reservation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:eid?'update':'create',data:payload}),cache:'no-store'});
+        let res=await r.json();if(!r.ok||!res.ok)return toast(res.error||'No se pudo guardar la fiesta');
+        data=res.state;if(typeof normalizeLiveData==='function')normalizeLiveData();
+      }catch(err){return toast('No se pudo conectar con el servidor central')}
+    }else{
+      if(e)Object.assign(e,payload);else data.events.push(payload);save();
+    }
+    closeModal();toast('Fiesta guardada');renderSalonShell();
+  };
+};
+window.openEventForm=openEventForm;
+
+/* Botón de configuración de horarios dentro de Mi salón */
+const _v31Profile=renderProfile;
+renderProfile=function(){
+  _v31Profile();
+  let c=$('#content');if(c && !c.querySelector('.fc-schedule-settings-card')){
+    let d=document.createElement('div');d.className='card fc-schedule-settings-card';
+    let cfg=fcSalonTimeSettings();
+    d.innerHTML=`<div class="section-title"><div><h3>🕒 Horarios de reserva</h3><small>${cfg.mode==='slots'?'Modo franjas horarias':'Modo horario libre'}</small></div><button class="secondary" onclick="openSalonScheduleSettings()">Configurar horarios</button></div>`;
+    c.prepend(d);
+  }
+};
+window.renderProfile=renderProfile;
+
+/* Zona obligatoria en registro de proveedores */
+const _v31ProviderRegisterForm=providerRegisterForm;
+providerRegisterForm=function(){
+  let html=_v31ProviderRegisterForm();
+  if(!html.includes('name="zone"')){
+    html=html.replace(/(<div class="field"><label>WhatsApp<\/label>[\s\S]*?<\/div>)/,
+      `$1<div class="field"><label>Zona</label><select name="zone" required><option value="">Seleccionar zona</option>${fcZones().map(z=>`<option value="${z}">${z}</option>`).join('')}</select></div>`);
+  }
+  return html;
+};
+window.providerRegisterForm=providerRegisterForm;
+
+/* Mostrar zona de proveedor en marketplace */
+const _v31RenderProviders=typeof renderProviders!=='undefined'?renderProviders:null;
+if(_v31RenderProviders){
+  renderProviders=function(){
+    _v31RenderProviders();
+    document.querySelectorAll('.supplier-card,.provider-card').forEach(card=>{
+      let name=card.querySelector('h3,b')?.textContent?.trim();
+      if(!name)return;
+      let p=(data.marketSuppliers||[]).find(x=>(x.business||x.owner)===name);
+      if(p?.zone && !card.querySelector('.provider-zone-v31')){
+        let z=document.createElement('span');z.className='fc-zone-chip provider-zone-v31';z.textContent=`📍 ${p.zone}`;card.prepend(z);
+      }
+    });
+  };
+  window.renderProviders=renderProviders;
+}
