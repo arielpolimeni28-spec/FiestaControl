@@ -2814,3 +2814,17 @@ openEventForm=function(eid){
   };
 };
 window.openEventForm=openEventForm;
+
+
+/* ===================== V36 FINAL BOOT =====================
+   FiestaControl históricamente ejecutaba render() antes de cargar
+   las redefiniciones de las versiones nuevas. Esta llamada final
+   reconstruye la interfaz usando las funciones V35/V36 reales.
+=========================================================== */
+window.__FC_VERSION__='V36';
+try{
+  fcV35Ensure();
+  render();
+}catch(err){
+  console.error('FiestaControl V36 final render error',err);
+}
