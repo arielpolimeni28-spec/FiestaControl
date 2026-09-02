@@ -2084,3 +2084,226 @@ if(_v31RenderProviders){
   };
   window.renderProviders=renderProviders;
 }
+
+
+/* ===================== V32: disponibilidad simple por bloques de 3 horas + horario especial ===================== */
+function fcEnsureV32(){
+  (data.salons||[]).forEach(s=>{
+    if(typeof s.bookingDayStart==='undefined') s.bookingDayStart='09:00';
+    if(typeof s.bookingDayEnd==='undefined') s.bookingDayEnd='24:00';
+    if(typeof s.bookingDefaultBlockHours==='undefined') s.bookingDefaultBlockHours=3;
+  });
+}
+fcEnsureV32();
+
+function fcParseTimeAllow24(t){
+  if(!t)return 0;
+  if(t==='24:00')return 1440;
+  return fcTimeToMin(t);
+}
+function fcFmtTimeAllow24(n){
+  if(n>=1440)return '24:00';
+  return fcMinToTime(n);
+}
+
+function fcBusyEventsForDay(date,excludeId=''){
+  return se().filter(e=>e.date===date && e.id!==excludeId && ['Señada','Confirmada'].includes(e.status))
+    .sort((a,b)=>fcTimeToMin(a.start)-fcTimeToMin(b.start));
+}
+
+function fcBuildThreeHourRanges(date,excludeId=''){
+  let s=salon();fcEnsureV32();
+  let start=fcParseTimeAllow24(s.bookingDayStart||'09:00');
+  let end=fcParseTimeAllow24(s.bookingDayEnd||'24:00');
+  let block=(Number(s.bookingDefaultBlockHours)||3)*60;
+  let ranges=[];
+  for(let t=start;t+block<=end;t+=block){
+    let a=fcFmtTimeAllow24(t),b=fcFmtTimeAllow24(t+block);
+    let busy=!!fcConflict(date,a,b==='24:00'?'23:59':b,excludeId);
+    ranges.push({start:a,end:b,busy});
+  }
+  return ranges;
+}
+
+function fcRenderDayAvailability(date,excludeId=''){
+  let box=$('#fc-v32-day-ranges');if(!box)return;
+  if(!date){box.innerHTML='<div class="empty">Elegí una fecha para ver los horarios disponibles.</div>';return}
+  let ranges=fcBuildThreeHourRanges(date,excludeId);
+  if(!ranges.length){box.innerHTML='<div class="empty">No hay rangos configurados para ese día.</div>';return}
+  box.innerHTML=ranges.map(r=>`<button type="button" class="fc-v32-range ${r.busy?'busy':'free'}" ${r.busy?'disabled':''} onclick="fcSelectRange('${r.start}','${r.end}','${excludeId}')">
+    <b>${r.start} a ${r.end}</b><span>${r.busy?'OCUPADO':'DISPONIBLE'}</span>
+  </button>`).join('');
+}
+window.fcRenderDayAvailability=fcRenderDayAvailability;
+
+function fcSelectRange(start,end,excludeId=''){
+  let form=$('#event-form');if(!form)return;
+  form.elements.start.value=start;
+  form.elements.end.value=end==='24:00'?'23:59':end;
+  if(form.elements.specialTime)form.elements.specialTime.checked=false;
+  let msg=fcAvailabilityMessage(form.elements.date.value,form.elements.start.value,form.elements.end.value,excludeId);
+  let box=$('#fc-event-availability');
+  box.className=`fc-event-availability ${msg.ok?'ok':'bad'}`;
+  box.innerHTML=msg.html;
+  document.querySelectorAll('.fc-v32-range').forEach(b=>b.classList.remove('selected'));
+  [...document.querySelectorAll('.fc-v32-range')].find(b=>b.textContent.includes(`${start} a ${end}`))?.classList.add('selected');
+}
+window.fcSelectRange=fcSelectRange;
+
+function fcToggleSpecialTime(){
+  let form=$('#event-form');if(!form)return;
+  let special=form.elements.specialTime.checked;
+  $('#fc-v32-special-fields').style.display=special?'grid':'none';
+  if(!special){
+    form.elements.start.removeAttribute('required');
+    form.elements.end.removeAttribute('required');
+  }else{
+    form.elements.start.setAttribute('required','required');
+    form.elements.end.setAttribute('required','required');
+  }
+}
+window.fcToggleSpecialTime=fcToggleSpecialTime;
+
+function openSalonScheduleSettings(){
+  let s=salon();fcEnsureV32();
+  showModal(`<div class="modal-title"><div><h2>Configurar horario del salón</h2><p>Definí desde qué hora hasta qué hora trabaja el salón. El sistema dividirá automáticamente el día en bloques de 3 horas.</p></div><button class="ghost small" onclick="closeModal()">✕</button></div>
+    <form id="fc-v32-schedule-form">
+      <div class="card">
+        <div class="form-grid">
+          <div class="field"><label>Primer horario del día</label><input name="bookingDayStart" type="time" value="${esc(s.bookingDayStart||'09:00')}" required></div>
+          <div class="field"><label>Último horario del día</label><input name="bookingDayEnd" type="time" value="${esc(s.bookingDayEnd==='24:00'?'23:59':s.bookingDayEnd||'23:59')}" required></div>
+        </div>
+        <div class="privacy-note">El sistema arma rangos de 3 horas automáticamente. Ejemplo: 09:00–12:00, 12:00–15:00, 15:00–18:00.</div>
+      </div>
+      <div class="form-actions"><button type="button" class="ghost" onclick="closeModal()">← Volver</button><button class="primary">Guardar horarios</button></div>
+    </form>`);
+  $('#fc-v32-schedule-form').onsubmit=e=>{
+    e.preventDefault();
+    let f=Object.fromEntries(new FormData(e.target));
+    let start=fcTimeToMin(f.bookingDayStart),end=fcTimeToMin(f.bookingDayEnd);
+    if(end<=start)return toast('El horario final debe ser posterior al inicial');
+    s.bookingDayStart=f.bookingDayStart;
+    s.bookingDayEnd=f.bookingDayEnd;
+    s.bookingDefaultBlockHours=3;
+    save();closeModal();toast('Horario actualizado');renderSalonShell();
+  };
+}
+window.openSalonScheduleSettings=openSalonScheduleSettings;
+
+openEventForm=function(eid){
+  let e=eid?data.events.find(x=>x.id===eid):null;
+  fcEnsureV32();
+  showModal(`<div class="modal-title"><div><h2>${e?'Editar fiesta':'Nueva fiesta'}</h2><p>Elegí la fecha y te mostramos los horarios libres de 3 horas.</p></div><button class="ghost small" onclick="closeModal()">✕</button></div>
+    <form id="event-form">
+      <div class="form-grid">
+        <div class="field"><label>Cumpleañero/a</label><input name="child" required value="${esc(e?.child||'')}"></div>
+        <div class="field"><label>Edad</label><input name="age" type="number" value="${e?.age||''}"></div>
+        <div class="field"><label>Cliente / responsable</label><input name="client" required value="${esc(e?.client||'')}"></div>
+        <div class="field"><label>WhatsApp</label><input name="phone" value="${esc(e?.phone||'')}"></div>
+
+        <div class="field"><label>Fecha</label><input name="date" type="date" required value="${e?.date||''}"></div>
+        <div class="field"><label>Estado</label><select name="status">${['Consulta','Señada','Confirmada','Finalizada','Cancelada'].map(x=>`<option ${e?.status===x?'selected':''}>${x}</option>`).join('')}</select></div>
+
+        <div class="field span2">
+          <label>Horarios disponibles</label>
+          <div id="fc-v32-day-ranges" class="fc-v32-day-ranges"></div>
+        </div>
+
+        <div class="field span2">
+          <label class="fc-special-toggle"><input type="checkbox" name="specialTime" ${e?'checked':''} onchange="fcToggleSpecialTime()"> <b>Horario especial solicitado por el cliente</b></label>
+          <small class="muted">Usalo solo si el cliente necesita un horario distinto a los bloques de 3 horas.</small>
+        </div>
+
+        <div id="fc-v32-special-fields" class="span2 fc-v32-special-grid" style="display:${e?'grid':'none'}">
+          <div class="field"><label>Hora especial desde</label><input name="start" type="time" value="${esc(e?.start||'')}"></div>
+          <div class="field"><label>Hora especial hasta</label><input name="end" type="time" value="${esc(e?.end||'')}"></div>
+        </div>
+
+        <div class="field span2"><div id="fc-event-availability" class="fc-event-availability">Seleccioná una fecha y un horario.</div></div>
+
+        <div class="field"><label>Paquete</label><input name="package" value="${esc(e?.package||'Clásico')}"></div>
+        <div class="field"><label>Invitados estimados</label><input name="guests" type="number" value="${e?.guests||0}"></div>
+        <div class="field"><label>Precio total</label><input name="total" type="number" value="${e?.total||0}"></div>
+        <div class="field"><label>Ya cobrado</label><input name="paid" type="number" value="${e?.paid||0}"></div>
+        <div class="field span2"><label>Observaciones</label><textarea name="notes">${esc(e?.notes||'')}</textarea></div>
+      </div>
+      <div class="form-actions"><button type="button" class="ghost" onclick="closeModal()">← Volver</button><button class="primary">Guardar fiesta</button></div>
+    </form>`);
+
+  let form=$('#event-form');
+
+  function validateSpecial(){
+    if(!form.elements.specialTime.checked)return;
+    let date=form.elements.date.value,start=form.elements.start.value,end=form.elements.end.value;
+    let box=$('#fc-event-availability');
+    if(!date||!start||!end){box.className='fc-event-availability';box.innerHTML='Completá fecha, hora de inicio y hora de fin.';return}
+    if(fcTimeToMin(end)<=fcTimeToMin(start)){box.className='fc-event-availability bad';box.innerHTML='<b>⛔ El horario final debe ser posterior al inicial.</b>';return}
+    let conflict=fcConflict(date,start,end,eid||'');
+    if(conflict){
+      box.className='fc-event-availability bad';
+      box.innerHTML=`<b>⛔ Ese horario no está disponible.</b><br>Se superpone con una fiesta de ${esc(conflict.start)} a ${esc(conflict.end)}.`;
+    }else{
+      box.className='fc-event-availability ok';
+      box.innerHTML=`<b>✅ Horario especial disponible.</b><br>${start} a ${end}`;
+    }
+  }
+
+  form.elements.date.addEventListener('change',()=>{
+    fcRenderDayAvailability(form.elements.date.value,eid||'');
+    if(form.elements.specialTime.checked)validateSpecial();
+  });
+  ['start','end'].forEach(n=>form.elements[n].addEventListener('input',validateSpecial));
+  fcRenderDayAvailability(form.elements.date.value,eid||'');
+
+  form.onsubmit=async x=>{
+    x.preventDefault();
+    let f=Object.fromEntries(new FormData(x.target));
+    let date=f.date,start=f.start,end=f.end;
+
+    if(!f.specialTime){
+      if(!start||!end)return toast('Elegí uno de los horarios disponibles');
+    }
+
+    if(fcTimeToMin(end)<=fcTimeToMin(start))return toast('El horario final debe ser posterior al inicial');
+
+    let conflict=fcConflict(date,start,end,eid||'');
+    if(conflict){
+      fcRenderDayAvailability(date,eid||'');
+      return showModal(`<div class="booking-conflict-modal"><div class="big-emoji">⛔</div><h2>Horario no disponible</h2><p>Ese horario se superpone con una fiesta ya señalada o confirmada de <b>${esc(conflict.start)} a ${esc(conflict.end)}</b>.</p><div class="form-actions"><button class="primary" onclick="closeModal();openEventForm('${eid||''}')">Elegir otro horario</button></div></div>`);
+    }
+
+    f.durationHours=(fcTimeToMin(end)-fcTimeToMin(start))/60;
+    ['age','guests','total','paid','durationHours'].forEach(k=>f[k]=Number(f[k]||0));
+    let payload={...f,id:eid||id(),salonId:session.salonId,rsvps:e?.rsvps||[],extras:e?.extras||[],payments:e?.payments||[]};
+
+    if(SERVER_MODE){
+      try{
+        let r=await fetch('/api/reservation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:eid?'update':'create',data:payload}),cache:'no-store'});
+        let res=await r.json();
+        if(!r.ok||!res.ok){
+          if(res.conflict)return showModal(`<div class="booking-conflict-modal"><div class="big-emoji">⛔</div><h2>Horario ocupado</h2><p>${esc(res.error||'Ese horario ya fue reservado.')}</p><div class="form-actions"><button class="primary" onclick="closeModal();openEventForm('${eid||''}')">Ver horarios disponibles</button></div></div>`);
+          return toast(res.error||'No se pudo guardar la fiesta');
+        }
+        data=res.state;if(typeof normalizeLiveData==='function')normalizeLiveData();
+      }catch(err){return toast('No se pudo conectar con el servidor central')}
+    }else{
+      if(e)Object.assign(e,payload);else data.events.push(payload);save();
+    }
+    closeModal();toast('Fiesta guardada');renderSalonShell();
+  };
+};
+window.openEventForm=openEventForm;
+
+/* Mi salón muestra configuración simplificada */
+const _v32Profile=renderProfile;
+renderProfile=function(){
+  _v32Profile();
+  let c=$('#content');if(c){
+    let old=c.querySelector('.fc-schedule-settings-card');
+    if(old)old.remove();
+    let s=salon(),d=document.createElement('div');d.className='card fc-schedule-settings-card';
+    d.innerHTML=`<div class="section-title"><div><h3>🕒 Horario del salón</h3><small>Bloques automáticos de 3 horas · ${esc(s.bookingDayStart||'09:00')} a ${esc(s.bookingDayEnd||'23:59')}</small></div><button class="secondary" onclick="openSalonScheduleSettings()">Configurar</button></div>`;
+    c.prepend(d);
+  }
+};
+window.renderProfile=renderProfile;

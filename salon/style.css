@@ -206,3 +206,15 @@
 .fc-schedule-settings-card{margin-bottom:16px}
 .provider-zone-v31{display:inline-block;margin-bottom:8px}
 @media(max-width:700px){.fc-schedule-row{grid-template-columns:1fr}.fc-schedule-row button{width:100%}}
+
+/* V32 disponibilidad visual simple */
+.fc-v32-day-ranges{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:8px}
+.fc-v32-range{border:1px solid #dbe3ee;border-radius:14px;padding:14px;background:#fff;text-align:left;cursor:pointer;display:flex;flex-direction:column;gap:5px}
+.fc-v32-range.free{background:#f0fdf4;border-color:#86efac;color:#166534}
+.fc-v32-range.busy{background:#f8fafc;border-color:#cbd5e1;color:#94a3b8;cursor:not-allowed}
+.fc-v32-range.selected{outline:3px solid rgba(34,197,94,.18);border-color:#22c55e}
+.fc-v32-range span{font-size:11px;font-weight:800;letter-spacing:.05em}
+.fc-special-toggle{display:flex;align-items:center;gap:8px}
+.fc-v32-special-grid{grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:760px){.fc-v32-day-ranges{grid-template-columns:1fr 1fr}.fc-v32-special-grid{grid-template-columns:1fr}}
+@media(max-width:480px){.fc-v32-day-ranges{grid-template-columns:1fr}}
