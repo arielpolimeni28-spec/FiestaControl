@@ -153,12 +153,12 @@ def reservation_action(action, payload):
                 continue
             if e.get('status') not in ('Señada','Confirmada'):
                 continue
-            if a < _time_min(e.get('end')) and b > _time_min(e.get('start')):
+            if a < (_time_min(e.get('end')) + 60) and b > (_time_min(e.get('start')) - 60):
                 conflict=e; break
         if conflict:
             available=_available_ranges(events,salon_id,date,eid)
             c.close()
-            return {'ok':False,'conflict':True,'error':f"Se superpone con {conflict.get('child','otra fiesta')} de {conflict.get('start')} a {conflict.get('end')}.",'available':available,'state':st}
+            return {'ok':False,'conflict':True,'error':f"Horario no disponible: hay una fiesta de {conflict.get('start')} a {conflict.get('end')} y se requiere 1 hora libre para limpieza entre fiestas.",'available':available,'state':st}
         clean=dict(payload); clean['durationHours']=float(clean.get('durationHours') or 0)
         if action=='update':
             target=next((x for x in events if x.get('id')==eid and x.get('salonId')==salon_id),None)

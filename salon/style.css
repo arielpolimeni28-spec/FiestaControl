@@ -218,3 +218,20 @@
 .fc-v32-special-grid{grid-template-columns:1fr 1fr;gap:12px}
 @media(max-width:760px){.fc-v32-day-ranges{grid-template-columns:1fr 1fr}.fc-v32-special-grid{grid-template-columns:1fr}}
 @media(max-width:480px){.fc-v32-day-ranges{grid-template-columns:1fr}}
+
+/* V33 comunidad destinatarios + fotos de productos */
+.fc-target-chip{display:inline-flex;align-items:center;margin-left:7px;padding:4px 8px;border-radius:999px;background:#eef2ff;color:#4338ca;font-size:11px;font-weight:800}
+.fc-product-photos{display:grid;gap:6px;margin:-2px -2px 12px}.fc-product-photos.one{grid-template-columns:1fr}.fc-product-photos.two{grid-template-columns:1fr 1fr}
+.fc-product-photos img{width:100%;height:170px;object-fit:cover;border-radius:14px}.fc-product-photos.two img{height:145px}
+.product-photo-empty{height:150px;border-radius:14px;background:#f8fafc;display:grid;place-items:center;font-size:42px;margin-bottom:12px}
+.fc-product-photo-preview{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:10px 0}.fc-product-photo-preview>div{position:relative}.fc-product-photo-preview img{width:100%;height:160px;object-fit:cover;border-radius:14px}.fc-product-photo-preview button{position:absolute;right:7px;bottom:7px}
+@media(max-width:600px){.fc-product-photo-preview{grid-template-columns:1fr}.fc-product-photos.two img{height:120px}}
+
+/* V34 precios y limpieza */
+.fc-custom-extra-row{display:grid;grid-template-columns:1.4fr 1fr auto;gap:10px;align-items:end;padding:10px 0;border-bottom:1px solid #eef2f7}
+.fc-event-extra-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.fc-event-extra-list label{padding:10px;border:1px solid #e2e8f0;border-radius:12px;background:#fff}
+.fc-price-summary{padding:13px 15px;border-radius:14px;background:#eff6ff;border:1px solid #bfdbfe;color:#1d4ed8}
+.fc-day-busy-summary{padding:13px 15px;border-radius:14px;background:#fff7ed;border:1px solid #fed7aa}.fc-day-busy-summary>b{display:block;margin-bottom:8px}
+.fc-busy-event-btn{display:inline-block;margin:4px 6px 4px 0;padding:8px 10px;border:0;border-radius:10px;background:#fee2e2;color:#991b1b;font-weight:800}
+.fc-v34-time-chip{font-weight:800}
+@media(max-width:700px){.fc-custom-extra-row{grid-template-columns:1fr}.fc-event-extra-list{grid-template-columns:1fr}}

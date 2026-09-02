@@ -2307,3 +2307,459 @@ renderProfile=function(){
   }
 };
 window.renderProfile=renderProfile;
+
+
+/* ===================== V33: comunidad de proveedores por destinatario + 2 fotos por producto ===================== */
+function fcEnsureV33(){
+  data.providerCommunityPosts=data.providerCommunityPosts||[];
+  (data.marketSuppliers||[]).forEach(p=>{
+    p.products=p.products||[];
+    p.products.forEach(pr=>{if(!Array.isArray(pr.photos))pr.photos=[]});
+  });
+}
+fcEnsureV33();
+
+function fcProviderTargetLabel(post){
+  if(post.targetType==='salon'){
+    let s=(data.salons||[]).find(x=>x.id===post.targetSalonId);
+    return s?`Solo ${s.name}`:'Salón específico';
+  }
+  if(post.targetType==='zone') return `Zona: ${post.targetZone||post.zone||'Sin zona'}`;
+  return 'Todos los salones';
+}
+function fcProviderPostVisibleForSalon(post,s){
+  if(post.targetType==='salon')return post.targetSalonId===s.id;
+  if(post.targetType==='zone')return (post.targetZone||post.zone)===(s.zone||'');
+  if(post.targetType==='all')return true;
+  /* compatibilidad con publicaciones V30 */
+  return !post.zone || post.zone===s.zone;
+}
+
+renderProviderCommunity=function(){
+  fcEnsureV33();
+  let p=provider(),posts=(data.providerCommunityPosts||[]).filter(x=>x.providerId===p.id).sort((a,b)=>(b.created||'').localeCompare(a.created||''));
+  setTitle('Comunidad','Promociones, ofertas e información para los salones');
+  $('#content').innerHTML=`
+    <div class="provider-community-hero">
+      <div><span class="eyebrow">COMUNIDAD DE PROVEEDORES</span><h2>Mandá mensajes a toda la red o a un salón</h2>
+      <p>Podés publicar para todos los salones, para una zona o elegir un salón específico.</p></div>
+      <button class="primary" onclick="openProviderCommunityPostForm()">+ Nuevo mensaje</button>
+    </div>
+    <div class="card">
+      <div class="section-title"><div><h3>Mis mensajes publicados</h3><small>${posts.length} publicación${posts.length===1?'':'es'}</small></div></div>
+      ${posts.map(x=>`<div class="provider-post-row"><div class="grow">
+        <div><span class="post-type">${esc(x.type||'Novedad')}</span><span class="fc-target-chip">👥 ${esc(fcProviderTargetLabel(x))}</span></div>
+        <strong>${esc(x.title)}</strong><small>${new Date(x.created).toLocaleString('es-AR')}</small>
+        <p>${esc(x.body||'')}</p>${x.promoCode?`<div class="promo-code">🎁 ${esc(x.promoCode)}</div>`:''}
+      </div><div class="actions"><button class="secondary small" onclick="openProviderCommunityPostForm('${x.id}')">Editar</button><button class="danger small" onclick="deleteProviderCommunityPost('${x.id}')">Borrar</button></div></div>`).join('')||'<div class="empty">Todavía no publicaste mensajes.</div>'}
+    </div>`;
+};
+window.renderProviderCommunity=renderProviderCommunity;
+
+function fcProviderTargetFields(post){
+  let type=post?.targetType||'all';
+  return `<div class="field"><label>Destinatarios</label><select name="targetType" onchange="fcProviderTargetChange(this.value)">
+    <option value="all" ${type==='all'?'selected':''}>Todos los salones</option>
+    <option value="zone" ${type==='zone'?'selected':''}>Una zona</option>
+    <option value="salon" ${type==='salon'?'selected':''}>Un salón específico</option>
+  </select></div>
+  <div class="field" id="fc-provider-target-zone" style="display:${type==='zone'?'block':'none'}"><label>Zona</label><select name="targetZone"><option value="">Seleccionar</option>${fcZones().map(z=>`<option value="${z}" ${(post?.targetZone||post?.zone)===z?'selected':''}>${z}</option>`).join('')}</select></div>
+  <div class="field span2" id="fc-provider-target-salon" style="display:${type==='salon'?'block':'none'}"><label>Salón destinatario</label><select name="targetSalonId"><option value="">Seleccionar salón</option>${(data.salons||[]).filter(s=>s.status==='Aprobado').map(s=>`<option value="${s.id}" ${post?.targetSalonId===s.id?'selected':''}>${esc(s.name)}${s.zone?` · ${esc(s.zone)}`:''}</option>`).join('')}</select></div>`;
+}
+function fcProviderTargetChange(v){
+  let z=$('#fc-provider-target-zone'),s=$('#fc-provider-target-salon');
+  if(z)z.style.display=v==='zone'?'block':'none';
+  if(s)s.style.display=v==='salon'?'block':'none';
+}
+window.fcProviderTargetChange=fcProviderTargetChange;
+
+openProviderCommunityPostForm=function(pid=''){
+  let p=provider(),post=pid?(data.providerCommunityPosts||[]).find(x=>x.id===pid&&x.providerId===p.id):null;
+  showModal(`<div class="modal-title"><div><h2>${post?'Editar':'Nuevo'} mensaje</h2><p>Elegí exactamente quién lo recibe.</p></div><button class="ghost small" onclick="closeModal()">✕</button></div>
+    <form id="provider-community-form">
+      <div class="form-grid">
+        <div class="field"><label>Tipo</label><select name="type">${['Promoción','Oferta','Novedad','Información','Nuevo producto'].map(v=>`<option ${post?.type===v?'selected':''}>${v}</option>`).join('')}</select></div>
+        ${fcProviderTargetFields(post)}
+        <div class="field span2"><label>Título</label><input name="title" required value="${esc(post?.title||'')}"></div>
+        <div class="field span2"><label>Mensaje</label><textarea name="body" rows="5" required>${esc(post?.body||'')}</textarea></div>
+        <div class="field"><label>Código / beneficio</label><input name="promoCode" value="${esc(post?.promoCode||'')}" placeholder="Ej.: 10% OFF"></div>
+        <div class="field"><label>Vigencia hasta</label><input name="validUntil" type="date" value="${esc(post?.validUntil||'')}"></div>
+      </div>
+      <div class="form-actions"><button type="button" class="ghost" onclick="closeModal()">← Volver</button><button class="primary">Publicar mensaje</button></div>
+    </form>`);
+  $('#provider-community-form').onsubmit=async e=>{
+    e.preventDefault();let f=Object.fromEntries(new FormData(e.target));
+    if(f.targetType==='zone'&&!f.targetZone)return toast('Seleccioná una zona');
+    if(f.targetType==='salon'&&!f.targetSalonId)return toast('Seleccioná un salón');
+    if(f.targetType!=='zone')f.targetZone='';
+    if(f.targetType!=='salon')f.targetSalonId='';
+    let payload={id:post?.id||id(),providerId:p.id,providerName:p.business||p.owner,providerZone:p.zone||'',...f,created:post?.created||new Date().toISOString(),updated:new Date().toISOString()};
+    if(SERVER_MODE){
+      try{
+        let r=await fetch('/api/provider-community',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:post?'update':'create',data:payload}),cache:'no-store'});
+        let res=await r.json();if(!r.ok||!res.ok)return toast(res.error||'No se pudo publicar');
+        data=res.state;if(typeof normalizeLiveData==='function')normalizeLiveData();
+      }catch(err){return toast('No se pudo conectar con el servidor')}
+    }else{
+      if(post)Object.assign(post,payload);else data.providerCommunityPosts.push(payload);save();
+    }
+    closeModal();toast('Mensaje publicado');renderProviderCommunity();
+  };
+};
+window.openProviderCommunityPostForm=openProviderCommunityPostForm;
+
+/* Comunidad del salón: respeta Todos / Zona / Salón específico */
+const _v33RenderCommunity=renderCommunity;
+renderCommunity=function(){
+  _v33RenderCommunity();
+  let s=salon(),feed=$('.community-feed');if(!feed)return;
+  let old=feed.querySelector('.provider-community-section');if(old)old.remove();
+  let posts=(data.providerCommunityPosts||[]).filter(p=>fcProviderPostVisibleForSalon(p,s)).sort((a,b)=>(b.created||'').localeCompare(a.created||''));
+  if(!posts.length)return;
+  let block=document.createElement('div');block.className='provider-community-section';
+  block.innerHTML=`<div class="section-title"><div><small class="eyebrow">PROVEEDORES</small><h3>Mensajes, promociones y ofertas</h3></div></div>`+
+    posts.map(x=>`<article class="card provider-community-card">
+      <div class="post-head"><div><span class="post-type">${esc(x.type||'Novedad')}</span><span class="fc-target-chip">${esc(fcProviderTargetLabel(x))}</span></div><small>${new Date(x.created).toLocaleString('es-AR')}</small></div>
+      <h3>${esc(x.title)}</h3><p>${esc(x.body||'')}</p>
+      ${x.promoCode?`<div class="promo-code">🎁 Beneficio: <b>${esc(x.promoCode)}</b></div>`:''}
+      ${x.validUntil?`<small class="muted">Vigente hasta ${new Date(x.validUntil+'T12:00:00').toLocaleDateString('es-AR')}</small>`:''}
+      <div class="post-foot"><span>Publicado por <b>${esc(x.providerName||'Proveedor')}</b></span></div>
+    </article>`).join('');
+  feed.prepend(block);
+};
+window.renderCommunity=renderCommunity;
+
+/* Portal proveedor: Comunidad visible en el menú */
+renderProviderShell=function(){
+ let p=data.marketSuppliers.find(x=>x.id===session.providerId);if(!p){logout();return}
+ let newCount=(typeof providerConversationUnreadCount==='function')?providerConversationUnreadCount():0;
+ $('#app').innerHTML=`<div class="shell super-shell"><aside class="sidebar super-sidebar"><div class="brand"><div class="mark">FC</div><div><b>FiestaControl</b><small>Portal proveedor</small></div></div><div class="tenant"><div><small>PROVEEDOR</small><strong>${esc(p.business)}</strong></div></div><nav class="nav">
+ <button data-pv="providerHome" class="${view==='providerHome'?'active':''}">🏠 Inicio</button>
+ <button data-pv="providerOrders" class="${view==='providerOrders'?'active':''}">🧾 Pedidos y mensajes ${newCount?`<span class="nav-badge">${newCount}</span>`:''}</button>
+ <button data-pv="community" class="${view==='community'?'active':''}">📣 Comunidad</button>
+ <button data-pv="providerProducts" class="${view==='providerProducts'?'active':''}">📦 Mis productos</button>
+ <button data-pv="providerSalons" class="${view==='providerSalons'?'active':''}">🏪 Salones</button></nav>
+ <div class="side-foot"><div class="user-chip"><b>${esc(p.owner)}</b><small>${esc(p.email)}</small></div><button class="logout" onclick="logout()">Cerrar sesión</button></div></aside>
+ <main class="main"><header class="topbar"><div><h1>${view==='providerOrders'?'Pedidos y mensajes':view==='community'?'Comunidad':view==='providerProducts'?'Mis productos':view==='providerSalons'?'Salones de la red':'Panel del proveedor'}</h1><p>${view==='community'?'Publicá promociones, ofertas e información para toda la red o destinatarios específicos.':view==='providerOrders'?'Respondé mensajes, cambios y coordiná cada entrega.':'Ofrecé productos y conectate con salones.'}</p></div><div class="top-actions">${newCount?`<button class="notice-btn" onclick="view='providerOrders';renderProviderShell()">💬 ${newCount} nuevo${newCount===1?'':'s'}</button>`:''}<button class="primary" onclick="openProviderProductForm()">+ Producto</button></div></header><section class="content" id="content"></section></main></div><div id="toast" class="toast"></div>`;
+ $$('[data-pv]').forEach(b=>b.onclick=()=>{view=b.dataset.pv;renderProviderShell()});
+ if(view==='providerOrders')providerOrders();else if(view==='community')renderProviderCommunity();else if(view==='providerProducts')providerProducts();else if(view==='providerSalons')providerSalons();else providerHome();
+};
+window.renderProviderShell=renderProviderShell;
+
+/* Productos con hasta 2 fotos */
+function fcProductPhotosHTML(pr,compact=false){
+  let photos=(pr.photos||[]).filter(Boolean).slice(0,2);
+  if(!photos.length)return `<div class="product-photo-empty">📦</div>`;
+  return `<div class="fc-product-photos ${photos.length===1?'one':'two'}">${photos.map(x=>`<img src="${x}" alt="${esc(pr.name||'Producto')}">`).join('')}</div>`;
+}
+window.fcProductPhotosHTML=fcProductPhotosHTML;
+
+providerProducts=function(){
+  fcEnsureV33();
+  let p=data.marketSuppliers.find(x=>x.id===session.providerId);
+  $('#content').innerHTML=`<div class="market-grid">${(p.products||[]).map(pr=>`<article class="card product-card">
+    ${fcProductPhotosHTML(pr)}
+    <h3>${esc(pr.name)}</h3><p>${esc(pr.description||'')}</p>
+    <div class="product-bottom"><strong>${money(pr.price)}</strong><div class="actions"><button class="secondary small" onclick="openProviderProductForm('${pr.id}')">Editar</button><button class="danger small" onclick="deleteProviderProduct('${pr.id}')">Borrar</button></div></div>
+  </article>`).join('')||'<div class="card empty">Todavía no publicaste productos.</div>'}</div>`;
+};
+window.providerProducts=providerProducts;
+
+function fcRenderProductPhotoPreview(){
+  let box=$('#fc-product-photo-preview');if(!box)return;
+  let ph=window.__fcProductPhotos||[];
+  box.innerHTML=ph.map((x,i)=>`<div><img src="${x}" alt=""><button type="button" class="danger small" onclick="fcRemoveProductPhoto(${i})">Quitar</button></div>`).join('')||'<div class="empty">Sin fotos cargadas.</div>';
+}
+function fcRemoveProductPhoto(i){window.__fcProductPhotos.splice(i,1);fcRenderProductPhotoPreview()}
+window.fcRemoveProductPhoto=fcRemoveProductPhoto;
+
+openProviderProductForm=function(prid=''){
+  fcEnsureV33();
+  let p=data.marketSuppliers.find(x=>x.id===session.providerId),pr=prid?(p.products||[]).find(x=>x.id===prid):null;
+  window.__fcProductPhotos=[...(pr?.photos||[])].slice(0,2);
+  showModal(`<div class="modal-title"><div><h2>${pr?'Editar':'Nuevo'} producto</h2><p>Podés cargar hasta 2 fotos.</p></div><button class="ghost small" onclick="closeModal()">✕</button></div>
+    <form id="ppf-v33">
+      <div class="form-grid">
+        <div class="field span2"><label>Producto</label><input name="name" required value="${esc(pr?.name||'')}"></div>
+        <div class="field"><label>Precio</label><input name="price" type="number" required value="${Number(pr?.price||0)}"></div>
+        <div class="field span2"><label>Descripción</label><textarea name="description" rows="3">${esc(pr?.description||'')}</textarea></div>
+        <div class="field span2"><label>Fotos del producto · máximo 2</label><div id="fc-product-photo-preview" class="fc-product-photo-preview"></div>
+          <label class="secondary file-button">📷 Agregar fotos<input id="fc-product-photo-input" type="file" accept="image/*" multiple hidden></label><small class="muted">Si ya hay 2 fotos, quitá una antes de agregar otra.</small></div>
+      </div>
+      <div class="form-actions"><button type="button" class="ghost" onclick="closeModal()">← Volver</button><button class="primary">${pr?'Guardar cambios':'Publicar producto'}</button></div>
+    </form>`);
+  fcRenderProductPhotoPreview();
+  $('#fc-product-photo-input').onchange=e=>{
+    let available=2-window.__fcProductPhotos.length;
+    if(available<=0){toast('Máximo 2 fotos por producto');e.target.value='';return}
+    [...e.target.files].slice(0,available).forEach(file=>{
+      let r=new FileReader();r.onload=()=>{window.__fcProductPhotos.push(r.result);fcRenderProductPhotoPreview()};r.readAsDataURL(file)
+    });
+    if(e.target.files.length>available)toast('Solo se guardan hasta 2 fotos');
+  };
+  $('#ppf-v33').onsubmit=e=>{
+    e.preventDefault();let f=Object.fromEntries(new FormData(e.target));f.price=Number(f.price||0);f.photos=[...(window.__fcProductPhotos||[])].slice(0,2);
+    p.products=p.products||[];
+    if(pr)Object.assign(pr,f);else p.products.push({id:id(),...f});
+    save();closeModal();view='providerProducts';renderProviderShell();toast(pr?'Producto actualizado':'Producto publicado');
+  };
+};
+window.openProviderProductForm=openProviderProductForm;
+
+/* Fotos visibles también en Marketplace del salón */
+const _v33RenderSuppliers=renderSuppliers;
+renderSuppliers=function(){
+  _v33RenderSuppliers();
+  let cards=[...document.querySelectorAll('.market-grid .product-card')];
+  cards.forEach(card=>{
+    let name=card.querySelector('h3')?.textContent?.trim();if(!name)return;
+    let found=null;
+    for(let p of (data.marketSuppliers||[])){let pr=(p.products||[]).find(x=>x.name===name);if(pr){found=pr;break}}
+    if(found && !card.querySelector('.fc-product-photos') && !card.querySelector('.product-photo-empty')){
+      card.insertAdjacentHTML('afterbegin',fcProductPhotosHTML(found,true));
+    }
+  });
+};
+window.renderSuppliers=renderSuppliers;
+
+
+/* ===================== V34: tarifas por tipo de fiesta + extras + 1h limpieza entre fiestas ===================== */
+function fcEnsureV34(){
+  (data.salons||[]).forEach(s=>{
+    s.pricingConfig=s.pricingConfig||{
+      childHours:2.5,
+      childPrice:0,
+      adultHours:4,
+      adultPrice:0,
+      extraHourPrice:0,
+      extraWaiterPrice:0,
+      customExtras:[]
+    };
+    if(!Array.isArray(s.pricingConfig.customExtras)) s.pricingConfig.customExtras=[];
+  });
+}
+fcEnsureV34();
+
+function fcPricing(){fcEnsureV34();return salon().pricingConfig}
+
+function openSalonPricingSettings(){
+  let s=salon(),p=fcPricing();
+  showModal(`<div class="modal-title"><div><h2>Configurar precios del salón</h2><p>Definí duración y precio base de cada tipo de fiesta, hora extra, mozo extra y adicionales.</p></div><button class="ghost small" onclick="closeModal()">✕</button></div>
+    <form id="fc-pricing-form">
+      <div class="card">
+        <h3>Fiestas infantiles</h3>
+        <div class="form-grid">
+          <div class="field"><label>Duración</label><input name="childHours" type="number" step="0.5" min="0.5" value="${Number(p.childHours||2.5)}"></div>
+          <div class="field"><label>Precio</label><input name="childPrice" type="number" min="0" value="${Number(p.childPrice||0)}"></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Fiestas de adultos</h3>
+        <div class="form-grid">
+          <div class="field"><label>Duración</label><input name="adultHours" type="number" step="0.5" min="0.5" value="${Number(p.adultHours||4)}"></div>
+          <div class="field"><label>Precio</label><input name="adultPrice" type="number" min="0" value="${Number(p.adultPrice||0)}"></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Adicionales</h3>
+        <div class="form-grid">
+          <div class="field"><label>Precio hora extra</label><input name="extraHourPrice" type="number" min="0" value="${Number(p.extraHourPrice||0)}"></div>
+          <div class="field"><label>Precio mozo extra</label><input name="extraWaiterPrice" type="number" min="0" value="${Number(p.extraWaiterPrice||0)}"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="section-title"><div><h3>Extras personalizados</h3><small>Ej.: Inflable, Candy bar, Animación especial</small></div><button type="button" class="secondary small" onclick="fcAddCustomExtra()">+ Agregar extra</button></div>
+        <div id="fc-custom-extras">${(p.customExtras||[]).map((x,i)=>fcCustomExtraRow(x,i)).join('')||'<div class="empty">No hay extras personalizados.</div>'}</div>
+      </div>
+      <div class="form-actions"><button type="button" class="ghost" onclick="closeModal()">← Volver</button><button class="primary">Guardar precios</button></div>
+    </form>`);
+  window.__fcCustomExtras=(p.customExtras||[]).map(x=>({...x}));
+  $('#fc-pricing-form').onsubmit=e=>{
+    e.preventDefault();let f=Object.fromEntries(new FormData(e.target));
+    s.pricingConfig={
+      childHours:Number(f.childHours||2.5),
+      childPrice:Number(f.childPrice||0),
+      adultHours:Number(f.adultHours||4),
+      adultPrice:Number(f.adultPrice||0),
+      extraHourPrice:Number(f.extraHourPrice||0),
+      extraWaiterPrice:Number(f.extraWaiterPrice||0),
+      customExtras:(window.__fcCustomExtras||[]).filter(x=>x.name)
+    };
+    save();closeModal();toast('Precios actualizados');renderSalonShell();
+  };
+}
+window.openSalonPricingSettings=openSalonPricingSettings;
+
+function fcCustomExtraRow(x,i){
+  return `<div class="fc-custom-extra-row"><div class="field"><label>Nombre</label><input value="${esc(x.name||'')}" oninput="fcUpdateCustomExtra(${i},'name',this.value)"></div><div class="field"><label>Precio</label><input type="number" min="0" value="${Number(x.price||0)}" oninput="fcUpdateCustomExtra(${i},'price',this.value)"></div><button type="button" class="danger small" onclick="fcRemoveCustomExtra(${i})">Quitar</button></div>`;
+}
+function fcAddCustomExtra(){window.__fcCustomExtras=window.__fcCustomExtras||[];window.__fcCustomExtras.push({id:id(),name:'',price:0});fcRenderCustomExtras()}
+function fcUpdateCustomExtra(i,k,v){if(!window.__fcCustomExtras?.[i])return;window.__fcCustomExtras[i][k]=k==='price'?Number(v||0):v}
+function fcRemoveCustomExtra(i){window.__fcCustomExtras.splice(i,1);fcRenderCustomExtras()}
+function fcRenderCustomExtras(){let b=$('#fc-custom-extras');if(!b)return;b.innerHTML=(window.__fcCustomExtras||[]).map((x,i)=>fcCustomExtraRow(x,i)).join('')||'<div class="empty">No hay extras personalizados.</div>'}
+window.fcAddCustomExtra=fcAddCustomExtra;window.fcUpdateCustomExtra=fcUpdateCustomExtra;window.fcRemoveCustomExtra=fcRemoveCustomExtra;
+
+function fcEventBaseDuration(type){
+  let p=fcPricing();return type==='adult'?Number(p.adultHours||4):Number(p.childHours||2.5);
+}
+function fcEventBasePrice(type){
+  let p=fcPricing();return type==='adult'?Number(p.adultPrice||0):Number(p.childPrice||0);
+}
+function fcCalcEventTotalFromForm(form){
+  let p=fcPricing(),type=form.elements.eventType.value;
+  let total=fcEventBasePrice(type);
+  let extraHours=Number(form.elements.extraHours?.value||0);
+  let extraWaiters=Number(form.elements.extraWaiters?.value||0);
+  total+=extraHours*Number(p.extraHourPrice||0);
+  total+=extraWaiters*Number(p.extraWaiterPrice||0);
+  [...form.querySelectorAll('[data-custom-extra]')].forEach(ch=>{
+    if(ch.checked){
+      let item=(p.customExtras||[]).find(x=>x.id===ch.dataset.customExtra);
+      if(item)total+=Number(item.price||0);
+    }
+  });
+  return total;
+}
+function fcUpdateEventPricing(){
+  let form=$('#event-form');if(!form)return;
+  let p=fcPricing(),type=form.elements.eventType.value;
+  let baseH=fcEventBaseDuration(type),extraH=Number(form.elements.extraHours?.value||0);
+  let start=form.elements.start.value;
+  if(start)form.elements.end.value=fcMinToTime(fcTimeToMin(start)+(baseH+extraH)*60);
+  let total=fcCalcEventTotalFromForm(form);
+  if(form.elements.total)form.elements.total.value=total;
+  let s=$('#fc-price-summary');
+  if(s)s.innerHTML=`<b>${type==='adult'?'Fiesta adultos':'Fiesta infantil'}</b> · ${baseH} hs base · ${money(fcEventBasePrice(type))}${extraH?` + ${extraH} h extra`:''}`;
+}
+window.fcUpdateEventPricing=fcUpdateEventPricing;
+
+/* 1 hora obligatoria de limpieza entre fiestas */
+function fcConflictWithCleaning(date,start,end,excludeId=''){
+  let a=fcTimeToMin(start),b=fcTimeToMin(end);
+  return fcBusyEventsForDay(date,excludeId).find(e=>{
+    let es=fcTimeToMin(e.start),ee=fcTimeToMin(e.end);
+    return a < ee+60 && b > es-60;
+  });
+}
+function fcAvailabilityMessageV34(date,start,end,excludeId=''){
+  if(!date)return {ok:true,html:'Elegí una fecha para ver disponibilidad.'};
+  let c=fcConflictWithCleaning(date,start,end,excludeId);
+  if(c)return {ok:false,html:`<b>⛔ Horario no disponible.</b><br>Hay una fiesta de <b>${esc(c.start)} a ${esc(c.end)}</b> y se reserva además <b>1 hora para limpieza</b> antes/después.`};
+  return {ok:true,html:`<b>✅ Horario disponible.</b><br>Se respeta la hora de limpieza entre fiestas.`};
+}
+
+function fcDayBusyButtons(date,excludeId=''){
+  return fcBusyEventsForDay(date,excludeId).map(e=>`<button type="button" class="fc-busy-event-btn" disabled>🎉 Fiesta ${esc(e.start)} a ${esc(e.end)} · Limpieza hasta ${fcMinToTime(fcTimeToMin(e.end)+60)}</button>`).join('');
+}
+
+openEventForm=function(eid){
+  let e=eid?data.events.find(x=>x.id===eid):null,p=fcPricing();
+  let type=e?.eventType||'child';
+  let selectedCustom=(e?.selectedCustomExtras||[]);
+  showModal(`<div class="modal-title"><div><h2>${e?'Editar fiesta':'Nueva fiesta'}</h2><p>Elegí tipo de fiesta y el sistema toma automáticamente duración y precio configurados.</p></div><button class="ghost small" onclick="closeModal()">✕</button></div>
+    <form id="event-form">
+      <div class="form-grid">
+        <div class="field"><label>Tipo de fiesta</label><select name="eventType">
+          <option value="child" ${type==='child'?'selected':''}>Fiesta infantil · ${Number(p.childHours||2.5)} hs</option>
+          <option value="adult" ${type==='adult'?'selected':''}>Fiesta adultos · ${Number(p.adultHours||4)} hs</option>
+        </select></div>
+        <div class="field"><label>Fecha</label><input name="date" type="date" required value="${e?.date||''}"></div>
+
+        <div class="field"><label>Cumpleañero/a / Nombre evento</label><input name="child" required value="${esc(e?.child||'')}"></div>
+        <div class="field"><label>Cliente / responsable</label><input name="client" required value="${esc(e?.client||'')}"></div>
+
+        <div class="field"><label>Hora de inicio</label><input name="start" type="time" required value="${e?.start||''}"></div>
+        <div class="field"><label>Hora de finalización</label><input name="end" type="time" readonly value="${e?.end||''}"></div>
+
+        <div class="field"><label>Horas extra</label><input name="extraHours" type="number" min="0" step="0.5" value="${Number(e?.extraHours||0)}"></div>
+        <div class="field"><label>Mozos extra</label><input name="extraWaiters" type="number" min="0" step="1" value="${Number(e?.extraWaiters||0)}"></div>
+
+        <div class="field span2">
+          <label>Extras del salón</label>
+          <div class="fc-event-extra-list">${(p.customExtras||[]).map(x=>`<label><input type="checkbox" data-custom-extra="${x.id}" ${selectedCustom.includes(x.id)?'checked':''}> ${esc(x.name)} · ${money(x.price)}</label>`).join('')||'<span class="muted">No hay extras personalizados configurados.</span>'}</div>
+        </div>
+
+        <div class="field span2"><div id="fc-price-summary" class="fc-price-summary"></div></div>
+        <div class="field span2"><div id="fc-day-busy-summary" class="fc-day-busy-summary"></div></div>
+        <div class="field span2"><div id="fc-event-availability" class="fc-event-availability">Elegí fecha y horario.</div></div>
+
+        <div class="field"><label>Estado</label><select name="status">${['Consulta','Señada','Confirmada','Finalizada','Cancelada'].map(x=>`<option ${e?.status===x?'selected':''}>${x}</option>`).join('')}</select></div>
+        <div class="field"><label>Invitados estimados</label><input name="guests" type="number" value="${e?.guests||0}"></div>
+        <div class="field"><label>Precio total</label><input name="total" type="number" value="${e?.total||0}"></div>
+        <div class="field"><label>Ya cobrado</label><input name="paid" type="number" value="${e?.paid||0}"></div>
+        <div class="field span2"><label>Observaciones</label><textarea name="notes">${esc(e?.notes||'')}</textarea></div>
+      </div>
+      <div class="form-actions"><button type="button" class="ghost" onclick="closeModal()">← Volver</button><button class="primary">Guardar fiesta</button></div>
+    </form>`);
+
+  let form=$('#event-form');
+  function refresh(){
+    fcUpdateEventPricing();
+    let d=form.elements.date.value,st=form.elements.start.value,en=form.elements.end.value;
+    let bs=$('#fc-day-busy-summary');
+    if(bs)bs.innerHTML=d?(`<b>Fiestas ya cargadas ese día</b>${fcDayBusyButtons(d,eid||'')||'<span class="muted">No hay fiestas confirmadas o señaladas.</span>'}`):'';
+    let box=$('#fc-event-availability');
+    if(d&&st&&en){
+      let m=fcAvailabilityMessageV34(d,st,en,eid||'');
+      box.className=`fc-event-availability ${m.ok?'ok':'bad'}`;box.innerHTML=m.html;
+    }
+  }
+  ['eventType','date','start','extraHours','extraWaiters'].forEach(n=>form.elements[n]?.addEventListener('change',refresh));
+  form.elements.start.addEventListener('input',refresh);
+  form.querySelectorAll('[data-custom-extra]').forEach(x=>x.addEventListener('change',refresh));
+  refresh();
+
+  form.onsubmit=async x=>{
+    x.preventDefault();let f=Object.fromEntries(new FormData(x.target));
+    let baseH=fcEventBaseDuration(f.eventType),extraH=Number(f.extraHours||0);
+    f.end=fcMinToTime(fcTimeToMin(f.start)+(baseH+extraH)*60);
+    let conflict=fcConflictWithCleaning(f.date,f.start,f.end,eid||'');
+    if(conflict){
+      return showModal(`<div class="booking-conflict-modal"><div class="big-emoji">⛔</div><h2>No se puede reservar ese horario</h2><p>Hay una fiesta de <b>${esc(conflict.start)} a ${esc(conflict.end)}</b>. FiestaControl deja <b>1 hora libre para limpieza</b> entre una fiesta y la siguiente.</p><div class="form-actions"><button class="primary" onclick="closeModal();openEventForm('${eid||''}')">Elegir otro horario</button></div></div>`);
+    }
+    f.selectedCustomExtras=[...x.target.querySelectorAll('[data-custom-extra]:checked')].map(ch=>ch.dataset.customExtra);
+    f.durationHours=baseH+extraH;
+    f.extraHours=extraH;
+    f.extraWaiters=Number(f.extraWaiters||0);
+    f.total=fcCalcEventTotalFromForm(x.target);
+    ['guests','paid','total','durationHours'].forEach(k=>f[k]=Number(f[k]||0));
+    let payload={...f,id:eid||id(),salonId:session.salonId,rsvps:e?.rsvps||[],extras:e?.extras||[],payments:e?.payments||[]};
+
+    if(SERVER_MODE){
+      try{
+        let r=await fetch('/api/reservation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:eid?'update':'create',data:payload}),cache:'no-store'});
+        let res=await r.json();if(!r.ok||!res.ok)return toast(res.error||'No se pudo guardar la fiesta');
+        data=res.state;if(typeof normalizeLiveData==='function')normalizeLiveData();
+      }catch(err){return toast('No se pudo conectar con el servidor')}
+    }else{
+      if(e)Object.assign(e,payload);else data.events.push(payload);save();
+    }
+    closeModal();toast('Fiesta guardada');renderSalonShell();
+  };
+};
+window.openEventForm=openEventForm;
+
+/* Agenda: muestra claramente horario ocupado dentro del día */
+const _v34RenderCalendar=renderCalendar;
+renderCalendar=function(){
+  _v34RenderCalendar();
+  document.querySelectorAll('.day').forEach(day=>{
+    let chips=[...day.querySelectorAll('.event-chip')];
+    chips.forEach(ch=>{
+      if(!ch.classList.contains('fc-v34-time-chip'))ch.classList.add('fc-v34-time-chip');
+    });
+  });
+};
+window.renderCalendar=renderCalendar;
+
+/* Mi salón: botón de precios */
+const _v34Profile=renderProfile;
+renderProfile=function(){
+  _v34Profile();
+  let c=$('#content');if(c&&!c.querySelector('.fc-pricing-settings-card')){
+    let p=fcPricing(),d=document.createElement('div');d.className='card fc-pricing-settings-card';
+    d.innerHTML=`<div class="section-title"><div><h3>💵 Precios y duración de fiestas</h3><small>Infantil ${Number(p.childHours||2.5)} hs · Adultos ${Number(p.adultHours||4)} hs · Hora extra ${money(p.extraHourPrice||0)}</small></div><button class="secondary" onclick="openSalonPricingSettings()">Configurar precios</button></div>`;
+    c.prepend(d);
+  }
+};
+window.renderProfile=renderProfile;
