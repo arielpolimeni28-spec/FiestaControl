@@ -98,6 +98,81 @@ def register_entity(kind, payload):
         return item, st
 
 
+def _time_min(t):
+    try:
+        h,m=[int(x) for x in str(t or '00:00').split(':')[:2]]
+        return h*60+m
+    except Exception:
+        return 0
+
+def _available_ranges(events, salon_id, date, exclude_id=''):
+    day_start=8*60; day_end=24*60-1
+    blocks=[]
+    for e in events:
+        if e.get('salonId')!=salon_id or e.get('date')!=date or e.get('id')==exclude_id:
+            continue
+        if e.get('status') not in ('Señada','Confirmada'):
+            continue
+        st=max(day_start,_time_min(e.get('start'))); en=min(day_end,_time_min(e.get('end')))
+        if en>day_start and st<day_end:
+            blocks.append([st,en])
+    blocks.sort()
+    merged=[]
+    for st,en in blocks:
+        if not merged or st>merged[-1][1]:
+            merged.append([st,en])
+        else:
+            merged[-1][1]=max(merged[-1][1],en)
+    free=[]; cur=day_start
+    for st,en in merged:
+        if st>cur: free.append([cur,st])
+        cur=max(cur,en)
+    if cur<day_end: free.append([cur,day_end])
+    def fmt(n): return f"{n//60:02d}:{n%60:02d}"
+    return [f"{fmt(st)} a {'23:59' if en==day_end else fmt(en)}" for st,en in free]
+
+def reservation_action(action, payload):
+    if not isinstance(payload, dict):
+        raise ValueError('Datos inválidos')
+    with LOCK:
+        c=db_connect()
+        row=c.execute('SELECT data FROM app_state WHERE id=1').fetchone()
+        st=json.loads(row[0]) if row else json.loads(json.dumps(SEED))
+        events=st.setdefault('events',[])
+        salon_id=str(payload.get('salonId','')); date=str(payload.get('date',''))
+        start=str(payload.get('start','')); end=str(payload.get('end','')); eid=str(payload.get('id',''))
+        if not salon_id or not date or not start or not end:
+            c.close(); raise ValueError('Faltan fecha u horario')
+        a=_time_min(start); b=_time_min(end)
+        if b<=a:
+            c.close(); raise ValueError('El horario de finalización debe ser posterior al inicio')
+        conflict=None
+        for e in events:
+            if e.get('salonId')!=salon_id or e.get('date')!=date or e.get('id')==eid:
+                continue
+            if e.get('status') not in ('Señada','Confirmada'):
+                continue
+            if a < _time_min(e.get('end')) and b > _time_min(e.get('start')):
+                conflict=e; break
+        if conflict:
+            available=_available_ranges(events,salon_id,date,eid)
+            c.close()
+            return {'ok':False,'conflict':True,'error':f"Se superpone con {conflict.get('child','otra fiesta')} de {conflict.get('start')} a {conflict.get('end')}.",'available':available,'state':st}
+        clean=dict(payload); clean['durationHours']=float(clean.get('durationHours') or 0)
+        if action=='update':
+            target=next((x for x in events if x.get('id')==eid and x.get('salonId')==salon_id),None)
+            if not target:
+                c.close(); raise ValueError('Reserva inexistente')
+            target.update(clean)
+        else:
+            if any(x.get('id')==eid for x in events):
+                c.close(); raise ValueError('Reserva duplicada')
+            events.append(clean)
+        raw=json.dumps(st,ensure_ascii=False,separators=(',',':'))
+        c.execute('UPDATE app_state SET data=?,updated=? WHERE id=1',(raw,time.time()))
+        c.commit(); c.close()
+        return {'ok':True,'state':st}
+
 def marketplace_action(action, payload):
     if not isinstance(payload, dict):
         raise ValueError('Datos inválidos')
@@ -212,6 +287,9 @@ class Handler(SimpleHTTPRequestHandler):
             if path=='/api/register':
                 item, st=register_entity(req.get('kind'), req.get('data') or {})
                 payload={'ok':True,'item':item,'state':st}; code=201
+            elif path=='/api/reservation':
+                payload=reservation_action(req.get('action'), req.get('data') or {})
+                code=200 if payload.get('ok') else 409
             elif path=='/api/marketplace':
                 st=marketplace_action(req.get('action'), req.get('data') or {})
                 payload={'ok':True,'state':st}; code=200

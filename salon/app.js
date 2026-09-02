@@ -1614,3 +1614,89 @@ openCardEditor=function(eid){let e=data.events.find(x=>x.id===eid),c=cardFor(eid
 function fcRemoveInvitePhoto(i){if(!window.__fcInvitePhotos)return;window.__fcInvitePhotos.splice(i,1);let b=$('#v28-photo-preview');if(b)b.innerHTML=window.__fcInvitePhotos.map((img,n)=>`<div><img src="${img}" alt=""><button type="button" class="danger small" onclick="fcRemoveInvitePhoto(${n})">Quitar</button></div>`).join('')}window.fcRemoveInvitePhoto=fcRemoveInvitePhoto;
 function fcStyledCardHTML(e,c,compact=false){let s=salonForEvent?salonForEvent(e):salon();return `<div class="v28-card-preview ${compact?'compact':''}">${invitationPublicHTML(e,c,s)}</div>`}window.fcStyledCardHTML=fcStyledCardHTML;
 renderCards=function(){setTitle('Tarjetas virtuales','Invitaciones con fotos reales y movimiento');let ev=se().sort((a,b)=>a.date.localeCompare(b.date));if(!ev.length){$('#content').innerHTML='<div class="card empty">Primero creá una fiesta.<br><br><button class="primary" onclick="openEventForm()">+ Crear fiesta</button></div>';return}$('#content').innerHTML=`<div class="cards-intro"><div><h2>💌 Invitaciones más reales</h2><p>Subí fotos reales, elegí animación y compartí una invitación mucho más visual.</p></div></div><div class="card-gallery">${ev.map(e=>{let c=cardFor(e.id);return `<div class="card card-project"><div class="project-head"><div><small>${fmtDate(e.date)} · ${e.start}</small><h3>${esc(e.child)} · ${e.age} años</h3></div><span class="pill aprobado">✅ ${confirmedCount(e)} confirmados</span></div>${fcStyledCardHTML(e,c,true)}<div class="card-actions"><button class="secondary" onclick="openCardEditor('${e.id}')">🎨 Diseñar</button><button class="ghost" onclick="openInvitation('${e.id}')">👁 Vista previa</button><button class="secondary" onclick="openPublicInvitationTab('${e.id}')">🎟️ Invitación pública</button><button class="primary" onclick="shareCardWhatsApp('${e.id}')">📲 WhatsApp</button></div></div>`}).join('')}</div>`};window.renderCards=renderCards;
+/* ===================== V29: múltiples fiestas por día + control de superposición ===================== */
+function fcTimeToMin(t){if(!t)return 0;let [h,m]=String(t).split(':').map(Number);return h*60+(m||0)}
+function fcMinToTime(n){n=Math.max(0,Math.min(1439,Math.round(n)));return `${String(Math.floor(n/60)).padStart(2,'0')}:${String(n%60).padStart(2,'0')}`}
+function fcDurationHours(base,extra){return Number(base||0)+Number(extra||0)}
+function fcCalcEnd(start,base,extra){return fcMinToTime(fcTimeToMin(start)+fcDurationHours(base,extra)*60)}
+function fcBlockingEvents(date,excludeId=''){
+  return se().filter(e=>e.date===date && e.id!==excludeId && ['Señada','Confirmada'].includes(e.status)).sort((a,b)=>fcTimeToMin(a.start)-fcTimeToMin(b.start));
+}
+function fcConflict(date,start,end,excludeId=''){
+  let a=fcTimeToMin(start),b=fcTimeToMin(end);
+  return fcBlockingEvents(date,excludeId).find(e=>a<fcTimeToMin(e.end)&&b>fcTimeToMin(e.start));
+}
+function fcAvailableRanges(date,excludeId=''){
+  const dayStart=8*60, dayEnd=24*60-1;
+  let blocks=fcBlockingEvents(date,excludeId).map(e=>[fcTimeToMin(e.start),fcTimeToMin(e.end)]).sort((a,b)=>a[0]-b[0]);
+  let merged=[];
+  blocks.forEach(([s,e])=>{s=Math.max(dayStart,s);e=Math.min(dayEnd,e);if(e<=dayStart||s>=dayEnd)return;if(!merged.length||s>merged[merged.length-1][1])merged.push([s,e]);else merged[merged.length-1][1]=Math.max(merged[merged.length-1][1],e)});
+  let free=[],cur=dayStart;merged.forEach(([s,e])=>{if(s>cur)free.push([cur,s]);cur=Math.max(cur,e)});if(cur<dayEnd)free.push([cur,dayEnd]);
+  return free.map(([s,e])=>`${fcMinToTime(s)} a ${e===dayEnd?'23:59':fcMinToTime(e)}`);
+}
+function fcAvailabilityMessage(date,start,end,excludeId=''){
+  if(!date)return {ok:true,html:'Seleccioná una fecha para ver los horarios disponibles.'};
+  let blocks=fcBlockingEvents(date,excludeId),free=fcAvailableRanges(date,excludeId),conf=(start&&end)?fcConflict(date,start,end,excludeId):null;
+  if(conf)return {ok:false,html:`<b>⛔ Ese horario no está disponible.</b><br>Se superpone con <b>${esc(conf.child||'otra fiesta')}</b> de ${esc(conf.start)} a ${esc(conf.end)}.<br><strong>Horarios disponibles:</strong> ${free.length?free.join(' · '):'No quedan horarios libres ese día.'}`};
+  if(!blocks.length)return {ok:true,html:`<b>✅ Día sin reservas confirmadas.</b><br>Disponible de 08:00 a 23:59.`};
+  return {ok:true,html:`<b>✅ El horario elegido está disponible.</b><br><strong>Franjas libres:</strong> ${free.length?free.join(' · '):'No quedan horarios libres ese día.'}`};
+}
+function fcUpdateEventAvailability(eid=''){
+  let form=$('#event-form');if(!form)return;
+  let date=form.elements.date.value,start=form.elements.start.value,base=form.elements.durationBase.value,extra=form.elements.extraHours.value;
+  let end=fcCalcEnd(start,base,extra);
+  form.elements.end.value=end;
+  let box=$('#fc-event-availability'),msg=fcAvailabilityMessage(date,start,end,eid);
+  if(box){box.className=`fc-event-availability ${msg.ok?'ok':'bad'}`;box.innerHTML=msg.html}
+  let duration=$('#fc-duration-summary');if(duration)duration.textContent=`Duración total: ${fcDurationHours(base,extra)} hora${fcDurationHours(base,extra)===1?'':'s'} · ${start||'--:--'} a ${end}`;
+}
+window.fcUpdateEventAvailability=fcUpdateEventAvailability;
+
+openEventForm=function(eid){
+  let e=eid?data.events.find(x=>x.id===eid):null;
+  let existingHours=e?.durationHours || (e?.start&&e?.end ? Math.max(1,(fcTimeToMin(e.end)-fcTimeToMin(e.start))/60):3);
+  let base=[2,3,4].includes(Number(existingHours))?Number(existingHours):Math.min(4,Math.max(2,Math.floor(existingHours)));
+  let extra=Math.max(0,Math.round(existingHours-base));
+  showModal(`<div class="modal-title"><div><h2>${e?'Editar fiesta':'Nueva fiesta'}</h2><p>Podés cargar varias fiestas el mismo día siempre que no se superpongan.</p></div><button class="ghost small" onclick="closeModal()">✕</button></div>
+  <form id="event-form"><div class="form-grid">
+    <div class="field"><label>Cumpleañero/a</label><input name="child" required value="${esc(e?.child||'')}"></div>
+    <div class="field"><label>Edad</label><input name="age" type="number" value="${e?.age||''}"></div>
+    <div class="field"><label>Cliente / responsable</label><input name="client" required value="${esc(e?.client||'')}"></div>
+    <div class="field"><label>WhatsApp</label><input name="phone" value="${esc(e?.phone||'')}"></div>
+    <div class="field"><label>Fecha</label><input name="date" type="date" required value="${e?.date||''}"></div>
+    <div class="field"><label>Estado</label><select name="status">${['Consulta','Señada','Confirmada','Finalizada','Cancelada'].map(x=>`<option ${e?.status===x?'selected':''}>${x}</option>`).join('')}</select></div>
+    <div class="field"><label>Hora de inicio</label><input name="start" type="time" required value="${e?.start||'17:00'}"></div>
+    <div class="field"><label>Fracción del evento</label><select name="durationBase"><option value="2" ${base===2?'selected':''}>2 horas</option><option value="3" ${base===3?'selected':''}>3 horas</option><option value="4" ${base===4?'selected':''}>4 horas</option></select></div>
+    <div class="field"><label>Hora extra</label><select name="extraHours"><option value="0" ${extra===0?'selected':''}>Sin hora extra</option><option value="1" ${extra===1?'selected':''}>+ 1 hora extra</option><option value="2" ${extra===2?'selected':''}>+ 2 horas extra</option><option value="3" ${extra===3?'selected':''}>+ 3 horas extra</option></select></div>
+    <div class="field"><label>Hora de finalización</label><input name="end" type="time" value="${e?.end||'20:00'}" readonly><small id="fc-duration-summary" class="muted"></small></div>
+    <div class="field span2"><div id="fc-event-availability" class="fc-event-availability">Seleccioná fecha y horario para comprobar disponibilidad.</div></div>
+    <div class="field"><label>Paquete</label><input name="package" value="${esc(e?.package||'Clásico')}"></div>
+    <div class="field"><label>Invitados estimados</label><input name="guests" type="number" value="${e?.guests||0}"></div>
+    <div class="field"><label>Precio total</label><input name="total" type="number" value="${e?.total||0}"></div>
+    <div class="field"><label>Ya cobrado</label><input name="paid" type="number" value="${e?.paid||0}"></div>
+    <div class="field span2"><label>Observaciones</label><textarea name="notes">${esc(e?.notes||'')}</textarea></div>
+  </div><div class="form-actions"><button type="button" class="ghost" onclick="closeModal()">← Volver</button><button class="primary">Guardar fiesta</button></div></form>`);
+
+  let form=$('#event-form');
+  ['date','start','durationBase','extraHours'].forEach(n=>form.elements[n].addEventListener('change',()=>fcUpdateEventAvailability(eid||'')));
+  form.elements.start.addEventListener('input',()=>fcUpdateEventAvailability(eid||''));
+  fcUpdateEventAvailability(eid||'');
+  form.onsubmit=async x=>{
+    x.preventDefault();
+    let f=Object.fromEntries(new FormData(x.target));
+    f.end=fcCalcEnd(f.start,f.durationBase,f.extraHours);
+    f.durationHours=fcDurationHours(f.durationBase,f.extraHours);
+    ['age','guests','total','paid','durationHours'].forEach(k=>f[k]=Number(f[k]||0));
+    let conflict=fcConflict(f.date,f.start,f.end,eid||'');
+    if(conflict){let free=fcAvailableRanges(f.date,eid||'');showModal(`<div class="booking-conflict-modal"><div class="big-emoji">⛔</div><h2>Horario no disponible</h2><p>La fiesta se superpone con <b>${esc(conflict.child||'otra reserva')}</b>, confirmada de <b>${esc(conflict.start)} a ${esc(conflict.end)}</b>.</p><div class="fc-free-ranges"><b>Horarios disponibles ese día</b><p>${free.length?free.join('<br>'):'No quedan horarios libres.'}</p></div><div class="form-actions"><button class="primary" onclick="closeModal();openEventForm('${eid||''}')">Elegir otro horario</button></div></div>`);return;}
+    let payload={...f,id:eid||id(),salonId:session.salonId,rsvps:e?.rsvps||[],extras:e?.extras||[],payments:e?.payments||[]};
+    if(SERVER_MODE){
+      try{let r=await fetch('/api/reservation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:eid?'update':'create',data:payload}),cache:'no-store'});let res=await r.json();
+        if(!r.ok||!res.ok){if(res.conflict){showModal(`<div class="booking-conflict-modal"><div class="big-emoji">⛔</div><h2>La reserva no se pudo guardar</h2><p>${esc(res.error||'Ese horario acaba de ser ocupado.')}</p><div class="fc-free-ranges"><b>Horarios disponibles</b><p>${(res.available||[]).join('<br>')||'Sin disponibilidad.'}</p></div><div class="form-actions"><button class="primary" onclick="closeModal();openEventForm('${eid||''}')">Elegir otro horario</button></div></div>`);return;}return toast(res.error||'No se pudo guardar la fiesta');}
+        data=res.state;if(typeof normalizeLiveData==='function')normalizeLiveData();lastStoreSnapshot=JSON.stringify(data);
+      }catch(err){console.error(err);return toast('No se pudo conectar con el servidor central')}
+    }else{if(e)Object.assign(e,payload);else data.events.push(payload);save();}
+    closeModal();toast('Fiesta guardada');renderSalonShell();
+  };
+};
+window.openEventForm=openEventForm;
