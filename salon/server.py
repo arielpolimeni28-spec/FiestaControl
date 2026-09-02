@@ -116,7 +116,7 @@ def _available_ranges(events, salon_id, date, exclude_id=''):
             continue
         st=max(day_start,_time_min(e.get('start'))); en=min(day_end,_time_min(e.get('end')))
         if en>day_start and st<day_end:
-            blocks.append([st,en])
+            blocks.append([max(day_start, st-60), min(day_end, en+60)])
     blocks.sort()
     merged=[]
     for st,en in blocks:
@@ -153,12 +153,12 @@ def reservation_action(action, payload):
                 continue
             if e.get('status') not in ('Señada','Confirmada'):
                 continue
-            if a < (_time_min(e.get('end')) + 60) and b > (_time_min(e.get('start')) - 60):
+            if a < (_time_min(e.get('end')) + 60) and (b + 60) > _time_min(e.get('start')):
                 conflict=e; break
         if conflict:
             available=_available_ranges(events,salon_id,date,eid)
             c.close()
-            return {'ok':False,'conflict':True,'error':f"Horario no disponible: hay una fiesta de {conflict.get('start')} a {conflict.get('end')} y se requiere 1 hora libre para limpieza entre fiestas.",'available':available,'state':st}
+            return {'ok':False,'conflict':True,'error':f"Horario no disponible. Hay una fiesta de {conflict.get('start')} a {conflict.get('end')} y debe quedar 1 hora libre para limpieza entre fiestas.",'available':available,'state':st}
         clean=dict(payload); clean['durationHours']=float(clean.get('durationHours') or 0)
         if action=='update':
             target=next((x for x in events if x.get('id')==eid and x.get('salonId')==salon_id),None)

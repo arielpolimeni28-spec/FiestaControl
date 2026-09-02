@@ -2523,213 +2523,289 @@ renderSuppliers=function(){
 window.renderSuppliers=renderSuppliers;
 
 
-/* ===================== V34: tarifas por tipo de fiesta + extras + 1h limpieza entre fiestas ===================== */
-function fcEnsureV34(){
+/* ===================== V35 FINAL: configuración comercial + creación de fiesta + limpieza ===================== */
+function fcV35Ensure(){
   (data.salons||[]).forEach(s=>{
-    s.pricingConfig=s.pricingConfig||{
-      childHours:2.5,
-      childPrice:0,
-      adultHours:4,
-      adultPrice:0,
-      extraHourPrice:0,
-      extraWaiterPrice:0,
-      customExtras:[]
-    };
-    if(!Array.isArray(s.pricingConfig.customExtras)) s.pricingConfig.customExtras=[];
+    if(!s.partyPricing || typeof s.partyPricing!=='object'){
+      s.partyPricing={
+        child:{hours:2.5,price:0},
+        adult:{hours:4,price:0},
+        extraHourPrice:0,
+        extraWaiterPrice:0,
+        customExtras:[]
+      };
+    }
+    s.partyPricing.child=s.partyPricing.child||{hours:2.5,price:0};
+    s.partyPricing.adult=s.partyPricing.adult||{hours:4,price:0};
+    if(typeof s.partyPricing.child.hours!=='number')s.partyPricing.child.hours=2.5;
+    if(typeof s.partyPricing.child.price!=='number')s.partyPricing.child.price=0;
+    if(typeof s.partyPricing.adult.hours!=='number')s.partyPricing.adult.hours=4;
+    if(typeof s.partyPricing.adult.price!=='number')s.partyPricing.adult.price=0;
+    if(typeof s.partyPricing.extraHourPrice!=='number')s.partyPricing.extraHourPrice=0;
+    if(typeof s.partyPricing.extraWaiterPrice!=='number')s.partyPricing.extraWaiterPrice=0;
+    if(!Array.isArray(s.partyPricing.customExtras))s.partyPricing.customExtras=[];
   });
 }
-fcEnsureV34();
+fcV35Ensure();
 
-function fcPricing(){fcEnsureV34();return salon().pricingConfig}
+function fcV35Pricing(){fcV35Ensure();return salon().partyPricing}
+function fcV35PartyName(type){return type==='adult'?'Fiesta de adultos':'Fiesta infantil'}
+function fcV35PartyHours(type){let p=fcV35Pricing();return Number((type==='adult'?p.adult:p.child).hours||0)}
+function fcV35PartyPrice(type){let p=fcV35Pricing();return Number((type==='adult'?p.adult:p.child).price||0)}
+function fcV35Money(n){return money(Number(n||0))}
 
-function openSalonPricingSettings(){
-  let s=salon(),p=fcPricing();
-  showModal(`<div class="modal-title"><div><h2>Configurar precios del salón</h2><p>Definí duración y precio base de cada tipo de fiesta, hora extra, mozo extra y adicionales.</p></div><button class="ghost small" onclick="closeModal()">✕</button></div>
-    <form id="fc-pricing-form">
-      <div class="card">
-        <h3>Fiestas infantiles</h3>
+function fcV35ExtraRow(x,i){
+  return `<div class="v35-extra-row">
+    <div class="field"><label>Nombre del extra</label><input value="${esc(x.name||'')}" placeholder="Ej.: Candy bar" oninput="fcV35UpdateExtra(${i},'name',this.value)"></div>
+    <div class="field"><label>Precio</label><input type="number" min="0" value="${Number(x.price||0)}" oninput="fcV35UpdateExtra(${i},'price',this.value)"></div>
+    <button type="button" class="danger small" onclick="fcV35RemoveExtra(${i})">Quitar</button>
+  </div>`;
+}
+function fcV35RenderExtras(){
+  let box=$('#v35-extra-list');if(!box)return;
+  box.innerHTML=(window.__v35Extras||[]).map((x,i)=>fcV35ExtraRow(x,i)).join('')||'<div class="empty">Todavía no cargaste extras personalizados.</div>';
+}
+function fcV35AddExtra(){window.__v35Extras=window.__v35Extras||[];window.__v35Extras.push({id:id(),name:'',price:0});fcV35RenderExtras()}
+function fcV35UpdateExtra(i,k,v){if(!window.__v35Extras?.[i])return;window.__v35Extras[i][k]=k==='price'?Number(v||0):v}
+function fcV35RemoveExtra(i){window.__v35Extras.splice(i,1);fcV35RenderExtras()}
+window.fcV35AddExtra=fcV35AddExtra;window.fcV35UpdateExtra=fcV35UpdateExtra;window.fcV35RemoveExtra=fcV35RemoveExtra;
+
+function openPartyPricingSettings(){
+  let p=fcV35Pricing();
+  window.__v35Extras=(p.customExtras||[]).map(x=>({...x}));
+  showModal(`<div class="modal-title"><div><h2>Precios y configuración de fiestas</h2><p>Esta configuración se usa automáticamente cuando creás una nueva fiesta.</p></div><button class="ghost small" onclick="closeModal()">✕</button></div>
+  <form id="v35-pricing-form">
+    <div class="v35-pricing-grid">
+      <div class="card v35-price-card">
+        <div class="v35-price-icon">🧸</div><h3>Fiesta infantil</h3>
         <div class="form-grid">
-          <div class="field"><label>Duración</label><input name="childHours" type="number" step="0.5" min="0.5" value="${Number(p.childHours||2.5)}"></div>
-          <div class="field"><label>Precio</label><input name="childPrice" type="number" min="0" value="${Number(p.childPrice||0)}"></div>
+          <div class="field"><label>Cantidad de horas</label><input name="childHours" type="number" min="0.5" step="0.5" value="${Number(p.child.hours||2.5)}" required></div>
+          <div class="field"><label>Precio de la fiesta</label><input name="childPrice" type="number" min="0" step="1" value="${Number(p.child.price||0)}" required></div>
         </div>
       </div>
-      <div class="card">
-        <h3>Fiestas de adultos</h3>
+      <div class="card v35-price-card">
+        <div class="v35-price-icon">🥂</div><h3>Fiesta de adultos</h3>
         <div class="form-grid">
-          <div class="field"><label>Duración</label><input name="adultHours" type="number" step="0.5" min="0.5" value="${Number(p.adultHours||4)}"></div>
-          <div class="field"><label>Precio</label><input name="adultPrice" type="number" min="0" value="${Number(p.adultPrice||0)}"></div>
+          <div class="field"><label>Cantidad de horas</label><input name="adultHours" type="number" min="0.5" step="0.5" value="${Number(p.adult.hours||4)}" required></div>
+          <div class="field"><label>Precio de la fiesta</label><input name="adultPrice" type="number" min="0" step="1" value="${Number(p.adult.price||0)}" required></div>
         </div>
       </div>
-      <div class="card">
-        <h3>Adicionales</h3>
-        <div class="form-grid">
-          <div class="field"><label>Precio hora extra</label><input name="extraHourPrice" type="number" min="0" value="${Number(p.extraHourPrice||0)}"></div>
-          <div class="field"><label>Precio mozo extra</label><input name="extraWaiterPrice" type="number" min="0" value="${Number(p.extraWaiterPrice||0)}"></div>
-        </div>
+    </div>
+    <div class="card">
+      <h3>Adicionales generales</h3>
+      <div class="form-grid">
+        <div class="field"><label>Precio por hora extra</label><input name="extraHourPrice" type="number" min="0" step="1" value="${Number(p.extraHourPrice||0)}"></div>
+        <div class="field"><label>Precio por mozo extra</label><input name="extraWaiterPrice" type="number" min="0" step="1" value="${Number(p.extraWaiterPrice||0)}"></div>
       </div>
-      <div class="card">
-        <div class="section-title"><div><h3>Extras personalizados</h3><small>Ej.: Inflable, Candy bar, Animación especial</small></div><button type="button" class="secondary small" onclick="fcAddCustomExtra()">+ Agregar extra</button></div>
-        <div id="fc-custom-extras">${(p.customExtras||[]).map((x,i)=>fcCustomExtraRow(x,i)).join('')||'<div class="empty">No hay extras personalizados.</div>'}</div>
-      </div>
-      <div class="form-actions"><button type="button" class="ghost" onclick="closeModal()">← Volver</button><button class="primary">Guardar precios</button></div>
-    </form>`);
-  window.__fcCustomExtras=(p.customExtras||[]).map(x=>({...x}));
-  $('#fc-pricing-form').onsubmit=e=>{
-    e.preventDefault();let f=Object.fromEntries(new FormData(e.target));
-    s.pricingConfig={
-      childHours:Number(f.childHours||2.5),
-      childPrice:Number(f.childPrice||0),
-      adultHours:Number(f.adultHours||4),
-      adultPrice:Number(f.adultPrice||0),
+    </div>
+    <div class="card">
+      <div class="section-title"><div><h3>Extras personalizados</h3><small>Podés crear todos los adicionales que necesites.</small></div><button type="button" class="secondary small" onclick="fcV35AddExtra()">+ Agregar extra</button></div>
+      <div id="v35-extra-list"></div>
+    </div>
+    <div class="v35-cleaning-note">🧹 <b>Entre una fiesta y la siguiente FiestaControl bloquea automáticamente 1 hora para limpieza.</b></div>
+    <div class="form-actions"><button type="button" class="ghost" onclick="closeModal()">← Volver</button><button class="primary">Guardar configuración</button></div>
+  </form>`);
+  fcV35RenderExtras();
+  $('#v35-pricing-form').onsubmit=e=>{
+    e.preventDefault();let f=Object.fromEntries(new FormData(e.target)),s=salon();
+    s.partyPricing={
+      child:{hours:Number(f.childHours||2.5),price:Number(f.childPrice||0)},
+      adult:{hours:Number(f.adultHours||4),price:Number(f.adultPrice||0)},
       extraHourPrice:Number(f.extraHourPrice||0),
       extraWaiterPrice:Number(f.extraWaiterPrice||0),
-      customExtras:(window.__fcCustomExtras||[]).filter(x=>x.name)
+      customExtras:(window.__v35Extras||[]).filter(x=>(x.name||'').trim()).map(x=>({...x,name:x.name.trim(),price:Number(x.price||0)}))
     };
-    save();closeModal();toast('Precios actualizados');renderSalonShell();
+    save();closeModal();toast('Configuración de fiestas guardada');renderSalonShell();
   };
 }
-window.openSalonPricingSettings=openSalonPricingSettings;
+window.openPartyPricingSettings=openPartyPricingSettings;
 
-function fcCustomExtraRow(x,i){
-  return `<div class="fc-custom-extra-row"><div class="field"><label>Nombre</label><input value="${esc(x.name||'')}" oninput="fcUpdateCustomExtra(${i},'name',this.value)"></div><div class="field"><label>Precio</label><input type="number" min="0" value="${Number(x.price||0)}" oninput="fcUpdateCustomExtra(${i},'price',this.value)"></div><button type="button" class="danger small" onclick="fcRemoveCustomExtra(${i})">Quitar</button></div>`;
-}
-function fcAddCustomExtra(){window.__fcCustomExtras=window.__fcCustomExtras||[];window.__fcCustomExtras.push({id:id(),name:'',price:0});fcRenderCustomExtras()}
-function fcUpdateCustomExtra(i,k,v){if(!window.__fcCustomExtras?.[i])return;window.__fcCustomExtras[i][k]=k==='price'?Number(v||0):v}
-function fcRemoveCustomExtra(i){window.__fcCustomExtras.splice(i,1);fcRenderCustomExtras()}
-function fcRenderCustomExtras(){let b=$('#fc-custom-extras');if(!b)return;b.innerHTML=(window.__fcCustomExtras||[]).map((x,i)=>fcCustomExtraRow(x,i)).join('')||'<div class="empty">No hay extras personalizados.</div>'}
-window.fcAddCustomExtra=fcAddCustomExtra;window.fcUpdateCustomExtra=fcUpdateCustomExtra;window.fcRemoveCustomExtra=fcRemoveCustomExtra;
+/* Perfil real mostrado en la captura: se mantiene y se agrega configuración comercial visible */
+const __v35BaseProfile=renderProfile;
+renderProfile=function(){
+  __v35BaseProfile();
+  fcV35Ensure();
+  let c=$('#content');if(!c)return;
+  c.querySelectorAll('.fc-schedule-settings-card').forEach(x=>x.remove());
+  let old=c.querySelector('.v35-party-pricing-panel');if(old)old.remove();
+  let p=fcV35Pricing();
+  let panel=document.createElement('div');panel.className='card v35-party-pricing-panel';
+  panel.innerHTML=`<div class="section-title">
+    <div><small class="eyebrow">CONFIGURACIÓN COMERCIAL</small><h3>🎉 Precios y tipos de fiestas</h3><p class="muted">Estos valores se aplican automáticamente al crear una reserva.</p></div>
+    <button class="primary" onclick="openPartyPricingSettings()">⚙️ Configurar precios</button>
+  </div>
+  <div class="v35-profile-prices">
+    <div><span>🧸</span><small>Infantil</small><b>${Number(p.child.hours||2.5)} hs</b><strong>${fcV35Money(p.child.price)}</strong></div>
+    <div><span>🥂</span><small>Adultos</small><b>${Number(p.adult.hours||4)} hs</b><strong>${fcV35Money(p.adult.price)}</strong></div>
+    <div><span>⏱️</span><small>Hora extra</small><b>por hora</b><strong>${fcV35Money(p.extraHourPrice)}</strong></div>
+    <div><span>🍽️</span><small>Mozo extra</small><b>por mozo</b><strong>${fcV35Money(p.extraWaiterPrice)}</strong></div>
+  </div>
+  <div class="v35-profile-extras"><b>Extras personalizados:</b> ${(p.customExtras||[]).length?(p.customExtras||[]).map(x=>`<span>${esc(x.name)} · ${fcV35Money(x.price)}</span>`).join(''):'<span class="muted">Ninguno cargado</span>'}</div>`;
+  c.prepend(panel);
+};
+window.renderProfile=renderProfile;
 
-function fcEventBaseDuration(type){
-  let p=fcPricing();return type==='adult'?Number(p.adultHours||4):Number(p.childHours||2.5);
+/* Reglas de disponibilidad con 1 hora de limpieza */
+function fcV35BlockingEvents(date,excludeId=''){
+  return se().filter(e=>e.date===date && e.id!==excludeId && ['Señada','Confirmada'].includes(e.status))
+    .sort((a,b)=>fcTimeToMin(a.start)-fcTimeToMin(b.start));
 }
-function fcEventBasePrice(type){
-  let p=fcPricing();return type==='adult'?Number(p.adultPrice||0):Number(p.childPrice||0);
-}
-function fcCalcEventTotalFromForm(form){
-  let p=fcPricing(),type=form.elements.eventType.value;
-  let total=fcEventBasePrice(type);
-  let extraHours=Number(form.elements.extraHours?.value||0);
-  let extraWaiters=Number(form.elements.extraWaiters?.value||0);
-  total+=extraHours*Number(p.extraHourPrice||0);
-  total+=extraWaiters*Number(p.extraWaiterPrice||0);
-  [...form.querySelectorAll('[data-custom-extra]')].forEach(ch=>{
-    if(ch.checked){
-      let item=(p.customExtras||[]).find(x=>x.id===ch.dataset.customExtra);
-      if(item)total+=Number(item.price||0);
-    }
-  });
-  return total;
-}
-function fcUpdateEventPricing(){
-  let form=$('#event-form');if(!form)return;
-  let p=fcPricing(),type=form.elements.eventType.value;
-  let baseH=fcEventBaseDuration(type),extraH=Number(form.elements.extraHours?.value||0);
-  let start=form.elements.start.value;
-  if(start)form.elements.end.value=fcMinToTime(fcTimeToMin(start)+(baseH+extraH)*60);
-  let total=fcCalcEventTotalFromForm(form);
-  if(form.elements.total)form.elements.total.value=total;
-  let s=$('#fc-price-summary');
-  if(s)s.innerHTML=`<b>${type==='adult'?'Fiesta adultos':'Fiesta infantil'}</b> · ${baseH} hs base · ${money(fcEventBasePrice(type))}${extraH?` + ${extraH} h extra`:''}`;
-}
-window.fcUpdateEventPricing=fcUpdateEventPricing;
-
-/* 1 hora obligatoria de limpieza entre fiestas */
-function fcConflictWithCleaning(date,start,end,excludeId=''){
-  let a=fcTimeToMin(start),b=fcTimeToMin(end);
-  return fcBusyEventsForDay(date,excludeId).find(e=>{
+function fcV35Conflict(date,start,end,excludeId=''){
+  if(!date||!start||!end)return null;
+  let ns=fcTimeToMin(start),ne=fcTimeToMin(end);
+  return fcV35BlockingEvents(date,excludeId).find(e=>{
     let es=fcTimeToMin(e.start),ee=fcTimeToMin(e.end);
-    return a < ee+60 && b > es-60;
+    /* Bloquea superposición + 1 hora después de la fiesta existente + 1 hora entre ambas en cualquier orden */
+    return ns < ee+60 && ne+60 > es;
+  })||null;
+}
+function fcV35End(start,hours){
+  if(!start)return '';
+  let total=fcTimeToMin(start)+Math.round(Number(hours||0)*60);
+  if(total>=1440)return '23:59';
+  return fcMinToTime(total);
+}
+function fcV35OccupiedHTML(date,excludeId=''){
+  if(!date)return '<div class="v35-select-date">Seleccioná una fecha para ver las fiestas y horarios ocupados.</div>';
+  let ev=fcV35BlockingEvents(date,excludeId);
+  if(!ev.length)return '<div class="v35-day-free">✅ Ese día no tiene fiestas señaladas o confirmadas.</div>';
+  return `<div class="v35-occupied-title">Horarios que ya tenés ocupados ese día</div><div class="v35-occupied-buttons">${ev.map(e=>{
+    let clean=fcMinToTime(Math.min(1439,fcTimeToMin(e.end)+60));
+    return `<button type="button" class="v35-occupied-btn" disabled><span>🎉 FIESTA</span><b>${esc(e.start)} a ${esc(e.end)}</b><small>🧹 Limpieza hasta ${clean}</small></button>`;
+  }).join('')}</div>`;
+}
+function fcV35PriceSummary(form){
+  let p=fcV35Pricing(),type=form.elements.eventType.value;
+  let base=fcV35PartyPrice(type);
+  let extraHours=Number(form.elements.extraHours.value||0);
+  let waiters=Number(form.elements.extraWaiters.value||0);
+  let extrasTotal=0,names=[];
+  form.querySelectorAll('[data-v35-extra]:checked').forEach(ch=>{
+    let ex=(p.customExtras||[]).find(x=>x.id===ch.dataset.v35Extra);
+    if(ex){extrasTotal+=Number(ex.price||0);names.push(ex.name)}
   });
-}
-function fcAvailabilityMessageV34(date,start,end,excludeId=''){
-  if(!date)return {ok:true,html:'Elegí una fecha para ver disponibilidad.'};
-  let c=fcConflictWithCleaning(date,start,end,excludeId);
-  if(c)return {ok:false,html:`<b>⛔ Horario no disponible.</b><br>Hay una fiesta de <b>${esc(c.start)} a ${esc(c.end)}</b> y se reserva además <b>1 hora para limpieza</b> antes/después.`};
-  return {ok:true,html:`<b>✅ Horario disponible.</b><br>Se respeta la hora de limpieza entre fiestas.`};
-}
-
-function fcDayBusyButtons(date,excludeId=''){
-  return fcBusyEventsForDay(date,excludeId).map(e=>`<button type="button" class="fc-busy-event-btn" disabled>🎉 Fiesta ${esc(e.start)} a ${esc(e.end)} · Limpieza hasta ${fcMinToTime(fcTimeToMin(e.end)+60)}</button>`).join('');
+  let total=base+(extraHours*Number(p.extraHourPrice||0))+(waiters*Number(p.extraWaiterPrice||0))+extrasTotal;
+  return {base,extraHours,waiters,extrasTotal,total,names};
 }
 
 openEventForm=function(eid){
-  let e=eid?data.events.find(x=>x.id===eid):null,p=fcPricing();
+  fcV35Ensure();
+  let e=eid?data.events.find(x=>x.id===eid):null,p=fcV35Pricing();
   let type=e?.eventType||'child';
-  let selectedCustom=(e?.selectedCustomExtras||[]);
-  showModal(`<div class="modal-title"><div><h2>${e?'Editar fiesta':'Nueva fiesta'}</h2><p>Elegí tipo de fiesta y el sistema toma automáticamente duración y precio configurados.</p></div><button class="ghost small" onclick="closeModal()">✕</button></div>
-    <form id="event-form">
-      <div class="form-grid">
-        <div class="field"><label>Tipo de fiesta</label><select name="eventType">
-          <option value="child" ${type==='child'?'selected':''}>Fiesta infantil · ${Number(p.childHours||2.5)} hs</option>
-          <option value="adult" ${type==='adult'?'selected':''}>Fiesta adultos · ${Number(p.adultHours||4)} hs</option>
-        </select></div>
-        <div class="field"><label>Fecha</label><input name="date" type="date" required value="${e?.date||''}"></div>
-
-        <div class="field"><label>Cumpleañero/a / Nombre evento</label><input name="child" required value="${esc(e?.child||'')}"></div>
-        <div class="field"><label>Cliente / responsable</label><input name="client" required value="${esc(e?.client||'')}"></div>
-
-        <div class="field"><label>Hora de inicio</label><input name="start" type="time" required value="${e?.start||''}"></div>
-        <div class="field"><label>Hora de finalización</label><input name="end" type="time" readonly value="${e?.end||''}"></div>
-
-        <div class="field"><label>Horas extra</label><input name="extraHours" type="number" min="0" step="0.5" value="${Number(e?.extraHours||0)}"></div>
-        <div class="field"><label>Mozos extra</label><input name="extraWaiters" type="number" min="0" step="1" value="${Number(e?.extraWaiters||0)}"></div>
-
-        <div class="field span2">
-          <label>Extras del salón</label>
-          <div class="fc-event-extra-list">${(p.customExtras||[]).map(x=>`<label><input type="checkbox" data-custom-extra="${x.id}" ${selectedCustom.includes(x.id)?'checked':''}> ${esc(x.name)} · ${money(x.price)}</label>`).join('')||'<span class="muted">No hay extras personalizados configurados.</span>'}</div>
+  let selectedExtras=Array.isArray(e?.pricingExtras)?e.pricingExtras:[];
+  showModal(`<div class="modal-title"><div><button type="button" class="v35-back-btn" onclick="closeModal()">← Volver</button><h2>${e?'Editar fiesta':'Nueva fiesta'}</h2><p>Elegí el tipo de fiesta y FiestaControl calcula duración, precio y disponibilidad.</p></div><button class="ghost small" onclick="closeModal()">✕</button></div>
+  <form id="event-form">
+    <div class="form-grid">
+      <div class="field span2">
+        <label>Tipo de fiesta</label>
+        <div class="v35-party-type">
+          <label><input type="radio" name="eventType" value="child" ${type==='child'?'checked':''}><span>🧸 <b>Fiesta infantil</b><small>${Number(p.child.hours||2.5)} horas · ${fcV35Money(p.child.price)}</small></span></label>
+          <label><input type="radio" name="eventType" value="adult" ${type==='adult'?'checked':''}><span>🥂 <b>Fiesta de adultos</b><small>${Number(p.adult.hours||4)} horas · ${fcV35Money(p.adult.price)}</small></span></label>
         </div>
-
-        <div class="field span2"><div id="fc-price-summary" class="fc-price-summary"></div></div>
-        <div class="field span2"><div id="fc-day-busy-summary" class="fc-day-busy-summary"></div></div>
-        <div class="field span2"><div id="fc-event-availability" class="fc-event-availability">Elegí fecha y horario.</div></div>
-
-        <div class="field"><label>Estado</label><select name="status">${['Consulta','Señada','Confirmada','Finalizada','Cancelada'].map(x=>`<option ${e?.status===x?'selected':''}>${x}</option>`).join('')}</select></div>
-        <div class="field"><label>Invitados estimados</label><input name="guests" type="number" value="${e?.guests||0}"></div>
-        <div class="field"><label>Precio total</label><input name="total" type="number" value="${e?.total||0}"></div>
-        <div class="field"><label>Ya cobrado</label><input name="paid" type="number" value="${e?.paid||0}"></div>
-        <div class="field span2"><label>Observaciones</label><textarea name="notes">${esc(e?.notes||'')}</textarea></div>
       </div>
-      <div class="form-actions"><button type="button" class="ghost" onclick="closeModal()">← Volver</button><button class="primary">Guardar fiesta</button></div>
-    </form>`);
+
+      <div class="field"><label>Cumpleañero/a / Nombre del evento</label><input name="child" required value="${esc(e?.child||'')}"></div>
+      <div class="field"><label>Edad</label><input name="age" type="number" value="${e?.age||''}"></div>
+      <div class="field"><label>Cliente / responsable</label><input name="client" required value="${esc(e?.client||'')}"></div>
+      <div class="field"><label>WhatsApp</label><input name="phone" value="${esc(e?.phone||'')}"></div>
+
+      <div class="field"><label>Fecha</label><input name="date" type="date" required value="${e?.date||''}"></div>
+      <div class="field"><label>Estado</label><select name="status">${['Consulta','Señada','Confirmada','Finalizada','Cancelada'].map(x=>`<option ${e?.status===x?'selected':''}>${x}</option>`).join('')}</select></div>
+
+      <div class="field span2"><div id="v35-day-status" class="v35-day-status">${fcV35OccupiedHTML(e?.date||'',eid||'')}</div></div>
+
+      <div class="field"><label>Hora de inicio</label><input name="start" type="time" required value="${e?.start||''}"></div>
+      <div class="field"><label>Hora de finalización</label><input name="end" type="time" readonly value="${e?.end||''}"><small id="v35-duration-label" class="muted"></small></div>
+
+      <div class="field"><label>Horas extra</label><select name="extraHours">
+        ${[0,0.5,1,1.5,2,2.5,3].map(v=>`<option value="${v}" ${Number(e?.extraHours||0)===v?'selected':''}>${v===0?'Sin hora extra':`+ ${v} hora${v===1?'':'s'}`}</option>`).join('')}
+      </select><small>${fcV35Money(p.extraHourPrice)} por hora</small></div>
+
+      <div class="field"><label>Mozos extra</label><input name="extraWaiters" type="number" min="0" step="1" value="${Number(e?.extraWaiters||0)}"><small>${fcV35Money(p.extraWaiterPrice)} por mozo</small></div>
+
+      <div class="field span2">
+        <label>Extras adicionales</label>
+        <div class="v35-event-extras">${(p.customExtras||[]).map(ex=>`<label><input type="checkbox" data-v35-extra="${ex.id}" ${selectedExtras.includes(ex.id)?'checked':''}><span>${esc(ex.name)}</span><b>${fcV35Money(ex.price)}</b></label>`).join('')||'<div class="muted">No hay extras personalizados configurados.</div>'}</div>
+      </div>
+
+      <div class="field span2">
+        <label class="v35-special-check"><input type="checkbox" name="specialTime" ${e?.specialTime?'checked':''}> Horario especial solicitado por el cliente</label>
+        <small class="muted">Al activarlo podés modificar manualmente la hora de finalización. Igual se controla que no se pise con otra fiesta ni con la hora de limpieza.</small>
+      </div>
+
+      <div class="field span2"><div id="fc-event-availability" class="fc-event-availability">Seleccioná fecha y horario.</div></div>
+
+      <div class="field span2"><div id="v35-price-box" class="v35-price-box"></div></div>
+      <div class="field"><label>Precio total</label><input name="total" type="number" readonly value="${Number(e?.total||0)}"></div>
+      <div class="field"><label>Ya cobrado</label><input name="paid" type="number" value="${Number(e?.paid||0)}"></div>
+      <div class="field"><label>Invitados estimados</label><input name="guests" type="number" value="${Number(e?.guests||0)}"></div>
+      <div class="field span2"><label>Observaciones</label><textarea name="notes">${esc(e?.notes||'')}</textarea></div>
+    </div>
+    <div class="form-actions"><button type="button" class="ghost" onclick="closeModal()">← Volver</button><button class="primary">Guardar fiesta</button></div>
+  </form>`);
 
   let form=$('#event-form');
   function refresh(){
-    fcUpdateEventPricing();
+    let type=form.elements.eventType.value;
+    let duration=fcV35PartyHours(type)+Number(form.elements.extraHours.value||0);
+    let special=form.elements.specialTime.checked;
+    form.elements.end.readOnly=!special;
+    if(!special && form.elements.start.value)form.elements.end.value=fcV35End(form.elements.start.value,duration);
+    $('#v35-duration-label').textContent=`Duración base: ${fcV35PartyHours(type)} hs${Number(form.elements.extraHours.value||0)?` + ${form.elements.extraHours.value} hs extra`:''}`;
+
+    let pr=fcV35PriceSummary(form);
+    form.elements.total.value=pr.total;
+    $('#v35-price-box').innerHTML=`<div><small>Precio base</small><b>${fcV35Money(pr.base)}</b></div><div><small>Horas extra</small><b>${fcV35Money(pr.extraHours*Number(p.extraHourPrice||0))}</b></div><div><small>Mozos extra</small><b>${fcV35Money(pr.waiters*Number(p.extraWaiterPrice||0))}</b></div><div><small>Otros extras</small><b>${fcV35Money(pr.extrasTotal)}</b></div><div class="total"><small>TOTAL</small><strong>${fcV35Money(pr.total)}</strong></div>`;
+
     let d=form.elements.date.value,st=form.elements.start.value,en=form.elements.end.value;
-    let bs=$('#fc-day-busy-summary');
-    if(bs)bs.innerHTML=d?(`<b>Fiestas ya cargadas ese día</b>${fcDayBusyButtons(d,eid||'')||'<span class="muted">No hay fiestas confirmadas o señaladas.</span>'}`):'';
+    $('#v35-day-status').innerHTML=fcV35OccupiedHTML(d,eid||'');
     let box=$('#fc-event-availability');
-    if(d&&st&&en){
-      let m=fcAvailabilityMessageV34(d,st,en,eid||'');
-      box.className=`fc-event-availability ${m.ok?'ok':'bad'}`;box.innerHTML=m.html;
+    if(!d){box.className='fc-event-availability';box.innerHTML='Seleccioná una fecha para ver disponibilidad.';return}
+    if(!st||!en){box.className='fc-event-availability';box.innerHTML='Elegí una hora de inicio.';return}
+    if(fcTimeToMin(en)<=fcTimeToMin(st)){box.className='fc-event-availability bad';box.innerHTML='<b>⛔ El horario final debe ser posterior al horario de inicio.</b>';return}
+    let con=fcV35Conflict(d,st,en,eid||'');
+    if(con){
+      let clean=fcMinToTime(Math.min(1439,fcTimeToMin(con.end)+60));
+      box.className='fc-event-availability bad';
+      box.innerHTML=`<b>⛔ HORARIO NO DISPONIBLE</b><br>Ya existe una fiesta de <b>${esc(con.start)} a ${esc(con.end)}</b>. Después queda reservado para limpieza hasta las <b>${clean}</b>.`;
+    }else{
+      box.className='fc-event-availability ok';
+      box.innerHTML=`<b>✅ HORARIO DISPONIBLE</b><br>${st} a ${en} · queda contemplada 1 hora entre fiestas para limpieza.`;
     }
   }
-  ['eventType','date','start','extraHours','extraWaiters'].forEach(n=>form.elements[n]?.addEventListener('change',refresh));
+
+  form.querySelectorAll('input[name="eventType"]').forEach(x=>x.addEventListener('change',refresh));
+  ['date','start','extraHours','extraWaiters','specialTime'].forEach(n=>form.elements[n]?.addEventListener('change',refresh));
   form.elements.start.addEventListener('input',refresh);
-  form.querySelectorAll('[data-custom-extra]').forEach(x=>x.addEventListener('change',refresh));
+  form.elements.end.addEventListener('input',refresh);
+  form.querySelectorAll('[data-v35-extra]').forEach(x=>x.addEventListener('change',refresh));
   refresh();
 
-  form.onsubmit=async x=>{
-    x.preventDefault();let f=Object.fromEntries(new FormData(x.target));
-    let baseH=fcEventBaseDuration(f.eventType),extraH=Number(f.extraHours||0);
-    f.end=fcMinToTime(fcTimeToMin(f.start)+(baseH+extraH)*60);
-    let conflict=fcConflictWithCleaning(f.date,f.start,f.end,eid||'');
-    if(conflict){
-      return showModal(`<div class="booking-conflict-modal"><div class="big-emoji">⛔</div><h2>No se puede reservar ese horario</h2><p>Hay una fiesta de <b>${esc(conflict.start)} a ${esc(conflict.end)}</b>. FiestaControl deja <b>1 hora libre para limpieza</b> entre una fiesta y la siguiente.</p><div class="form-actions"><button class="primary" onclick="closeModal();openEventForm('${eid||''}')">Elegir otro horario</button></div></div>`);
-    }
-    f.selectedCustomExtras=[...x.target.querySelectorAll('[data-custom-extra]:checked')].map(ch=>ch.dataset.customExtra);
-    f.durationHours=baseH+extraH;
-    f.extraHours=extraH;
+  form.onsubmit=async ev=>{
+    ev.preventDefault();
+    let f=Object.fromEntries(new FormData(form)),type=form.elements.eventType.value;
+    f.eventType=type;
+    f.specialTime=form.elements.specialTime.checked;
+    f.extraHours=Number(f.extraHours||0);
     f.extraWaiters=Number(f.extraWaiters||0);
-    f.total=fcCalcEventTotalFromForm(x.target);
-    ['guests','paid','total','durationHours'].forEach(k=>f[k]=Number(f[k]||0));
-    let payload={...f,id:eid||id(),salonId:session.salonId,rsvps:e?.rsvps||[],extras:e?.extras||[],payments:e?.payments||[]};
+    f.durationHours=(fcTimeToMin(f.end)-fcTimeToMin(f.start))/60;
+    f.pricingExtras=[...form.querySelectorAll('[data-v35-extra]:checked')].map(x=>x.dataset.v35Extra);
+    let pr=fcV35PriceSummary(form);f.total=Number(pr.total||0);
+    f.age=Number(f.age||0);f.guests=Number(f.guests||0);f.paid=Number(f.paid||0);
 
+    let conflict=fcV35Conflict(f.date,f.start,f.end,eid||'');
+    if(conflict){
+      let clean=fcMinToTime(Math.min(1439,fcTimeToMin(conflict.end)+60));
+      return showModal(`<div class="booking-conflict-modal"><div class="big-emoji">⛔</div><h2>No se puede crear esta fiesta</h2><p>Ya tenés una fiesta de <b>${esc(conflict.start)} a ${esc(conflict.end)}</b> y la hora de limpieza llega hasta las <b>${clean}</b>.</p><p>Elegí otro horario.</p><div class="form-actions"><button class="primary" onclick="closeModal();openEventForm('${eid||''}')">Volver a elegir horario</button></div></div>`);
+    }
+
+    let payload={...f,id:eid||id(),salonId:session.salonId,rsvps:e?.rsvps||[],extras:e?.extras||[],payments:e?.payments||[]};
     if(SERVER_MODE){
       try{
         let r=await fetch('/api/reservation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:eid?'update':'create',data:payload}),cache:'no-store'});
-        let res=await r.json();if(!r.ok||!res.ok)return toast(res.error||'No se pudo guardar la fiesta');
-        data=res.state;if(typeof normalizeLiveData==='function')normalizeLiveData();
+        let res=await r.json();
+        if(!r.ok||!res.ok)return toast(res.error||'No se pudo guardar la fiesta');
+        data=res.state;if(typeof normalizeLiveData==='function')normalizeLiveData();fcV35Ensure();
       }catch(err){return toast('No se pudo conectar con el servidor')}
     }else{
       if(e)Object.assign(e,payload);else data.events.push(payload);save();
@@ -2738,28 +2814,3 @@ openEventForm=function(eid){
   };
 };
 window.openEventForm=openEventForm;
-
-/* Agenda: muestra claramente horario ocupado dentro del día */
-const _v34RenderCalendar=renderCalendar;
-renderCalendar=function(){
-  _v34RenderCalendar();
-  document.querySelectorAll('.day').forEach(day=>{
-    let chips=[...day.querySelectorAll('.event-chip')];
-    chips.forEach(ch=>{
-      if(!ch.classList.contains('fc-v34-time-chip'))ch.classList.add('fc-v34-time-chip');
-    });
-  });
-};
-window.renderCalendar=renderCalendar;
-
-/* Mi salón: botón de precios */
-const _v34Profile=renderProfile;
-renderProfile=function(){
-  _v34Profile();
-  let c=$('#content');if(c&&!c.querySelector('.fc-pricing-settings-card')){
-    let p=fcPricing(),d=document.createElement('div');d.className='card fc-pricing-settings-card';
-    d.innerHTML=`<div class="section-title"><div><h3>💵 Precios y duración de fiestas</h3><small>Infantil ${Number(p.childHours||2.5)} hs · Adultos ${Number(p.adultHours||4)} hs · Hora extra ${money(p.extraHourPrice||0)}</small></div><button class="secondary" onclick="openSalonPricingSettings()">Configurar precios</button></div>`;
-    c.prepend(d);
-  }
-};
-window.renderProfile=renderProfile;
