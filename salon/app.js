@@ -833,28 +833,73 @@ function fcCalendarControls(cursor, prefix){
 
 function renderCalendar(){
   setTitle('Agenda','Consultá reservas y disponibilidad de cualquier mes');
-  const year=fcCalendarCursor.getFullYear(), month=fcCalendarCursor.getMonth();
-  const first=new Date(year,month,1).getDay(), days=new Date(year,month+1,0).getDate(), cells=[];
-  for(let i=0;i<first;i++) cells.push('<div class="day off"></div>');
-  for(let n=1;n<=days;n++){
-    const ds=fcDateKey(year,month,n), ev=se().filter(e=>e.date===ds);
-    cells.push(`<div class="day ${ev.length?'has-events':''}">
-      <div class="day-number">${n}</div>
-      ${ev.map(e=>`<button class="event-chip" onclick="openEvent('${e.id}')">${esc(e.start||'')} · ${esc(e.child||e.client||'Reserva')}</button>`).join('')}
-      ${!ev.length?`<button class="fc-free-day" onclick="openEventFormWithDate('${ds}')" title="Crear reserva">Disponible</button>`:''}
-    </div>`);
-  }
-  $('#content').innerHTML=`<div class="card">
-    <div class="calendar-head fc-calendar-head">
-      <div><h3>${FC_MONTHS[month]} ${year}</h3><small class="muted">Podés avanzar o retroceder tantos meses como necesites.</small></div>
-      <div><span class="pill confirmada">Reservado</span> <span class="pill consulta">Disponible</span></div>
-    </div>
-    ${fcCalendarControls(fcCalendarCursor,'fcAgenda')}
-    <div class="calendar">${['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'].map(x=>`<div class="weekday">${x}</div>`).join('')}${cells.join('')}</div>
-  </div>`;
-}
-window.renderCalendar=renderCalendar;
+  const year = fcCalendarCursor.getFullYear(), month = fcCalendarCursor.getMonth();
+  const first = new Date(year, month, 1).getDay(), days = new Date(year, month + 1, 0).getDate(), cells = [];
+  
+  for(let i = 0; i < first; i++) cells.push('<div class="day off"></div>');
 
+  for(let n = 1; n <= days; n++){
+    const ds = fcDateKey(year, month, n);
+    // Trae las fiestas confirmadas o señadas de este día
+    const ev = se().filter(e => e.date === ds && ['Señada','Confirmada','Consulta'].includes(e.status))
+                   .sort((a,b) => fcTimeToMin(a.start) - fcTimeToMin(b.start));
+
+    // Determinamos el estado del día según cantidad de eventos
+    let dayClass = 'day-libre';
+    let badgeText = 'Libre';
+
+    if(ev.length >= 2){
+      dayClass = 'day-completo';
+      badgeText = 'Ocupado';
+    } else if(ev.length === 1){
+      dayClass = 'day-parcial';
+      badgeText = '1 Turno';
+    }
+
+    cells.push(`
+      <div class="day fc-day-cell ${dayClass}">
+        <div class="day-top">
+          <span class="day-number">${n}</span>
+          <span class="day-status-pill ${dayClass}">${badgeText}</span>
+        </div>
+        
+        <div class="day-events-list">
+          ${ev.map(e => `
+            <button type="button" class="event-chip status-${(e.status||'').toLowerCase()}" onclick="openEvent('${e.id}')" title="${esc(e.child)} (${e.start} a ${e.end})">
+              <b>${e.start}</b> ${esc(e.child || e.client || 'Reserva')}
+            </button>
+          `).join('')}
+        </div>
+
+        <button type="button" class="fc-quick-add-btn" onclick="openEventFormWithDate('${ds}')">
+          + Reservar
+        </button>
+      </div>
+    `);
+  }
+
+  $('#content').innerHTML = `
+    <div class="card">
+      <div class="calendar-head fc-calendar-head">
+        <div>
+          <h3>${FC_MONTHS[month]} ${year}</h3>
+          <small class="muted">Verde: disponible · Naranja: turnos ocupados · Rojo: día completo</small>
+        </div>
+        <div class="calendar-legend">
+          <span class="leg-item leg-free">Libre</span>
+          <span class="leg-item leg-partial">Parcial</span>
+          <span class="leg-item leg-full">Ocupado</span>
+        </div>
+      </div>
+      ${fcCalendarControls(fcCalendarCursor, 'fcAgenda')}
+      <div class="calendar calendar-grid-v2">
+        ${['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'].map(x => `<div class="weekday">${x}</div>`).join('')}
+        ${cells.join('')}
+      </div>
+    </div>
+  `;
+}
+window.renderCalendar = renderCalendar;
 function fcAgendaMoveMonth(delta){fcCalendarCursor=new Date(fcCalendarCursor.getFullYear(),fcCalendarCursor.getMonth()+Number(delta),1);renderCalendar()}
 function fcAgendaSelectMonth(v){fcCalendarCursor=new Date(fcCalendarCursor.getFullYear(),Number(v),1);renderCalendar()}
 function fcAgendaSelectYear(v){fcCalendarCursor=new Date(Number(v),fcCalendarCursor.getMonth(),1);renderCalendar()}
