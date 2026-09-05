@@ -2426,3 +2426,366 @@
   }, 1000);
 
 })();
+
+
+// ============================================================
+// V11 - DASHBOARD FINANCIERO POR MEDIO DE PAGO + PROVEEDORES
+// ============================================================
+(function () {
+  'use strict';
+
+  data.movements = data.movements || [];
+  data.orders = data.orders || [];
+
+  function v11SalonMovements() {
+    return (data.movements || []).filter(m => m.salonId === session?.salonId);
+  }
+
+  function v11MoneyByMethod(rows) {
+    const out = {
+      Efectivo:0,
+      Transferencia:0,
+      'Mercado Pago':0,
+      Tarjeta:0,
+      Otro:0
+    };
+
+    rows.forEach(m => {
+      const method = String(m.method || 'Otro').trim();
+      if (Object.prototype.hasOwnProperty.call(out, method)) out[method] += Number(m.amount || 0);
+      else out.Otro += Number(m.amount || 0);
+    });
+
+    return out;
+  }
+
+  function v11IncomeRows() {
+    return v11SalonMovements().filter(m => m.type === 'Cobro');
+  }
+
+  function v11SupplierExpenseRows() {
+    return v11SalonMovements().filter(m =>
+      m.type === 'Gasto' && m.category === 'Proveedor'
+    );
+  }
+
+  function v11MethodCards(methods, titlePrefix='') {
+    return `
+      <div class="grid stats" style="grid-template-columns:repeat(5,1fr);margin-top:16px">
+        <div class="card stat">
+          <small>${titlePrefix}Efectivo</small>
+          <strong>${money(methods['Efectivo'] || 0)}</strong>
+        </div>
+        <div class="card stat">
+          <small>${titlePrefix}Transferencia</small>
+          <strong>${money(methods['Transferencia'] || 0)}</strong>
+        </div>
+        <div class="card stat">
+          <small>${titlePrefix}Mercado Pago</small>
+          <strong>${money(methods['Mercado Pago'] || 0)}</strong>
+        </div>
+        <div class="card stat">
+          <small>${titlePrefix}Tarjeta</small>
+          <strong>${money(methods['Tarjeta'] || 0)}</strong>
+        </div>
+        <div class="card stat">
+          <small>${titlePrefix}Otro</small>
+          <strong>${money(methods['Otro'] || 0)}</strong>
+        </div>
+      </div>
+    `;
+  }
+
+  // ----------------------------------------------------------
+  // FINANZAS - DASHBOARD INGRESOS POR MEDIO DE PAGO
+  // ----------------------------------------------------------
+  const prevRenderFinanceV11 = renderFinance;
+
+  renderFinance = function () {
+    prevRenderFinanceV11();
+
+    const content = document.querySelector('#content');
+    if (!content || document.querySelector('#v11-finance-dashboard')) return;
+
+    const income = v11IncomeRows();
+    const methods = v11MoneyByMethod(income);
+    const totalIncome = income.reduce((s,m) => s + Number(m.amount || 0), 0);
+
+    const dashboard = document.createElement('div');
+    dashboard.id = 'v11-finance-dashboard';
+    dashboard.innerHTML = `
+      <div class="card" style="margin-bottom:16px">
+        <div class="section-title">
+          <div>
+            <h3>📊 Dashboard de ingresos</h3>
+            <small class="muted">Cómo ingresó el dinero al salón.</small>
+          </div>
+          <div style="text-align:right">
+            <small class="muted">TOTAL INGRESADO</small>
+            <strong style="display:block;font-size:24px">${money(totalIncome)}</strong>
+          </div>
+        </div>
+
+        ${v11MethodCards(methods)}
+
+        <div class="card" style="margin-top:16px;padding:14px">
+          <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;text-align:center">
+            ${Object.entries(methods).map(([method, amount]) => {
+              const pct = totalIncome ? Math.round((amount / totalIncome) * 100) : 0;
+              return `
+                <div>
+                  <b>${esc(method)}</b>
+                  <small style="display:block">${pct}% del total</small>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        </div>
+      </div>
+    `;
+
+    content.prepend(dashboard);
+  };
+
+  // ----------------------------------------------------------
+  // PROVEEDORES - PAGO A PROVEEDOR CON MEDIO DE PAGO
+  // ----------------------------------------------------------
+  window.v11PaySupplierOrder = function (orderId) {
+    const order = (data.orders || []).find(o => o.id === orderId);
+    if (!order) return;
+
+    const provider = (data.suppliers || []).find(p => p.id === order.supplierId);
+    const event = (data.events || []).find(e => e.id === order.eventId);
+    const amount = Number(order.amount || 0);
+
+    showModal(`
+      <div class="modal-title">
+        <div>
+          <h2>Registrar pago a proveedor</h2>
+          <p>${esc(provider?.name || 'Proveedor')} · ${event ? esc(event.child || '') : ''}</p>
+        </div>
+        <button class="ghost small" onclick="closeModal()">✕</button>
+      </div>
+
+      <form id="v11-provider-payment-form">
+        <div class="form-grid">
+          <div class="field">
+            <label>Importe</label>
+            <input name="amount" type="number" min="1" value="${amount}" required>
+          </div>
+
+          <div class="field">
+            <label>Medio de pago</label>
+            <select name="method">
+              <option>Efectivo</option>
+              <option>Transferencia</option>
+              <option>Mercado Pago</option>
+              <option>Tarjeta</option>
+              <option>Otro</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label>Fecha</label>
+            <input name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required>
+          </div>
+
+          <div class="field">
+            <label>Referencia</label>
+            <input name="reference" placeholder="Opcional">
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+          <button class="primary">Registrar pago</button>
+        </div>
+      </form>
+    `);
+
+    document.querySelector('#v11-provider-payment-form').onsubmit = ev => {
+      ev.preventDefault();
+      const f = Object.fromEntries(new FormData(ev.target));
+      const paidAmount = Number(f.amount || 0);
+
+      if (paidAmount <= 0) return toast('Ingresá un importe válido');
+
+      order.status = 'Pagado';
+      order.paidAt = new Date().toISOString();
+      order.paymentMethod = f.method;
+      order.paymentReference = f.reference || '';
+      order.paidAmount = paidAmount;
+
+      if (provider) {
+        provider.balance = Math.max(0, Number(provider.balance || 0) - paidAmount);
+      }
+
+      // Reemplaza movimiento anterior de pago de esta orden para no duplicar.
+      data.movements = (data.movements || []).filter(m =>
+        m.sourceKey !== `supplier-payment:${order.id}`
+      );
+
+      data.movements.push({
+        id:id(),
+        salonId:session.salonId,
+        eventId:order.eventId || '',
+        supplierId:order.supplierId || '',
+        orderId:order.id,
+        sourceKey:`supplier-payment:${order.id}`,
+        type:'Gasto',
+        category:'Proveedor',
+        concept:`Pago a ${provider?.name || 'Proveedor'}${order.detail ? ' · ' + order.detail : ''}`,
+        amount:paidAmount,
+        movementDate:f.date,
+        method:f.method,
+        reference:f.reference || '',
+        status:'Pagado',
+        createdAt:new Date().toISOString()
+      });
+
+      save();
+      closeModal();
+      toast('Pago al proveedor registrado');
+      renderSalonShell();
+    };
+  };
+
+  // ----------------------------------------------------------
+  // PROVEEDORES - DASHBOARD + LISTADO
+  // ----------------------------------------------------------
+  renderSuppliers = function () {
+    setTitle('Proveedores','Pedidos, pagos, costos y medios de pago');
+
+    const providers = typeof sp === 'function' ? sp() : [];
+    const orders = typeof so === 'function' ? so() : [];
+
+    const supplierPayments = v11SupplierExpenseRows();
+    const methods = v11MoneyByMethod(supplierPayments);
+    const totalPaid = supplierPayments.reduce((s,m) => s + Number(m.amount || 0), 0);
+    const totalOrdered = orders.reduce((s,o) => s + Number(o.amount || 0), 0);
+    const totalPending = Math.max(0, totalOrdered - totalPaid);
+
+    $('#content').innerHTML = `
+      <div class="card">
+        <div class="section-title">
+          <div>
+            <h3>📊 Dashboard de proveedores</h3>
+            <small class="muted">Pagos realizados y compromisos del salón.</small>
+          </div>
+        </div>
+
+        <div class="grid stats">
+          <div class="card stat">
+            <small>Total pedidos</small>
+            <strong>${money(totalOrdered)}</strong>
+          </div>
+          <div class="card stat">
+            <small>Total pagado</small>
+            <strong class="good">${money(totalPaid)}</strong>
+          </div>
+          <div class="card stat">
+            <small>Pendiente</small>
+            <strong class="${totalPending ? 'bad' : 'good'}">${money(totalPending)}</strong>
+          </div>
+        </div>
+
+        ${v11MethodCards(methods, 'Pagado por ')}
+      </div>
+
+      <div class="toolbar" style="margin-top:16px">
+        <button class="primary" onclick="openSupplierForm()">+ Nuevo proveedor</button>
+        <button class="secondary" onclick="openOrderForm()">+ Nuevo pedido</button>
+      </div>
+
+      <div class="grid two">
+        <div class="card">
+          <div class="section-title"><h3>Proveedores</h3></div>
+          <div class="list">
+            ${providers.map(p => `
+              <div class="list-item">
+                <div>
+                  <strong>${esc(p.name)}</strong>
+                  <small>${esc(p.category || '')}</small>
+                </div>
+                <div style="text-align:right">
+                  <b class="${Number(p.balance || 0) ? 'bad' : 'good'}">${money(p.balance || 0)}</b>
+                  <small>${Number(p.balance || 0) ? 'Adeudado' : 'Al día'}</small>
+                </div>
+              </div>
+            `).join('') || '<div class="empty">Sin proveedores cargados.</div>'}
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="section-title"><h3>Pedidos</h3></div>
+          <div class="list">
+            ${orders.map(o => {
+              const p = (data.suppliers || []).find(x => x.id === o.supplierId);
+              const e = (data.events || []).find(x => x.id === o.eventId);
+              return `
+                <div class="list-item">
+                  <div>
+                    <strong>${esc(p?.name || 'Proveedor')}</strong>
+                    <small>${esc(e?.child || '')} · ${esc(o.status || 'Pendiente')} · ${money(o.amount || 0)}</small>
+                  </div>
+                  <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+                    ${o.status === 'Pagado'
+                      ? `<span class="pill aprobado">${esc(o.paymentMethod || 'Pagado')}</span>`
+                      : `<button class="primary small" onclick="v11PaySupplierOrder('${esc(o.id)}')">Registrar pago</button>`
+                    }
+                    <button class="secondary small" onclick="sendOrderWhatsApp('${esc(o.id)}')">WhatsApp</button>
+                  </div>
+                </div>
+              `;
+            }).join('') || '<div class="empty">Sin pedidos.</div>'}
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="section-title">
+          <div>
+            <h3>Historial de pagos a proveedores</h3>
+            <small class="muted">Detalle de cómo se pagó cada proveedor.</small>
+          </div>
+        </div>
+
+        ${
+          supplierPayments.length
+            ? `<div class="table-wrap">
+                <table class="table">
+                  <thead>
+                    <tr>
+                      <th>Fecha</th>
+                      <th>Proveedor</th>
+                      <th>Fiesta</th>
+                      <th>Medio</th>
+                      <th>Importe</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${supplierPayments
+                      .sort((a,b) => String(b.movementDate || '').localeCompare(String(a.movementDate || '')))
+                      .map(m => {
+                        const p = (data.suppliers || []).find(x => x.id === m.supplierId);
+                        const e = (data.events || []).find(x => x.id === m.eventId);
+                        return `
+                          <tr>
+                            <td>${esc(m.movementDate || '-')}</td>
+                            <td>${esc(p?.name || '-')}</td>
+                            <td>${esc(e?.child || '-')}</td>
+                            <td>${esc(m.method || '-')}</td>
+                            <td><b>${money(m.amount || 0)}</b></td>
+                          </tr>
+                        `;
+                      }).join('')}
+                  </tbody>
+                </table>
+              </div>`
+            : '<div class="empty">Todavía no hay pagos a proveedores registrados.</div>'
+        }
+      </div>
+    `;
+  };
+
+})();
