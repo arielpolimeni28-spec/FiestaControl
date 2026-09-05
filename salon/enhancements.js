@@ -1717,3 +1717,342 @@
   }, 400);
 
 })();
+
+
+// ============================================================
+// V9 - FIX DEFINITIVO DE MOVIMIENTOS DERIVADOS
+// Personal y adicionales se muestran aunque el registro persistido
+// todavía no se haya creado, y además se sincronizan al servidor.
+// ============================================================
+(function () {
+  'use strict';
+
+  data.movements = data.movements || [];
+
+  function fcV9SalonEvents() {
+    return (data.events || []).filter(e => e.salonId === session?.salonId);
+  }
+
+  function fcV9StaffRows(eventId) {
+    return (data.assignments || [])
+      .filter(a => a.eventId === eventId)
+      .map(a => {
+        const p = (data.staff || []).find(s => s.id === a.staffId);
+        if (!p) return null;
+        const e = (data.events || []).find(x => x.id === eventId);
+        return {
+          id:`derived-staff-${eventId}-${a.staffId}`,
+          salonId:session?.salonId,
+          eventId,
+          sourceKey:`staff:${eventId}:${a.staffId}`,
+          type:'Gasto',
+          category:'Personal',
+          concept:`${p.role || 'Personal'} · ${p.name}`,
+          amount:Number(a.amount ?? p.defaultFee ?? 0),
+          movementDate:e?.date || '',
+          status:a.paid ? 'Pagado' : 'Pendiente',
+          method:'',
+          derived:true
+        };
+      })
+      .filter(Boolean);
+  }
+
+  function fcV9ExtraRows(eventId) {
+    const e = (data.events || []).find(x => x.id === eventId);
+    if (!e) return [];
+    return (e.extras || []).map(x => ({
+      id:`derived-extra-${eventId}-${x.id}`,
+      salonId:session?.salonId,
+      eventId,
+      sourceKey:`extra:${eventId}:${x.id}`,
+      type:'Cargo',
+      category:'Adicional',
+      concept:x.name || 'Adicional',
+      amount:Number(x.amount || 0),
+      movementDate:e.date || '',
+      status:'Incluido en reserva',
+      method:'',
+      derived:true
+    }));
+  }
+
+  function fcV9StoredRows(eventId=null) {
+    return (data.movements || []).filter(m =>
+      m.salonId === session?.salonId &&
+      (eventId ? m.eventId === eventId : true)
+    );
+  }
+
+  function fcV9AllRows(eventId=null) {
+    const stored = fcV9StoredRows(eventId);
+    const events = eventId
+      ? (data.events || []).filter(e => e.id === eventId && e.salonId === session?.salonId)
+      : fcV9SalonEvents();
+
+    const derived = [];
+    events.forEach(e => {
+      derived.push(...fcV9StaffRows(e.id));
+      derived.push(...fcV9ExtraRows(e.id));
+    });
+
+    // Si ya existe persistido con el mismo sourceKey, no duplica.
+    const storedKeys = new Set(stored.map(m => m.sourceKey).filter(Boolean));
+    return [
+      ...stored,
+      ...derived.filter(m => !storedKeys.has(m.sourceKey))
+    ];
+  }
+
+  function fcV9PersistDerivedForEvent(eventId) {
+    data.movements = data.movements || [];
+    const derived = [...fcV9StaffRows(eventId), ...fcV9ExtraRows(eventId)];
+    const wantedKeys = new Set(derived.map(x => x.sourceKey));
+
+    // Limpia movimientos automáticos que ya no correspondan.
+    data.movements = data.movements.filter(m => {
+      if (m.eventId !== eventId) return true;
+      if (!m.sourceKey) return true;
+      if (!m.sourceKey.startsWith(`staff:${eventId}:`) &&
+          !m.sourceKey.startsWith(`extra:${eventId}:`)) return true;
+      return wantedKeys.has(m.sourceKey);
+    });
+
+    derived.forEach(d => {
+      const old = data.movements.find(m =>
+        m.salonId === session?.salonId && m.sourceKey === d.sourceKey
+      );
+
+      if (old) {
+        Object.assign(old, {
+          type:d.type,
+          category:d.category,
+          concept:d.concept,
+          amount:d.amount,
+          movementDate:d.movementDate,
+          status:d.status,
+          method:d.method || '',
+          updatedAt:new Date().toISOString()
+        });
+      } else {
+        data.movements.push({
+          ...d,
+          id:id(),
+          derived:false,
+          createdAt:new Date().toISOString()
+        });
+      }
+    });
+  }
+
+  function fcV9PersistAll() {
+    fcV9SalonEvents().forEach(e => fcV9PersistDerivedForEvent(e.id));
+    save();
+  }
+
+  // Re-sincroniza automáticamente al cargar.
+  setTimeout(() => {
+    try {
+      if (session?.role === 'salon') fcV9PersistAll();
+    } catch (err) {
+      console.error('V9 sync movements', err);
+    }
+  }, 800);
+
+  // Re-sincroniza después de guardar una reserva.
+  const prevEventFormV9 = window.openEventForm;
+  window.openEventForm = function (eid) {
+    const before = new Set((data.events || []).map(e => e.id));
+    prevEventFormV9(eid);
+
+    const form = document.querySelector('#event-form');
+    if (!form) return;
+
+    const oldSubmit = form.onsubmit;
+    form.onsubmit = function (ev) {
+      const r = oldSubmit ? oldSubmit.call(form, ev) : undefined;
+
+      // Los wrappers anteriores actualizan personal/extras con setTimeout.
+      // Esperamos y sincronizamos dos veces para evitar carreras.
+      [150, 500].forEach(delay => {
+        setTimeout(() => {
+          let target = eid ? (data.events || []).find(e => e.id === eid) : null;
+          if (!target) {
+            target = (data.events || []).find(e =>
+              e.salonId === session?.salonId && !before.has(e.id)
+            );
+          }
+          if (!target) return;
+          fcV9PersistDerivedForEvent(target.id);
+          save();
+        }, delay);
+      });
+
+      return r;
+    };
+  };
+
+  // Detalle de fiesta: tabla V9 independiente y garantizada.
+  const prevOpenEventV9 = window.openEvent;
+  window.openEvent = function (eid) {
+    fcV9PersistDerivedForEvent(eid);
+    prevOpenEventV9(eid);
+
+    const modal = document.querySelector('#modal-body');
+    if (!modal) return;
+
+    // Quita tabla de movimientos anterior si existe para evitar confusión/duplicado.
+    modal.querySelectorAll('[data-fc-movements]').forEach(x => x.remove());
+    modal.querySelectorAll('[data-fc-v9-movements]').forEach(x => x.remove());
+
+    const rows = fcV9AllRows(eid).sort((a,b) =>
+      String(b.createdAt || b.movementDate || '').localeCompare(
+        String(a.createdAt || a.movementDate || '')
+      )
+    );
+
+    const box = document.createElement('div');
+    box.className = 'card';
+    box.style.marginTop = '16px';
+    box.setAttribute('data-fc-v9-movements','1');
+    box.innerHTML = `
+      <div class="section-title">
+        <div>
+          <h3>💰 Movimientos de la fiesta</h3>
+          <small class="muted">Cobros, gastos de personal y adicionales de esta reserva.</small>
+        </div>
+      </div>
+      ${
+        rows.length
+          ? `<div class="table-wrap">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>Tipo</th>
+                    <th>Concepto</th>
+                    <th>Estado</th>
+                    <th>Importe</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${rows.map(m => `
+                    <tr>
+                      <td>
+                        <span class="pill ${m.type === 'Gasto' ? 'suspendido' : m.type === 'Cobro' ? 'aprobado' : 'pendiente'}">
+                          ${esc(m.type)}
+                        </span>
+                      </td>
+                      <td>
+                        <b>${esc(m.concept || '-')}</b>
+                        <small style="display:block">${esc(m.category || '')}</small>
+                      </td>
+                      <td>${esc(m.status || '-')}</td>
+                      <td><b>${money(m.amount || 0)}</b></td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>`
+          : `<div class="empty">Todavía no hay movimientos para esta fiesta.</div>`
+      }
+    `;
+    modal.appendChild(box);
+  };
+
+  // Finanzas V9: usa movimientos almacenados + derivados en vivo.
+  renderFinance = function () {
+    setTitle('Finanzas','Cobros, gastos y movimientos del salón');
+
+    // Persistimos antes de dibujar.
+    fcV9SalonEvents().forEach(e => fcV9PersistDerivedForEvent(e.id));
+
+    const events = fcV9SalonEvents();
+    const rows = fcV9AllRows().sort((a,b) =>
+      String(b.createdAt || b.movementDate || '').localeCompare(
+        String(a.createdAt || a.movementDate || '')
+      )
+    );
+
+    const billed = events.reduce((s,e) => s + Number(e.total || 0), 0);
+    const collected = rows.filter(m => m.type === 'Cobro')
+      .reduce((s,m) => s + Number(m.amount || 0), 0);
+    const staffCosts = rows.filter(m => m.type === 'Gasto' && m.category === 'Personal')
+      .reduce((s,m) => s + Number(m.amount || 0), 0);
+    const extras = rows.filter(m => m.type === 'Cargo' && m.category === 'Adicional')
+      .reduce((s,m) => s + Number(m.amount || 0), 0);
+
+    $('#content').innerHTML = `
+      <div class="grid stats">
+        <div class="card stat">
+          <small>Facturación reservas</small>
+          <strong>${money(billed)}</strong>
+        </div>
+        <div class="card stat">
+          <small>Cobros registrados</small>
+          <strong class="good">${money(collected)}</strong>
+        </div>
+        <div class="card stat">
+          <small>Gastos de personal</small>
+          <strong class="bad">${money(staffCosts)}</strong>
+        </div>
+        <div class="card stat">
+          <small>Adicionales vendidos</small>
+          <strong>${money(extras)}</strong>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="section-title">
+          <div>
+            <h3>Libro de movimientos</h3>
+            <small class="muted">Cada movimiento queda asociado a una fiesta.</small>
+          </div>
+        </div>
+
+        ${
+          rows.length
+            ? `<div class="table-wrap">
+                <table class="table">
+                  <thead>
+                    <tr>
+                      <th>Fecha</th>
+                      <th>Fiesta</th>
+                      <th>Tipo</th>
+                      <th>Concepto</th>
+                      <th>Estado</th>
+                      <th>Importe</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${rows.map(m => {
+                      const e = (data.events || []).find(x => x.id === m.eventId);
+                      return `
+                        <tr>
+                          <td>${esc(m.movementDate || '-')}</td>
+                          <td>${e ? `${esc(e.child || '')}<br><small>${esc(e.date || '')}</small>` : '-'}</td>
+                          <td>
+                            <span class="pill ${m.type === 'Gasto' ? 'suspendido' : m.type === 'Cobro' ? 'aprobado' : 'pendiente'}">
+                              ${esc(m.type)}
+                            </span>
+                          </td>
+                          <td>
+                            <b>${esc(m.concept || '-')}</b>
+                            <small style="display:block">${esc(m.category || '')}</small>
+                          </td>
+                          <td>${esc(m.status || '-')}</td>
+                          <td><b>${money(m.amount || 0)}</b></td>
+                        </tr>
+                      `;
+                    }).join('')}
+                  </tbody>
+                </table>
+              </div>`
+            : `<div class="empty">Todavía no hay movimientos.</div>`
+        }
+      </div>
+    `;
+
+    save();
+  };
+
+})();
