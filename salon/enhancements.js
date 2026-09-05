@@ -1310,3 +1310,410 @@
   };
 
 })();
+
+
+// ============================================================
+// V8 - MOVIMIENTOS FINANCIEROS REALES POR FIESTA
+//      Cobros + personal + adicionales
+// ============================================================
+(function () {
+  'use strict';
+
+  data.movements = data.movements || [];
+
+  function fcMovementsForSalon() {
+    return (data.movements || []).filter(m => m.salonId === session?.salonId);
+  }
+
+  function fcEventName(eventId) {
+    const e = (data.events || []).find(x => x.id === eventId);
+    return e ? `${e.child || 'Fiesta'} · ${fmtDate(e.date)}` : 'Sin fiesta';
+  }
+
+  function fcUpsertMovement(sourceKey, values) {
+    data.movements = data.movements || [];
+    let m = data.movements.find(x =>
+      x.salonId === session?.salonId && x.sourceKey === sourceKey
+    );
+
+    if (!m) {
+      m = {
+        id:id(),
+        salonId:session.salonId,
+        sourceKey,
+        createdAt:new Date().toISOString(),
+        ...values
+      };
+      data.movements.push(m);
+    } else {
+      Object.assign(m, values, {updatedAt:new Date().toISOString()});
+    }
+
+    return m;
+  }
+
+  function fcRemoveMovementBySource(sourceKey) {
+    data.movements = (data.movements || []).filter(m =>
+      !(m.salonId === session?.salonId && m.sourceKey === sourceKey)
+    );
+  }
+
+  function fcSyncEventMovements(eventId) {
+    const e = (data.events || []).find(x => x.id === eventId);
+    if (!e || e.salonId !== session?.salonId) return;
+
+    // 1) Personal = GASTO
+    const assignments = (data.assignments || []).filter(a => a.eventId === eventId);
+    const validStaffKeys = new Set();
+
+    assignments.forEach(a => {
+      const person = (data.staff || []).find(s => s.id === a.staffId);
+      if (!person) return;
+
+      const key = `staff:${eventId}:${a.staffId}`;
+      validStaffKeys.add(key);
+
+      fcUpsertMovement(key, {
+        eventId,
+        type:'Gasto',
+        category:'Personal',
+        concept:`${person.role || 'Personal'} · ${person.name}`,
+        amount:Number(a.amount || 0),
+        movementDate:e.date || new Date().toISOString().slice(0,10),
+        status:a.paid ? 'Pagado' : 'Pendiente',
+        staffId:a.staffId
+      });
+    });
+
+    (data.movements || [])
+      .filter(m => m.eventId === eventId && m.category === 'Personal' && m.sourceKey?.startsWith(`staff:${eventId}:`))
+      .forEach(m => {
+        if (!validStaffKeys.has(m.sourceKey)) fcRemoveMovementBySource(m.sourceKey);
+      });
+
+    // 2) Adicionales = CARGO AL CLIENTE (no es cobro hasta que paga)
+    const extras = e.extras || [];
+    const validExtraKeys = new Set();
+
+    extras.forEach(x => {
+      const key = `extra:${eventId}:${x.id}`;
+      validExtraKeys.add(key);
+
+      fcUpsertMovement(key, {
+        eventId,
+        type:'Cargo',
+        category:'Adicional',
+        concept:x.name || 'Adicional',
+        amount:Number(x.amount || 0),
+        movementDate:e.date || new Date().toISOString().slice(0,10),
+        status:'Incluido en reserva',
+        extraId:x.id
+      });
+    });
+
+    (data.movements || [])
+      .filter(m => m.eventId === eventId && m.category === 'Adicional' && m.sourceKey?.startsWith(`extra:${eventId}:`))
+      .forEach(m => {
+        if (!validExtraKeys.has(m.sourceKey)) fcRemoveMovementBySource(m.sourceKey);
+      });
+  }
+
+  function fcSyncAllOpenEvents() {
+    (data.events || [])
+      .filter(e => e.salonId === session?.salonId)
+      .forEach(e => fcSyncEventMovements(e.id));
+  }
+
+  // ------------------------------------------------------------
+  // REGISTRAR COBRO: ahora guarda historial de cada pago
+  // ------------------------------------------------------------
+  window.openPayment = function (eid) {
+    const e = (data.events || []).find(x => x.id === eid);
+    if (!e) return;
+
+    const saldo = Math.max(0, Number(e.total || 0) - Number(e.paid || 0));
+
+    showModal(`
+      <div class="modal-title">
+        <div>
+          <h2>Registrar cobro</h2>
+          <p>${esc(e.child)} · Saldo ${money(saldo)}</p>
+        </div>
+        <button class="ghost small" onclick="closeModal()">✕</button>
+      </div>
+
+      <form id="fc-payment-form">
+        <div class="form-grid">
+          <div class="field">
+            <label>Importe cobrado</label>
+            <input name="amount" type="number" min="1" max="${saldo || 999999999}" required>
+          </div>
+
+          <div class="field">
+            <label>Medio de pago</label>
+            <select name="method">
+              <option>Efectivo</option>
+              <option>Transferencia</option>
+              <option>Mercado Pago</option>
+              <option>Tarjeta</option>
+              <option>Otro</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label>Fecha</label>
+            <input name="date" type="date" required value="${new Date().toISOString().slice(0,10)}">
+          </div>
+
+          <div class="field">
+            <label>Comprobante / referencia</label>
+            <input name="reference" placeholder="Opcional">
+          </div>
+
+          <div class="field span2">
+            <label>Observación</label>
+            <input name="note" placeholder="Ej: seña, segundo pago, saldo final...">
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button class="ghost" type="button" onclick="openEvent('${esc(eid)}')">Cancelar</button>
+          <button class="primary">Registrar cobro</button>
+        </div>
+      </form>
+    `);
+
+    document.querySelector('#fc-payment-form').onsubmit = ev => {
+      ev.preventDefault();
+      const f = Object.fromEntries(new FormData(ev.target));
+      const amount = Number(f.amount || 0);
+
+      if (amount <= 0) return toast('Ingresá un importe válido');
+
+      const currentPaid = Number(e.paid || 0);
+      const currentTotal = Number(e.total || 0);
+
+      if (currentPaid + amount > currentTotal) {
+        return toast('El cobro supera el saldo de la fiesta');
+      }
+
+      e.paid = currentPaid + amount;
+
+      data.movements.push({
+        id:id(),
+        salonId:session.salonId,
+        eventId:eid,
+        sourceKey:`payment:${eid}:${Date.now()}:${Math.random().toString(36).slice(2,6)}`,
+        type:'Cobro',
+        category:'Cliente',
+        concept:f.note?.trim() || 'Cobro de reserva',
+        amount,
+        movementDate:f.date,
+        method:f.method,
+        reference:f.reference || '',
+        note:f.note || '',
+        status:'Cobrado',
+        createdAt:new Date().toISOString()
+      });
+
+      save();
+      toast('Cobro registrado y guardado');
+      openEvent(eid);
+    };
+  };
+
+  // ------------------------------------------------------------
+  // HISTORIAL DE MOVIMIENTOS DENTRO DE LA FIESTA
+  // ------------------------------------------------------------
+  const fcPrevOpenEventLedger = window.openEvent;
+
+  window.openEvent = function (eid) {
+    fcSyncEventMovements(eid);
+    fcPrevOpenEventLedger(eid);
+
+    const modal = document.querySelector('#modal-body');
+    if (!modal || modal.querySelector('[data-fc-movements]')) return;
+
+    const movements = fcMovementsForSalon()
+      .filter(m => m.eventId === eid)
+      .sort((a,b) => String(b.createdAt || b.movementDate || '').localeCompare(String(a.createdAt || a.movementDate || '')));
+
+    const box = document.createElement('div');
+    box.className = 'card';
+    box.style.marginTop = '16px';
+    box.setAttribute('data-fc-movements','1');
+
+    box.innerHTML = `
+      <div class="section-title">
+        <div>
+          <h3>💰 Movimientos de la fiesta</h3>
+          <small class="muted">Queda guardado cada cobro, gasto de personal y adicional.</small>
+        </div>
+      </div>
+
+      ${
+        movements.length
+          ? `<div class="table-wrap">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>Fecha</th>
+                    <th>Tipo</th>
+                    <th>Concepto</th>
+                    <th>Medio</th>
+                    <th>Importe</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${movements.map(m => `
+                    <tr>
+                      <td>${esc(m.movementDate || '-')}</td>
+                      <td><span class="pill ${m.type === 'Gasto' ? 'suspendido' : m.type === 'Cobro' ? 'aprobado' : 'pendiente'}">${esc(m.type)}</span></td>
+                      <td>
+                        <b>${esc(m.concept || '-')}</b>
+                        <small style="display:block">${esc(m.category || '')}</small>
+                      </td>
+                      <td>${esc(m.method || '-')}</td>
+                      <td><b>${money(m.amount || 0)}</b></td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>`
+          : `<div class="empty">Todavía no hay movimientos registrados.</div>`
+      }
+    `;
+
+    modal.appendChild(box);
+  };
+
+  // ------------------------------------------------------------
+  // DESPUÉS DE CREAR/EDITAR RESERVA: sincroniza personal/extras
+  // ------------------------------------------------------------
+  const fcPrevOpenEventFormLedger = window.openEventForm;
+
+  window.openEventForm = function (eid) {
+    const beforeIds = new Set((data.events || []).map(e => e.id));
+
+    fcPrevOpenEventFormLedger(eid);
+
+    const form = document.querySelector('#event-form');
+    if (!form) return;
+
+    const oldSubmit = form.onsubmit;
+
+    form.onsubmit = function (ev) {
+      const result = oldSubmit ? oldSubmit.call(form, ev) : undefined;
+
+      setTimeout(() => {
+        let target = eid ? (data.events || []).find(e => e.id === eid) : null;
+
+        if (!target) {
+          target = (data.events || []).find(e =>
+            e.salonId === session.salonId && !beforeIds.has(e.id)
+          );
+        }
+
+        if (!target) return;
+
+        fcSyncEventMovements(target.id);
+        save();
+      }, 50);
+
+      return result;
+    };
+  };
+
+  // ------------------------------------------------------------
+  // FINANZAS: resumen + libro de movimientos
+  // ------------------------------------------------------------
+  renderFinance = function () {
+    setTitle('Finanzas','Cobros, gastos y movimientos reales del salón');
+
+    fcSyncAllOpenEvents();
+
+    const events = (data.events || []).filter(e => e.salonId === session.salonId);
+    const moves = fcMovementsForSalon()
+      .sort((a,b) => String(b.createdAt || b.movementDate || '').localeCompare(String(a.createdAt || a.movementDate || '')));
+
+    const billed = events.reduce((sum,e) => sum + Number(e.total || 0), 0);
+    const collected = moves.filter(m => m.type === 'Cobro').reduce((sum,m) => sum + Number(m.amount || 0), 0);
+    const expenses = moves.filter(m => m.type === 'Gasto').reduce((sum,m) => sum + Number(m.amount || 0), 0);
+    const extras = moves.filter(m => m.type === 'Cargo' && m.category === 'Adicional').reduce((sum,m) => sum + Number(m.amount || 0), 0);
+
+    $('#content').innerHTML = `
+      <div class="grid stats">
+        <div class="card stat">
+          <small>Facturación reservas</small>
+          <strong>${money(billed)}</strong>
+        </div>
+        <div class="card stat">
+          <small>Cobros registrados</small>
+          <strong class="good">${money(collected)}</strong>
+        </div>
+        <div class="card stat">
+          <small>Gastos registrados</small>
+          <strong class="bad">${money(expenses)}</strong>
+        </div>
+        <div class="card stat">
+          <small>Adicionales vendidos</small>
+          <strong>${money(extras)}</strong>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="section-title">
+          <div>
+            <h3>Libro de movimientos</h3>
+            <small class="muted">Todos los registros quedan asociados a su fiesta.</small>
+          </div>
+        </div>
+
+        ${
+          moves.length
+            ? `<div class="table-wrap">
+                <table class="table">
+                  <thead>
+                    <tr>
+                      <th>Fecha</th>
+                      <th>Fiesta</th>
+                      <th>Tipo</th>
+                      <th>Concepto</th>
+                      <th>Medio</th>
+                      <th>Importe</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${moves.map(m => `
+                      <tr>
+                        <td>${esc(m.movementDate || '-')}</td>
+                        <td>${esc(fcEventName(m.eventId))}</td>
+                        <td><span class="pill ${m.type === 'Gasto' ? 'suspendido' : m.type === 'Cobro' ? 'aprobado' : 'pendiente'}">${esc(m.type)}</span></td>
+                        <td>
+                          <b>${esc(m.concept || '-')}</b>
+                          <small style="display:block">${esc(m.category || '')}</small>
+                        </td>
+                        <td>${esc(m.method || '-')}</td>
+                        <td><b>${money(m.amount || 0)}</b></td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
+              </div>`
+            : `<div class="empty">Todavía no hay movimientos.</div>`
+        }
+      </div>
+    `;
+  };
+
+  // Asegura que los movimientos se creen al entrar al salón.
+  setTimeout(() => {
+    try {
+      if (session?.role === 'salon') {
+        fcSyncAllOpenEvents();
+        save();
+      }
+    } catch (_) {}
+  }, 400);
+
+})();
