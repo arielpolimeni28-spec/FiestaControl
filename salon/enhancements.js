@@ -473,3 +473,468 @@
   }
 
 })();
+
+
+// ============================================================
+// PERSONAL POR EVENTO + GASTOS AUTOMÁTICOS + CIERRE DE FIESTAS
+// ============================================================
+(function () {
+  'use strict';
+
+  function fcStaffForSalon() {
+    return (data.staff || []).filter(x => x.salonId === session?.salonId);
+  }
+
+  function fcEventAssignments(eventId) {
+    return (data.assignments || []).filter(a => a.eventId === eventId);
+  }
+
+  function fcStaffExpense(eventId) {
+    return fcEventAssignments(eventId).reduce((sum, a) => sum + Number(a.amount || 0), 0);
+  }
+
+  function fcSupplierExpense(eventId) {
+    return (data.orders || [])
+      .filter(o => o.eventId === eventId)
+      .reduce((sum, o) => sum + Number(o.amount || 0), 0);
+  }
+
+  function fcAssignedStaff(eventId) {
+    return fcEventAssignments(eventId).map(a => {
+      const person = (data.staff || []).find(s => s.id === a.staffId);
+      return {assignment:a, person};
+    }).filter(x => x.person);
+  }
+
+  function fcEventIsPast(e) {
+    if (!e?.date) return false;
+    if (!['Confirmada','Señada'].includes(e.status)) return false;
+    try {
+      const end = e.end || '23:59';
+      return new Date(`${e.date}T${end}:00`).getTime() < Date.now();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function fcPendingClosureEvents() {
+    return (typeof se === 'function' ? se() : (data.events || []))
+      .filter(fcEventIsPast)
+      .sort((a,b) => (`${a.date} ${a.end||''}`).localeCompare(`${b.date} ${b.end||''}`));
+  }
+
+  function fcSyncAssignments(eventId, selectedStaffIds) {
+    data.assignments = data.assignments || [];
+    const selected = new Set(selectedStaffIds || []);
+    const event = (data.events || []).find(e => e.id === eventId);
+    const finalized = event?.status === 'Finalizada';
+
+    // Quita del evento a quienes ya no fueron seleccionados.
+    data.assignments = data.assignments.filter(a => {
+      if (a.eventId !== eventId) return true;
+      return selected.has(a.staffId);
+    });
+
+    // Crea/actualiza asignaciones seleccionadas.
+    selected.forEach(staffId => {
+      const person = (data.staff || []).find(s => s.id === staffId);
+      if (!person) return;
+
+      let a = (data.assignments || []).find(x => x.eventId === eventId && x.staffId === staffId);
+      if (!a) {
+        data.assignments.push({
+          id: id(),
+          salonId: session.salonId,
+          eventId,
+          staffId,
+          amount: Number(person.defaultFee || 0),
+          paid: false
+        });
+      } else if (!finalized) {
+        a.amount = Number(person.defaultFee || 0);
+      }
+    });
+  }
+
+  // ---------------- PERSONAL ----------------
+  renderStaff = function () {
+    setTitle('Personal','Equipo, cargos y costo por fiesta');
+    const st = fcStaffForSalon();
+
+    $('#content').innerHTML = `
+      <div class="toolbar">
+        <button class="primary" onclick="openStaffForm()">+ Agregar personal</button>
+      </div>
+
+      <div class="card table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Nombre</th>
+              <th>Cargo</th>
+              <th>WhatsApp</th>
+              <th>Costo por fiesta</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${st.map(s => `
+              <tr>
+                <td><b>${esc(s.name)}</b></td>
+                <td>${esc(s.role || '-')}</td>
+                <td>${esc(s.phone || '-')}</td>
+                <td><b>${money(s.defaultFee || 0)}</b></td>
+                <td><button class="secondary small" onclick="openStaffForm('${s.id}')">Editar</button></td>
+              </tr>
+            `).join('') || `<tr><td colspan="5"><div class="empty">Todavía no cargaste personal.</div></td></tr>`}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="section-title">
+          <h3>Cómo funciona</h3>
+        </div>
+        <p class="muted">
+          Cuando asignás personal a una fiesta, FiestaControl toma automáticamente el costo por fiesta
+          y lo suma como gasto del evento. Si cambiás el costo acá, se actualiza en las fiestas todavía no finalizadas.
+        </p>
+      </div>
+    `;
+  };
+
+  window.openStaffForm = function (staffId) {
+    const person = staffId ? (data.staff || []).find(s => s.id === staffId) : null;
+
+    showModal(`
+      <div class="modal-title">
+        <div>
+          <h2>${person ? 'Editar personal' : 'Agregar personal'}</h2>
+          <p>Datos y costo habitual por fiesta</p>
+        </div>
+        <button class="ghost small" onclick="closeModal()">✕</button>
+      </div>
+
+      <form id="fc-staff-form">
+        <div class="form-grid">
+          <div class="field">
+            <label>Nombre</label>
+            <input name="name" required value="${esc(person?.name || '')}">
+          </div>
+          <div class="field">
+            <label>Cargo</label>
+            <input name="role" required placeholder="Moza, animador, coordinador..." value="${esc(person?.role || '')}">
+          </div>
+          <div class="field">
+            <label>WhatsApp</label>
+            <input name="phone" placeholder="11..." value="${esc(person?.phone || '')}">
+          </div>
+          <div class="field">
+            <label>Costo por fiesta</label>
+            <input name="defaultFee" type="number" min="0" step="1" required value="${Number(person?.defaultFee || 0)}">
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+          <button class="primary">${person ? 'Guardar cambios' : 'Agregar personal'}</button>
+        </div>
+      </form>
+    `);
+
+    $('#fc-staff-form').onsubmit = ev => {
+      ev.preventDefault();
+      const f = Object.fromEntries(new FormData(ev.target));
+      f.defaultFee = Number(f.defaultFee || 0);
+
+      if (person) {
+        Object.assign(person, f);
+
+        // Actualiza el valor en eventos todavía abiertos/no finalizados.
+        (data.assignments || []).forEach(a => {
+          if (a.staffId !== person.id) return;
+          const event = (data.events || []).find(e => e.id === a.eventId);
+          if (event && event.status !== 'Finalizada') {
+            a.amount = f.defaultFee;
+          }
+        });
+      } else {
+        data.staff.push({
+          id:id(),
+          salonId:session.salonId,
+          ...f
+        });
+      }
+
+      save();
+      closeModal();
+      toast(person ? 'Personal actualizado' : 'Personal agregado');
+      renderSalonShell();
+    };
+  };
+
+  // -------- PERSONAL DENTRO DE LA RESERVA / FIESTA --------
+  const fcPreviousOpenEventForm = window.openEventForm;
+
+  window.openEventForm = function (eid) {
+    const beforeIds = new Set((data.events || []).map(e => e.id));
+    const existing = eid ? (data.events || []).find(e => e.id === eid) : null;
+    const selectedBefore = new Set(
+      existing ? fcEventAssignments(existing.id).map(a => a.staffId) : []
+    );
+
+    fcPreviousOpenEventForm(eid);
+
+    const form = document.querySelector('#event-form');
+    if (!form) return;
+
+    const staff = fcStaffForSalon();
+    const actions = form.querySelector('.form-actions');
+
+    const block = document.createElement('div');
+    block.className = 'field span2';
+    block.style.marginTop = '8px';
+    block.innerHTML = `
+      <label>Personal a cargo de la fiesta</label>
+      ${
+        staff.length
+          ? `<div class="card" style="padding:12px;margin-top:6px">
+              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px">
+                ${staff.map(p => `
+                  <label style="display:flex;align-items:center;gap:8px;padding:8px;border:1px solid #ddd;border-radius:10px;cursor:pointer">
+                    <input type="checkbox" name="fcStaffId" value="${esc(p.id)}" ${selectedBefore.has(p.id) ? 'checked' : ''}>
+                    <span>
+                      <b>${esc(p.name)}</b>
+                      <small style="display:block">${esc(p.role || '')} · ${money(p.defaultFee || 0)}</small>
+                    </span>
+                  </label>
+                `).join('')}
+              </div>
+              <small class="muted" style="display:block;margin-top:10px">
+                Podés seleccionar una persona o todas las que necesites. El gasto se calcula automáticamente.
+              </small>
+            </div>`
+          : `<div class="empty" style="margin-top:6px">
+              Primero cargá el personal desde la solapa Personal.
+            </div>`
+      }
+    `;
+
+    if (actions) actions.before(block);
+
+    const originalSubmit = form.onsubmit;
+    form.onsubmit = function (ev) {
+      const selectedStaffIds = [...form.querySelectorAll('input[name="fcStaffId"]:checked')]
+        .map(i => i.value);
+
+      const result = originalSubmit ? originalSubmit.call(form, ev) : undefined;
+
+      // El formulario original ya creó/actualizó el evento.
+      setTimeout(() => {
+        let target = eid ? (data.events || []).find(e => e.id === eid) : null;
+        if (!target) target = (data.events || []).find(e => !beforeIds.has(e.id)) || null;
+        if (!target) return;
+
+        fcSyncAssignments(target.id, selectedStaffIds);
+        save();
+      }, 0);
+
+      return result;
+    };
+  };
+
+  // ---------------- DETALLE DE FIESTA ----------------
+  const fcPreviousOpenEvent = window.openEvent;
+
+  window.openEvent = function (eid) {
+    fcPreviousOpenEvent(eid);
+
+    const e = (data.events || []).find(x => x.id === eid);
+    if (!e) return;
+
+    const assigned = fcAssignedStaff(eid);
+    const staffCost = fcStaffExpense(eid);
+    const supplierCost = fcSupplierExpense(eid);
+    const totalExpenses = staffCost + supplierCost;
+    const estimatedNet = Number(e.total || 0) - totalExpenses;
+
+    const modalBody = document.querySelector('#modal-body');
+    if (!modalBody || modalBody.querySelector('[data-fc-event-costs]')) return;
+
+    const section = document.createElement('div');
+    section.setAttribute('data-fc-event-costs','1');
+    section.innerHTML = `
+      <div class="card" style="margin-top:16px">
+        <div class="section-title"><h3>👥 Personal asignado</h3></div>
+        ${
+          assigned.length
+            ? `<div class="list">
+                ${assigned.map(({assignment,person}) => `
+                  <div class="list-item">
+                    <div>
+                      <strong>${esc(person.name)}</strong>
+                      <small>${esc(person.role || '')}${person.phone ? ' · ' + esc(person.phone) : ''}</small>
+                    </div>
+                    <b>${money(assignment.amount || 0)}</b>
+                  </div>
+                `).join('')}
+              </div>`
+            : `<div class="empty">No hay personal asignado a esta fiesta.</div>`
+        }
+      </div>
+
+      <div class="grid stats" style="grid-template-columns:repeat(3,1fr);margin-top:16px">
+        <div class="card">
+          <small class="muted">Gasto personal</small>
+          <strong>${money(staffCost)}</strong>
+        </div>
+        <div class="card">
+          <small class="muted">Proveedores</small>
+          <strong>${money(supplierCost)}</strong>
+        </div>
+        <div class="card">
+          <small class="muted">Resultado estimado</small>
+          <strong class="${estimatedNet < 0 ? 'bad' : 'good'}">${money(estimatedNet)}</strong>
+        </div>
+      </div>
+
+      ${
+        fcEventIsPast(e)
+          ? `<div class="card" style="margin-top:16px;border:2px solid rgba(230,150,30,.35)">
+              <div class="section-title">
+                <div>
+                  <h3>⏳ Pendiente de finalizar</h3>
+                  <small class="muted">El horario de esta fiesta ya terminó. Falta cerrar los números.</small>
+                </div>
+                <button class="primary" onclick="openFinalizeEvent('${esc(eid)}')">Finalizar fiesta</button>
+              </div>
+            </div>`
+          : ''
+      }
+    `;
+
+    modalBody.appendChild(section);
+  };
+
+  // ---------------- CIERRE DE NÚMEROS ----------------
+  window.openFinalizeEvent = function (eid) {
+    const e = (data.events || []).find(x => x.id === eid);
+    if (!e) return;
+
+    const staffCost = fcStaffExpense(eid);
+    const supplierCost = fcSupplierExpense(eid);
+    const expenses = staffCost + supplierCost;
+    const total = Number(e.total || 0);
+    const paid = Number(e.paid || 0);
+    const balance = total - paid;
+    const net = total - expenses;
+    const assigned = fcAssignedStaff(eid);
+
+    showModal(`
+      <div class="modal-title">
+        <div>
+          <h2>✅ Finalizar fiesta</h2>
+          <p>${esc(e.child)} · ${fmtDate(e.date)} · ${esc(e.start || '')} a ${esc(e.end || '')}</p>
+        </div>
+        <button class="ghost small" onclick="closeModal()">✕</button>
+      </div>
+
+      <div class="grid stats" style="grid-template-columns:repeat(2,1fr)">
+        <div class="card"><small class="muted">Total de la fiesta</small><strong>${money(total)}</strong></div>
+        <div class="card"><small class="muted">Cobrado</small><strong class="good">${money(paid)}</strong></div>
+        <div class="card"><small class="muted">Saldo del cliente</small><strong class="${balance ? 'bad' : 'good'}">${money(balance)}</strong></div>
+        <div class="card"><small class="muted">Costo de personal</small><strong>${money(staffCost)}</strong></div>
+        <div class="card"><small class="muted">Costo proveedores</small><strong>${money(supplierCost)}</strong></div>
+        <div class="card"><small class="muted">Resultado estimado</small><strong class="${net < 0 ? 'bad' : 'good'}">${money(net)}</strong></div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="section-title"><h3>Personal del evento</h3></div>
+        ${
+          assigned.length
+            ? assigned.map(({assignment,person}) => `
+                <div class="list-item">
+                  <div><strong>${esc(person.name)}</strong><small>${esc(person.role || '')}</small></div>
+                  <b>${money(assignment.amount || 0)}</b>
+                </div>
+              `).join('')
+            : `<div class="empty">Sin personal asignado.</div>`
+        }
+      </div>
+
+      <div class="admin-notice attention" style="margin-top:16px">
+        <span>ℹ️</span>
+        <div>
+          <b>Al finalizar se cerrarán los números de esta fiesta.</b>
+          <small>El evento pasará a estado Finalizada y se guardará una foto de estos importes.</small>
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button class="ghost" onclick="openEvent('${esc(eid)}')">Volver</button>
+        <button class="primary" id="fc-confirm-finalize">Finalizar y cerrar números</button>
+      </div>
+    `);
+
+    document.querySelector('#fc-confirm-finalize').onclick = () => {
+      e.status = 'Finalizada';
+      e.closedAt = new Date().toISOString();
+      e.finalNumbers = {
+        total,
+        paid,
+        balance,
+        staffCost,
+        supplierCost,
+        expenses,
+        net,
+        closedAt:e.closedAt
+      };
+
+      save();
+      closeModal();
+      toast('Fiesta finalizada y números cerrados');
+      renderSalonShell();
+    };
+  };
+
+  // ---------------- AVISO EN INICIO ----------------
+  const fcOriginalRenderDashboard = renderDashboard;
+
+  renderDashboard = function () {
+    fcOriginalRenderDashboard();
+
+    const pending = fcPendingClosureEvents();
+    if (!pending.length) return;
+
+    const content = document.querySelector('#content');
+    if (!content || document.querySelector('#fc-pending-closure')) return;
+
+    const box = document.createElement('div');
+    box.id = 'fc-pending-closure';
+    box.className = 'card';
+    box.style.marginBottom = '16px';
+    box.style.border = '2px solid rgba(230,150,30,.35)';
+    box.innerHTML = `
+      <div class="section-title">
+        <div>
+          <h3>⏳ ${pending.length} fiesta${pending.length === 1 ? '' : 's'} pendiente${pending.length === 1 ? '' : 's'} de finalizar</h3>
+          <small class="muted">El día y horario ya pasaron. Revisá y cerrá los números.</small>
+        </div>
+      </div>
+      <div class="list">
+        ${pending.map(e => `
+          <div class="list-item">
+            <div>
+              <strong>${esc(e.child)}</strong>
+              <small>${fmtDate(e.date)} · ${esc(e.start || '')} a ${esc(e.end || '')} · ${esc(e.client || '')}</small>
+            </div>
+            <button class="primary small" onclick="openFinalizeEvent('${esc(e.id)}')">Finalizar</button>
+          </div>
+        `).join('')}
+      </div>
+    `;
+
+    content.prepend(box);
+  };
+
+})();
