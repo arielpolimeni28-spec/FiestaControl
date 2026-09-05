@@ -1,4 +1,4 @@
-// FiestaControl - mejoras de Agenda + confirmación automática por WhatsApp
+// FiestaControl - Agenda + confirmación automática por email + borrado protegido
 (function () {
   'use strict';
 
@@ -26,41 +26,36 @@
   `;
   document.head.appendChild(style);
 
-  async function sendConfirmationWhatsApp(eventObj) {
+  async function sendConfirmationEmail(eventObj) {
     if (!eventObj || eventObj.status !== 'Confirmada') return;
-    if (eventObj.whatsappConfirmationSentAt) return;
+    if (eventObj.emailConfirmationSentAt) return;
 
-    const phone = String(eventObj.phone || '').trim();
-    if (!phone) {
-      try { toast('Falta cargar el WhatsApp del cliente'); } catch (_) {}
+    const email = String(eventObj.email || '').trim();
+    if (!email) {
+      try { toast('Falta cargar el email del cliente'); } catch (_) {}
       return;
     }
 
     try {
-      const r = await fetch('/api/whatsapp-confirmation', {
+      const r = await fetch('/api/email-confirmation', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-          eventId: eventObj.id,
-          salonId: eventObj.salonId
-        }),
+        body: JSON.stringify({ event: eventObj, salonId: eventObj.salonId }),
         cache: 'no-store'
       });
 
       const res = await r.json().catch(() => ({}));
       if (!r.ok || !res.ok) throw new Error(res.error || ('HTTP ' + r.status));
 
-      eventObj.whatsappConfirmationSentAt = res.sentAt || new Date().toISOString();
-      eventObj.whatsappConfirmationMessageId = res.messageId || '';
-      eventObj.whatsappConfirmationError = '';
-
+      eventObj.emailConfirmationSentAt = res.sentAt || new Date().toISOString();
+      eventObj.emailConfirmationError = '';
       if (typeof save === 'function') save();
-      try { toast('Fiesta confirmada y WhatsApp enviado'); } catch (_) {}
+      try { toast('Fiesta confirmada y email enviado'); } catch (_) {}
     } catch (err) {
-      eventObj.whatsappConfirmationError = String(err?.message || err);
+      eventObj.emailConfirmationError = String(err?.message || err);
       if (typeof save === 'function') save();
-      try { toast('Fiesta confirmada. No se pudo enviar el WhatsApp'); } catch (_) {}
-      console.error('WhatsApp confirmación:', err);
+      try { toast('Fiesta confirmada. No se pudo enviar el email'); } catch (_) {}
+      console.error('Email confirmación:', err);
     }
   }
 
@@ -77,18 +72,26 @@
       const form = document.querySelector('#event-form');
       if (!form) return;
 
-      const phoneInput = form.querySelector('input[name="phone"]');
-      if (phoneInput) phoneInput.placeholder = 'Ej: 54911XXXXXXXX';
+      const emailInput = form.querySelector('input[name="phone"]');
+      if (emailInput) {
+        emailInput.name = 'email';
+        emailInput.type = 'email';
+        emailInput.placeholder = 'cliente@gmail.com';
+        emailInput.value = existing?.email || '';
+        const field = emailInput.closest('.field');
+        const label = field?.querySelector('label');
+        if (label) label.textContent = 'Email del cliente';
+      }
 
       const originalSubmit = form.onsubmit;
 
       form.onsubmit = function (ev) {
         const snapshot = Object.fromEntries(new FormData(form));
 
-        if (snapshot.status === 'Confirmada' && !String(snapshot.phone || '').trim()) {
+        if (snapshot.status === 'Confirmada' && !String(snapshot.email || '').trim()) {
           ev.preventDefault();
-          try { toast('Para confirmar, cargá el WhatsApp del cliente'); } catch (_) {}
-          form.querySelector('input[name="phone"]')?.focus();
+          try { toast('Para confirmar, cargá el email del cliente'); } catch (_) {}
+          form.querySelector('input[name="email"]')?.focus();
           return false;
         }
 
@@ -103,7 +106,7 @@
           if (!target) {
             target = (data.events || []).find(e => !beforeIds.has(e.id)) || null;
           }
-          if (target) setTimeout(() => sendConfirmationWhatsApp(target), 0);
+          if (target) setTimeout(() => sendConfirmationEmail(target), 0);
         }
 
         return result;
@@ -232,4 +235,93 @@
       `;
     };
   }
+
+  // Borrado protegido de fiestas: exige la contraseña actual del salón.
+  const originalOpenEvent = window.openEvent;
+  if (typeof originalOpenEvent === 'function') {
+    window.openEvent = function (eid) {
+      originalOpenEvent(eid);
+
+      const toolbar = document.querySelector('#modal-body .toolbar');
+      if (!toolbar || toolbar.querySelector('[data-fc-delete-event]')) return;
+
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'danger small';
+      btn.setAttribute('data-fc-delete-event', '1');
+      btn.textContent = '🗑 Borrar fiesta';
+      btn.onclick = () => window.confirmDeleteEvent(eid);
+      toolbar.appendChild(btn);
+    };
+  }
+
+  window.confirmDeleteEvent = function (eid) {
+    const ev = getEvent(eid);
+    if (!ev) return;
+
+    showModal(`
+      <div class="modal-title">
+        <div>
+          <h2>🗑 Borrar fiesta</h2>
+          <p>${safeEsc(ev.child || 'Fiesta')} · ${safeEsc(typeof fmtDate === 'function' ? fmtDate(ev.date) : ev.date)}</p>
+        </div>
+        <button class="ghost small" onclick="closeModal()">✕</button>
+      </div>
+
+      <div class="admin-notice attention">
+        <span>⚠️</span>
+        <div>
+          <b>Esta acción no se puede deshacer</b>
+          <small>Para borrar la fiesta ingresá la contraseña actual del salón.</small>
+        </div>
+      </div>
+
+      <form id="fc-delete-event-form" style="margin-top:16px">
+        <div class="field">
+          <label>Contraseña del salón</label>
+          <input type="password" name="password" required autocomplete="current-password">
+        </div>
+        <div class="form-actions">
+          <button type="button" class="ghost" onclick="openEvent('${safeEsc(eid)}')">Cancelar</button>
+          <button type="submit" class="danger">Borrar definitivamente</button>
+        </div>
+      </form>
+    `);
+
+    const form = document.querySelector('#fc-delete-event-form');
+    if (!form) return;
+
+    form.onsubmit = async function (e) {
+      e.preventDefault();
+      const password = String(new FormData(form).get('password') || '');
+
+      try {
+        const r = await fetch('/api/delete-event', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({
+            eventId: eid,
+            salonId: ev.salonId,
+            password
+          }),
+          cache: 'no-store'
+        });
+
+        const res = await r.json().catch(() => ({}));
+        if (!r.ok || !res.ok) {
+          toast(res.error || 'No se pudo borrar la fiesta');
+          return;
+        }
+
+        data = res.state;
+        closeModal();
+        toast('Fiesta borrada');
+        renderSalonShell();
+      } catch (err) {
+        console.error(err);
+        toast('No se pudo conectar con el servidor');
+      }
+    };
+  };
+
 })();

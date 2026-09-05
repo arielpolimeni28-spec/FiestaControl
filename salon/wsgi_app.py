@@ -3,8 +3,9 @@ import json
 import mimetypes
 import os
 import time
-import urllib.request
-import urllib.error
+import smtplib
+import ssl
+from email.message import EmailMessage
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -56,88 +57,59 @@ def _fmt_date_ars(date_text):
         return str(date_text or "")
 
 
-def _normalize_phone(phone):
-    digits = "".join(ch for ch in str(phone or "") if ch.isdigit())
-    if not digits:
-        return ""
-    if digits.startswith("00"):
-        digits = digits[2:]
-    # Si ya viene en formato internacional, se conserva.
-    # Para Argentina, recomendamos cargarlo como 54911XXXXXXXX.
-    return digits
+def enviar_confirmacion_email(evento, salon):
+    gmail_user = os.environ.get("FIESTACONTROL_EMAIL", "").strip()
+    gmail_password = os.environ.get("FIESTACONTROL_EMAIL_PASSWORD", "").replace(" ", "").strip()
 
+    if not gmail_user or not gmail_password:
+        raise ValueError("Email no configurado: faltan las credenciales de Gmail")
 
-def enviar_confirmacion_whatsapp(evento, salon):
-    token = os.environ.get("META_WHATSAPP_TOKEN", "").strip()
-    phone_number_id = os.environ.get("META_WHATSAPP_PHONE_NUMBER_ID", "").strip()
-    graph_version = os.environ.get("META_GRAPH_VERSION", "").strip() or "v23.0"
+    destinatario = str(evento.get("email") or "").strip()
+    if "@" not in destinatario:
+        raise ValueError("La reserva no tiene un email válido")
 
-    if not token or not phone_number_id:
-        raise ValueError(
-            "WhatsApp no está configurado: faltan META_WHATSAPP_TOKEN y/o META_WHATSAPP_PHONE_NUMBER_ID"
-        )
-
-    to = _normalize_phone(evento.get("phone"))
-    if not to:
-        raise ValueError("La reserva no tiene un WhatsApp válido")
-
-    salon_name = str((salon or {}).get("name") or "el salón")
+    salon_name = str((salon or {}).get("name") or "FiestaControl")
+    client = str(evento.get("client") or "")
+    child = str(evento.get("child") or "")
     date_txt = _fmt_date_ars(evento.get("date"))
     start = str(evento.get("start") or "")
     end = str(evento.get("end") or "")
-    client = str(evento.get("client") or "")
-    child = str(evento.get("child") or "")
+    package = str(evento.get("package") or "")
 
-    text = (
-        "🎉 ¡Tu fiesta está confirmada!\n\n"
-        f"Salón: {salon_name}\n"
-        f"Cliente: {client}\n"
-        f"Cumpleañero/a: {child}\n"
-        f"Fecha: {date_txt}\n"
-        f"Horario: {start} a {end}\n\n"
-        "Gracias por elegirnos."
-    )
+    msg = EmailMessage()
+    msg["Subject"] = f"Confirmación de fiesta - {salon_name}"
+    msg["From"] = f"FiestaControl <{gmail_user}>"
+    msg["To"] = destinatario
+    msg.set_content(f"""¡Tu fiesta está confirmada!\n\nSalón: {salon_name}\nCliente: {client}\nCumpleañero/a: {child}\nFecha: {date_txt}\nHorario: {start} a {end}\nPaquete: {package}\n\nTu reserva quedó confirmada correctamente.\n\nGracias por elegirnos.\nFiestaControl\n""")
+    msg.add_alternative(f"""
+    <div style="font-family:Arial,sans-serif;max-width:620px;margin:auto;color:#222">
+      <div style="padding:22px;border:1px solid #ddd;border-radius:14px">
+        <h2>🎉 ¡Tu fiesta está confirmada!</h2>
+        <p>Hola {client or 'cliente'}, confirmamos tu reserva.</p>
+        <p><b>Salón:</b> {salon_name}<br>
+        <b>Cumpleañero/a:</b> {child}<br>
+        <b>Fecha:</b> {date_txt}<br>
+        <b>Horario:</b> {start} a {end}<br>
+        <b>Paquete:</b> {package}</p>
+        <p>Tu reserva quedó confirmada correctamente.</p>
+        <p>Gracias por elegirnos.</p>
+        <p style="font-size:12px;color:#777">Enviado automáticamente por FiestaControl.</p>
+      </div>
+    </div>
+    """, subtype="html")
 
-    url = f"https://graph.facebook.com/{graph_version}/{phone_number_id}/messages"
-    payload = json.dumps({
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": "text",
-        "text": {"body": text}
-    }).encode("utf-8")
-
-    req = urllib.request.Request(
-        url,
-        data=payload,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        },
-    )
-
+    context = ssl.create_default_context()
     try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            raw = resp.read().decode("utf-8")
-            data = json.loads(raw or "{}")
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        try:
-            err = json.loads(body)
-            msg = err.get("error", {}).get("message") or body
-        except Exception:
-            msg = body
-        raise ValueError(f"Meta WhatsApp rechazó el envío: {msg}")
-    except Exception as e:
-        raise ValueError(f"No se pudo conectar con WhatsApp: {e}")
-
-    message_id = ""
-    messages = data.get("messages") or []
-    if messages and isinstance(messages[0], dict):
-        message_id = str(messages[0].get("id") or "")
-
-    return message_id
-
+        with smtplib.SMTP("smtp.gmail.com", 587, timeout=25) as smtp:
+            smtp.ehlo()
+            smtp.starttls(context=context)
+            smtp.ehlo()
+            smtp.login(gmail_user, gmail_password)
+            smtp.send_message(msg)
+    except smtplib.SMTPAuthenticationError:
+        raise ValueError("Google rechazó el acceso. Revisá el Gmail y la contraseña de aplicación.")
+    except Exception as ex:
+        raise ValueError(f"No se pudo enviar el email: {ex}")
 
 def application(environ, start_response):
     method = environ.get("REQUEST_METHOD", "GET").upper()
@@ -227,50 +199,85 @@ def application(environ, start_response):
                     "state": result
                 })
 
-            if path == "/api/whatsapp-confirmation":
+
+            if path == "/api/delete-event":
                 event_id = str(req.get("eventId") or "")
                 salon_id = str(req.get("salonId") or "")
-                if not event_id or not salon_id:
-                    raise ValueError("Reserva inválida")
+                password = str(req.get("password") or "")
+
+                if not event_id or not salon_id or not password:
+                    raise ValueError("Faltan datos para borrar la fiesta")
 
                 st = server.get_state()
-                evento = next(
-                    (x for x in st.get("events", [])
-                     if str(x.get("id")) == event_id and str(x.get("salonId")) == salon_id),
+
+                salon = next(
+                    (x for x in st.get("salons", [])
+                     if str(x.get("id")) == salon_id),
                     None
                 )
-                if not evento:
-                    raise ValueError("Reserva inexistente")
+                if not salon:
+                    raise ValueError("Salón inexistente")
+
+                if str(salon.get("password") or "") != password:
+                    raise ValueError("Contraseña incorrecta")
+
+                events = st.get("events", [])
+                before = len(events)
+                st["events"] = [
+                    x for x in events
+                    if not (
+                        str(x.get("id")) == event_id and
+                        str(x.get("salonId")) == salon_id
+                    )
+                ]
+
+                if len(st["events"]) == before:
+                    raise ValueError("Fiesta inexistente")
+
+                # Limpia también datos relacionados con la fiesta.
+                st["cards"] = [
+                    x for x in st.get("cards", [])
+                    if str(x.get("eventId") or "") != event_id
+                ]
+                st["assignments"] = [
+                    x for x in st.get("assignments", [])
+                    if str(x.get("eventId") or "") != event_id
+                ]
+                st["orders"] = [
+                    x for x in st.get("orders", [])
+                    if str(x.get("eventId") or "") != event_id
+                ]
+
+                server.put_state(st)
+
+                return json_response(start_response, {
+                    "ok": True,
+                    "state": st
+                })
+
+            if path == "/api/email-confirmation":
+                evento = req.get("event") or {}
+                salon_id = str(req.get("salonId") or evento.get("salonId") or "")
 
                 if evento.get("status") != "Confirmada":
                     raise ValueError("La reserva todavía no está confirmada")
 
-                if evento.get("whatsappConfirmationSentAt"):
+                if evento.get("emailConfirmationSentAt"):
                     return json_response(start_response, {
                         "ok": True,
                         "alreadySent": True,
-                        "sentAt": evento.get("whatsappConfirmationSentAt"),
-                        "messageId": evento.get("whatsappConfirmationMessageId", "")
+                        "sentAt": evento.get("emailConfirmationSentAt")
                     })
 
+                st = server.get_state()
                 salon = next(
                     (x for x in st.get("salons", []) if str(x.get("id")) == salon_id),
                     None
                 )
 
-                message_id = enviar_confirmacion_whatsapp(evento, salon)
+                enviar_confirmacion_email(evento, salon)
                 sent_at = time.strftime("%Y-%m-%dT%H:%M:%S")
-
-                evento["whatsappConfirmationSentAt"] = sent_at
-                evento["whatsappConfirmationMessageId"] = message_id
-                evento["whatsappConfirmationError"] = ""
-                server.put_state(st)
-
-                return json_response(start_response, {
-                    "ok": True,
-                    "sentAt": sent_at,
-                    "messageId": message_id
-                })
+                return json_response(start_response, {"ok": True, "sentAt": sent_at})
 
         # -----------------------
         # API - PUT
