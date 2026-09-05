@@ -5048,3 +5048,333 @@
   setTimeout(ensurePersistentActions, 300);
 
 })();
+
+
+// ============================================================
+// V19 - STOCK EDITAR/BORRAR + DASHBOARD RESPETA RESET FINANCIERO
+// ============================================================
+(function () {
+  'use strict';
+
+  data.stockProducts = data.stockProducts || [];
+  data.stockPurchases = data.stockPurchases || [];
+  data.financeResets = data.financeResets || [];
+  data.auditLog = data.auditLog || [];
+
+  function v19SalonProducts() {
+    return (data.stockProducts || []).filter(p => p.salonId === session?.salonId);
+  }
+
+  function v19Product(pid) {
+    return (data.stockProducts || []).find(p => p.id === pid && p.salonId === session?.salonId);
+  }
+
+  function v19ResetActive() {
+    return (data.financeResets || []).some(r => r.salonId === session?.salonId && r.active);
+  }
+
+  function v19ForceFinancialZero() {
+    const sid = session?.salonId;
+    if (!sid) return;
+
+    const eventIds = new Set(
+      (data.events || []).filter(e => e.salonId === sid).map(e => e.id)
+    );
+
+    // movimientos reales / automáticos
+    data.movements = (data.movements || []).filter(m => m.salonId !== sid);
+
+    // asignaciones que generan gastos automáticos
+    data.assignments = (data.assignments || []).filter(a => !eventIds.has(a.eventId));
+
+    // reservas: conservar datos operativos, limpiar números financieros
+    (data.events || []).forEach(e => {
+      if (e.salonId !== sid) return;
+      e.paid = 0;
+      e.baseTotal = 0;
+      e.total = 0;
+      e.extras = [];
+      e.extrasTotal = 0;
+      e.stockItems = [];
+      e.stockItemsTotal = 0;
+      e.financeResetLocked = true;
+
+      if (e.finalNumbers) {
+        e.finalNumbers.total = 0;
+        e.finalNumbers.paid = 0;
+        e.finalNumbers.balance = 0;
+        e.finalNumbers.staffCost = 0;
+        e.finalNumbers.supplierCost = 0;
+        e.finalNumbers.net = 0;
+      }
+    });
+
+    // saldos proveedor
+    (data.suppliers || []).forEach(p => {
+      if (p.salonId === sid) p.balance = 0;
+    });
+  }
+
+  // ----------------------------------------------------------
+  // STOCK - EDICIÓN COMPLETA
+  // ----------------------------------------------------------
+  window.editStockProductV19 = function(pid) {
+    const p = v19Product(pid);
+    if (!p) return toast('Producto no encontrado');
+
+    showModal(`
+      <div class="modal-title">
+        <div>
+          <h2>✏️ Editar producto</h2>
+          <p>${esc(p.name || '')}</p>
+        </div>
+        <button class="ghost small" onclick="closeModal()">✕</button>
+      </div>
+
+      <form id="v19-stock-edit-form">
+        <div class="form-grid">
+          <div class="field span2">
+            <label>Producto</label>
+            <input name="name" required value="${esc(p.name || '')}">
+          </div>
+
+          <div class="field span2">
+            <label>Descripción</label>
+            <input name="description" value="${esc(p.description || '')}" placeholder="Ej: botella 2,25 L">
+          </div>
+
+          <div class="field">
+            <label>Categoría</label>
+            <input name="category" value="${esc(p.category || '')}" placeholder="Bebidas">
+          </div>
+
+          <div class="field">
+            <label>Stock actual</label>
+            <input name="stock" type="number" min="0" step="1" value="${Number(p.stock || 0)}" required>
+          </div>
+
+          <div class="field">
+            <label>Stock mínimo</label>
+            <input name="minStock" type="number" min="0" step="1" value="${Number(p.minStock || 0)}">
+          </div>
+
+          <div class="field">
+            <label>Costo unitario</label>
+            <input name="costPrice" type="number" min="0" step="1" value="${Number(p.costPrice || 0)}">
+          </div>
+
+          <div class="field">
+            <label>Precio de venta</label>
+            <input name="salePrice" type="number" min="0" step="1" value="${Number(p.salePrice || 0)}">
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+          <button class="primary">Guardar cambios</button>
+        </div>
+      </form>
+    `);
+
+    document.querySelector('#v19-stock-edit-form').onsubmit = ev => {
+      ev.preventDefault();
+      const f = Object.fromEntries(new FormData(ev.target));
+
+      p.name = String(f.name || '').trim();
+      p.description = String(f.description || '').trim();
+      p.category = String(f.category || '').trim();
+      p.stock = Number(f.stock || 0);
+      p.minStock = Number(f.minStock || 0);
+      p.costPrice = Number(f.costPrice || 0);
+      p.salePrice = Number(f.salePrice || 0);
+      p.updatedAt = new Date().toISOString();
+
+      save();
+      closeModal();
+      toast('Producto actualizado');
+      if (typeof renderStockV12 === 'function') renderStockV12();
+      else renderSalonShell();
+    };
+  };
+
+  // ----------------------------------------------------------
+  // STOCK - BORRADO PROTEGIDO
+  // ----------------------------------------------------------
+  window.deleteStockProductV19 = function(pid) {
+    const p = v19Product(pid);
+    if (!p) return toast('Producto no encontrado');
+
+    showModal(`
+      <div class="modal-title">
+        <div>
+          <h2>🗑 Borrar producto</h2>
+          <p>${esc(p.name || '')}</p>
+        </div>
+        <button class="ghost small" onclick="closeModal()">✕</button>
+      </div>
+
+      <form id="v19-stock-delete-form">
+        <div class="field">
+          <label>Contraseña administrativa del salón</label>
+          <input name="password" type="password" required>
+        </div>
+
+        <div class="field">
+          <label>Motivo</label>
+          <textarea name="reason" required placeholder="Ej: producto cargado por error"></textarea>
+        </div>
+
+        <div class="admin-notice attention">
+          <span>⚠️</span>
+          <div>
+            <b>Se eliminará el producto del catálogo de stock.</b>
+            <small>Las fiestas ya cerradas conservan su detalle histórico.</small>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+          <button class="danger">Borrar producto</button>
+        </div>
+      </form>
+    `);
+
+    document.querySelector('#v19-stock-delete-form').onsubmit = ev => {
+      ev.preventDefault();
+      const f = Object.fromEntries(new FormData(ev.target));
+      const s = salon();
+
+      if (String(f.password || '') !== String(s?.password || '')) {
+        return toast('Contraseña incorrecta');
+      }
+
+      data.stockProducts = (data.stockProducts || []).filter(x => x.id !== pid);
+
+      data.auditLog.push({
+        id:id(),
+        salonId:session.salonId,
+        action:'Borrar producto de stock',
+        productId:pid,
+        productName:p.name || '',
+        reason:String(f.reason || '').trim(),
+        createdAt:new Date().toISOString()
+      });
+
+      save();
+      closeModal();
+      toast('Producto eliminado');
+      if (typeof renderStockV12 === 'function') renderStockV12();
+      else renderSalonShell();
+    };
+  };
+
+  // ----------------------------------------------------------
+  // STOCK - agrega botones visibles Editar y Borrar en cada fila
+  // ----------------------------------------------------------
+  const prevStockV19 = window.renderStockV12;
+
+  if (typeof prevStockV19 === 'function') {
+    window.renderStockV12 = function() {
+      prevStockV19();
+
+      const rows = [...document.querySelectorAll('#content table tbody tr')];
+      const products = v19SalonProducts();
+
+      rows.forEach((tr, idx) => {
+        const p = products[idx];
+        if (!p) return;
+
+        let actionCell = tr.querySelector('td:last-child');
+        if (!actionCell) return;
+
+        if (!actionCell.querySelector('[data-v19-edit-stock]')) {
+          const edit = document.createElement('button');
+          edit.className = 'secondary small';
+          edit.setAttribute('data-v19-edit-stock','1');
+          edit.textContent = '✏️ Editar';
+          edit.onclick = () => editStockProductV19(p.id);
+          actionCell.prepend(edit);
+        }
+
+        if (!actionCell.querySelector('[data-v19-delete-stock]')) {
+          const del = document.createElement('button');
+          del.className = 'danger small';
+          del.style.marginLeft = '6px';
+          del.setAttribute('data-v19-delete-stock','1');
+          del.textContent = '🗑 Borrar';
+          del.onclick = () => deleteStockProductV19(p.id);
+          actionCell.appendChild(del);
+        }
+      });
+    };
+
+    // Si ya estamos en Stock al cargar V19, refresca la vista.
+    setTimeout(() => {
+      try {
+        if (view === 'stock' && session?.role === 'salon') renderStockV12();
+      } catch (_) {}
+    }, 300);
+  }
+
+  // ----------------------------------------------------------
+  // INICIO/DASHBOARD - SI HAY RESET ACTIVO, TODO FINANCIERO EN $0
+  // ----------------------------------------------------------
+  const prevDashboardV19 = renderDashboard;
+
+  renderDashboard = function() {
+    if (v19ResetActive()) {
+      v19ForceFinancialZero();
+    }
+
+    prevDashboardV19();
+
+    if (!v19ResetActive()) return;
+
+    // Asegura visualmente que Inicio no muestre cifras financieras viejas.
+    const cards = [...document.querySelectorAll('#content .card.stat')];
+
+    cards.forEach(card => {
+      const label = String(card.querySelector('small')?.textContent || '').toLowerCase();
+      const value = card.querySelector('strong');
+      const em = card.querySelector('em');
+
+      if (!value) return;
+
+      if (label.includes('facturado') || label.includes('cobrado') || label.includes('por cobrar')) {
+        value.textContent = money(0);
+        if (em) em.textContent =
+          label.includes('cobrado') ? '0% del total' :
+          label.includes('por cobrar') ? 'Sin saldos pendientes' :
+          'Sin movimientos desde el reinicio';
+      }
+    });
+
+    // Guarda otra vez el estado limpio por si wrappers viejos intentaron reconstruirlo.
+    setTimeout(() => {
+      if (!v19ResetActive()) return;
+      v19ForceFinancialZero();
+      save();
+    }, 100);
+  };
+
+  // También limpia antes de cualquier render de salón.
+  const prevSalonViewV19 = renderSalonView;
+  renderSalonView = function() {
+    if (v19ResetActive()) {
+      v19ForceFinancialZero();
+    }
+    return prevSalonViewV19();
+  };
+
+  // Limpieza persistente al recargar.
+  setTimeout(() => {
+    try {
+      if (session?.role === 'salon' && v19ResetActive()) {
+        v19ForceFinancialZero();
+        save();
+        if (view === 'dashboard') renderDashboard();
+      }
+    } catch (_) {}
+  }, 1400);
+
+})();
