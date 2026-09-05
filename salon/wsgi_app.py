@@ -89,47 +89,97 @@ def _require_salon_password(st, salon_id, password):
     return salon
 
 
-def _email_credentials_for_salon(salon_id):
+def _email_config_for_salon(salon_id):
     secrets = _load_email_secrets()
     cfg = secrets.get(str(salon_id)) or {}
-    email = str(cfg.get("email") or "").strip()
-    app_password = str(cfg.get("appPassword") or "").replace(" ", "").strip()
 
-    # Respaldo para el salón que ya estaba configurado en WSGI.
-    if not email or not app_password:
+    # Compatibilidad con configuraciones antiguas de Gmail.
+    if cfg.get("email") and cfg.get("appPassword") and not cfg.get("smtpHost"):
+        cfg = {
+            **cfg,
+            "provider": "gmail",
+            "smtpHost": "smtp.gmail.com",
+            "smtpPort": 587,
+            "smtpSecurity": "starttls",
+        }
+
+    # Respaldo del WSGI para el salón inicial.
+    if not cfg.get("email") or not cfg.get("appPassword"):
         email = os.environ.get("FIESTACONTROL_EMAIL", "").strip()
-        app_password = os.environ.get("FIESTACONTROL_EMAIL_PASSWORD", "").replace(" ", "").strip()
+        password = os.environ.get("FIESTACONTROL_EMAIL_PASSWORD", "").replace(" ", "").strip()
+        if email and password:
+            cfg = {
+                "provider": "gmail",
+                "email": email,
+                "appPassword": password,
+                "smtpHost": "smtp.gmail.com",
+                "smtpPort": 587,
+                "smtpSecurity": "starttls",
+            }
 
-    if not email or not app_password:
+    required = ("email", "appPassword", "smtpHost", "smtpPort", "smtpSecurity")
+    if any(not cfg.get(k) for k in required):
         raise ValueError("Este salón todavía no configuró su correo de confirmaciones")
-    return email, app_password
+
+    try:
+        port = int(cfg.get("smtpPort"))
+    except Exception:
+        raise ValueError("El puerto SMTP no es válido")
+
+    security = str(cfg.get("smtpSecurity") or "").lower()
+    if security not in ("starttls", "ssl", "none"):
+        raise ValueError("El tipo de seguridad SMTP no es válido")
+
+    return {
+        "provider": str(cfg.get("provider") or "other"),
+        "email": str(cfg.get("email") or "").strip(),
+        "appPassword": str(cfg.get("appPassword") or "").replace(" ", "").strip(),
+        "smtpHost": str(cfg.get("smtpHost") or "").strip(),
+        "smtpPort": port,
+        "smtpSecurity": security,
+    }
 
 
-def _send_email(gmail_user, gmail_password, destinatario, subject, text_body, html_body):
+def _send_email(config, destinatario, subject, text_body, html_body):
+    sender = config["email"]
+    password = config["appPassword"]
+    host = config["smtpHost"]
+    port = int(config["smtpPort"])
+    security = config["smtpSecurity"]
+
     msg = EmailMessage()
     msg["Subject"] = subject
-    msg["From"] = f"FiestaControl <{gmail_user}>"
+    msg["From"] = f"FiestaControl <{sender}>"
     msg["To"] = destinatario
     msg.set_content(text_body)
     msg.add_alternative(html_body, subtype="html")
 
     context = ssl.create_default_context()
+
     try:
-        with smtplib.SMTP("smtp.gmail.com", 587, timeout=25) as smtp:
-            smtp.ehlo()
-            smtp.starttls(context=context)
-            smtp.ehlo()
-            smtp.login(gmail_user, gmail_password)
-            smtp.send_message(msg)
+        if security == "ssl":
+            with smtplib.SMTP_SSL(host, port, timeout=25, context=context) as smtp:
+                smtp.login(sender, password)
+                smtp.send_message(msg)
+        else:
+            with smtplib.SMTP(host, port, timeout=25) as smtp:
+                smtp.ehlo()
+                if security == "starttls":
+                    smtp.starttls(context=context)
+                    smtp.ehlo()
+                smtp.login(sender, password)
+                smtp.send_message(msg)
+
     except smtplib.SMTPAuthenticationError:
-        raise ValueError("Google rechazó el acceso. Revisá el Gmail y la contraseña de aplicación.")
+        raise ValueError(
+            "El proveedor rechazó el acceso. Revisá el email y la contraseña/clave de aplicación."
+        )
     except Exception as ex:
         raise ValueError(f"No se pudo enviar el email: {ex}")
 
-
 def enviar_confirmacion_email(evento, salon):
     salon_id = str(evento.get("salonId") or "")
-    gmail_user, gmail_password = _email_credentials_for_salon(salon_id)
+    email_config = _email_config_for_salon(salon_id)
 
     destinatario = str(evento.get("email") or "").strip()
     if "@" not in destinatario:
@@ -171,7 +221,7 @@ def enviar_confirmacion_email(evento, salon):
       </div>
     </div>
     """
-    _send_email(gmail_user, gmail_password, destinatario, subject, text_body, html_body)
+    _send_email(email_config, destinatario, subject, text_body, html_body)
 
 
 def application(environ, start_response):
@@ -197,10 +247,15 @@ def application(environ, start_response):
             salon_id = str((qs.get("salonId") or [""])[0])
             cfg = (_load_email_secrets().get(salon_id) or {})
             configured = bool(cfg.get("email") and cfg.get("appPassword"))
+            provider = str(cfg.get("provider") or ("gmail" if configured else ""))
             return json_response(start_response, {
                 "ok": True,
                 "configured": configured,
-                "email": str(cfg.get("email") or "")
+                "provider": provider,
+                "email": str(cfg.get("email") or ""),
+                "smtpHost": str(cfg.get("smtpHost") or ""),
+                "smtpPort": cfg.get("smtpPort") or "",
+                "smtpSecurity": str(cfg.get("smtpSecurity") or "")
             })
 
         if method == "GET" and path == "/api/bootstrap.js":
@@ -235,21 +290,41 @@ def application(environ, start_response):
 
             if path == "/api/salon-email":
                 salon_id = str(req.get("salonId") or "")
+                provider = str(req.get("provider") or "other").strip().lower()
                 email = str(req.get("email") or "").strip()
+                smtp_host = str(req.get("smtpHost") or "").strip()
+                smtp_port_raw = str(req.get("smtpPort") or "").strip()
+                smtp_security = str(req.get("smtpSecurity") or "starttls").strip().lower()
                 app_password = str(req.get("appPassword") or "").replace(" ", "").strip()
                 salon_password = str(req.get("salonPassword") or "")
 
                 st = server.get_state()
                 _require_salon_password(st, salon_id, salon_password)
 
+                if provider not in ("gmail", "outlook", "yahoo", "other"):
+                    raise ValueError("Proveedor de correo inválido")
                 if "@" not in email:
-                    raise ValueError("Ingresá un Gmail válido")
-                if len(app_password) < 12:
-                    raise ValueError("La contraseña de aplicación no parece válida")
+                    raise ValueError("Ingresá un email válido")
+                if not smtp_host or "." not in smtp_host:
+                    raise ValueError("Servidor SMTP inválido")
+                try:
+                    smtp_port = int(smtp_port_raw)
+                except Exception:
+                    raise ValueError("Puerto SMTP inválido")
+                if smtp_port < 1 or smtp_port > 65535:
+                    raise ValueError("Puerto SMTP inválido")
+                if smtp_security not in ("starttls", "ssl", "none"):
+                    raise ValueError("Seguridad SMTP inválida")
+                if len(app_password) < 4:
+                    raise ValueError("La contraseña o clave de aplicación no parece válida")
 
                 secrets = _load_email_secrets()
                 secrets[salon_id] = {
+                    "provider": provider,
                     "email": email,
+                    "smtpHost": smtp_host,
+                    "smtpPort": smtp_port,
+                    "smtpSecurity": smtp_security,
                     "appPassword": app_password,
                     "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%S")
                 }
@@ -261,12 +336,11 @@ def application(environ, start_response):
                 salon_password = str(req.get("salonPassword") or "")
                 st = server.get_state()
                 salon = _require_salon_password(st, salon_id, salon_password)
-                gmail_user, gmail_password = _email_credentials_for_salon(salon_id)
+                email_config = _email_config_for_salon(salon_id)
                 salon_name = str(salon.get("name") or "FiestaControl")
                 _send_email(
-                    gmail_user,
-                    gmail_password,
-                    gmail_user,
+                    email_config,
+                    email_config["email"],
                     f"Prueba de correo - {salon_name}",
                     f"El correo de {salon_name} quedó configurado correctamente en FiestaControl.",
                     f"<h2>✅ Correo configurado</h2><p>El correo de <b>{salon_name}</b> quedó configurado correctamente en FiestaControl.</p>"

@@ -242,87 +242,234 @@
   };
 
   // -------------------------------
-  // Email propio de cada salón
+  // Email propio de cada salón - Gmail / Outlook / Yahoo / Otro SMTP
   // -------------------------------
+  const FC_EMAIL_PRESETS = {
+    gmail:   {host:'smtp.gmail.com', port:'587', security:'starttls'},
+    outlook: {host:'smtp-mail.outlook.com', port:'587', security:'starttls'},
+    yahoo:   {host:'smtp.mail.yahoo.com', port:'465', security:'ssl'},
+    other:   {host:'', port:'587', security:'starttls'}
+  };
+
+  function applyEmailProviderPreset(form) {
+    const provider = form.querySelector('[name="provider"]')?.value || 'gmail';
+    const p = FC_EMAIL_PRESETS[provider] || FC_EMAIL_PRESETS.other;
+    const host = form.querySelector('[name="smtpHost"]');
+    const port = form.querySelector('[name="smtpPort"]');
+    const security = form.querySelector('[name="smtpSecurity"]');
+    const custom = provider === 'other';
+
+    if (!custom) {
+      if (host) host.value = p.host;
+      if (port) port.value = p.port;
+      if (security) security.value = p.security;
+    }
+
+    [host, port, security].forEach(el => {
+      if (!el) return;
+      el.disabled = !custom;
+      el.closest('.field')?.classList.toggle('muted', !custom);
+    });
+
+    const passLabel = form.querySelector('[data-fc-mail-pass-label]');
+    if (passLabel) {
+      passLabel.textContent =
+        provider === 'gmail' ? 'Contraseña de aplicación de Google' :
+        provider === 'outlook' ? 'Contraseña / clave de aplicación de Outlook' :
+        provider === 'yahoo' ? 'Contraseña de aplicación de Yahoo' :
+        'Contraseña SMTP / clave de aplicación';
+    }
+  }
+
   async function loadSalonEmailStatus() {
-    const s=salon();
-    if(!s) return;
-    try{
-      const r=await fetch(`/api/salon-email?salonId=${encodeURIComponent(s.id)}`,{cache:'no-store'});
-      const res=await r.json();
-      const dot=document.querySelector('#fc-mail-dot');
-      const text=document.querySelector('#fc-mail-status-text');
-      const email=document.querySelector('#fc-mail-current');
-      if(dot) dot.classList.toggle('ok',!!res.configured);
-      if(text) text.textContent=res.configured?'Configurado':'Sin configurar';
-      if(email) email.textContent=res.email||'';
-    }catch(_){}
+    const s = salon();
+    if (!s) return;
+    try {
+      const r = await fetch(`/api/salon-email?salonId=${encodeURIComponent(s.id)}`, {cache:'no-store'});
+      const res = await r.json();
+
+      const dot = document.querySelector('#fc-mail-dot');
+      const text = document.querySelector('#fc-mail-status-text');
+      const current = document.querySelector('#fc-mail-current');
+
+      if (dot) dot.classList.toggle('ok', !!res.configured);
+      if (text) text.textContent = res.configured ? 'Configurado' : 'Sin configurar';
+      if (current) {
+        const providerName = {
+          gmail:'Gmail', outlook:'Outlook / Hotmail', yahoo:'Yahoo', other:'Otro SMTP'
+        }[res.provider] || '';
+        current.textContent = res.email ? `${res.email}${providerName ? ' · ' + providerName : ''}` : '';
+      }
+
+      const form = document.querySelector('#fc-mail-form');
+      if (form && res.configured) {
+        if (res.provider) form.querySelector('[name="provider"]').value = res.provider;
+        if (res.email) form.querySelector('[name="email"]').value = res.email;
+        applyEmailProviderPreset(form);
+
+        if (res.provider === 'other') {
+          if (res.smtpHost) form.querySelector('[name="smtpHost"]').value = res.smtpHost;
+          if (res.smtpPort) form.querySelector('[name="smtpPort"]').value = String(res.smtpPort);
+          if (res.smtpSecurity) form.querySelector('[name="smtpSecurity"]').value = res.smtpSecurity;
+        }
+      }
+    } catch (_) {}
   }
 
   function appendEmailSettings() {
-    if(session?.role!=='salon') return;
-    const content=document.querySelector('#content');
-    if(!content || document.querySelector('#fc-mail-settings')) return;
+    if (session?.role !== 'salon') return;
+    const content = document.querySelector('#content');
+    if (!content || document.querySelector('#fc-mail-settings')) return;
 
-    const s=salon();
-    const card=document.createElement('div');
-    card.className='card fc-mail-card';
-    card.id='fc-mail-settings';
-    card.innerHTML=`
+    const s = salon();
+    const card = document.createElement('div');
+    card.className = 'card fc-mail-card';
+    card.id = 'fc-mail-settings';
+    card.innerHTML = `
       <div class="section-title">
-        <div><h3>✉️ Correo para confirmaciones</h3><small class="muted">Cada salón envía las confirmaciones desde su propio Gmail.</small></div>
+        <div>
+          <h3>✉️ Correo para confirmaciones</h3>
+          <small class="muted">Cada salón puede enviar desde Gmail, Outlook/Hotmail, Yahoo o cualquier cuenta con SMTP.</small>
+        </div>
       </div>
+
       <div class="fc-mail-status">
         <span id="fc-mail-dot" class="fc-mail-dot"></span>
-        <div><b id="fc-mail-status-text">Comprobando...</b><small id="fc-mail-current" class="muted" style="display:block"></small></div>
+        <div>
+          <b id="fc-mail-status-text">Comprobando...</b>
+          <small id="fc-mail-current" class="muted" style="display:block"></small>
+        </div>
       </div>
+
       <form id="fc-mail-form">
         <div class="form-grid">
-          <div class="field span2"><label>Gmail del salón</label><input name="email" type="email" required placeholder="reservas.tusalon@gmail.com"></div>
-          <div class="field"><label>Contraseña de aplicación de Google</label><input name="appPassword" type="password" required placeholder="16 caracteres" autocomplete="new-password"></div>
-          <div class="field"><label>Contraseña de FiestaControl</label><input name="salonPassword" type="password" required autocomplete="current-password"></div>
+          <div class="field">
+            <label>Proveedor</label>
+            <select name="provider">
+              <option value="gmail">Gmail</option>
+              <option value="outlook">Outlook / Hotmail</option>
+              <option value="yahoo">Yahoo</option>
+              <option value="other">Otro correo / SMTP</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label>Email remitente</label>
+            <input name="email" type="email" required placeholder="reservas@tusalon.com">
+          </div>
+
+          <div class="field">
+            <label>Servidor SMTP</label>
+            <input name="smtpHost" required placeholder="smtp.tuproveedor.com">
+          </div>
+
+          <div class="field">
+            <label>Puerto</label>
+            <input name="smtpPort" type="number" min="1" max="65535" required value="587">
+          </div>
+
+          <div class="field">
+            <label>Seguridad</label>
+            <select name="smtpSecurity">
+              <option value="starttls">STARTTLS / TLS</option>
+              <option value="ssl">SSL</option>
+              <option value="none">Sin cifrado</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label data-fc-mail-pass-label>Contraseña / clave de aplicación</label>
+            <input name="appPassword" type="password" required autocomplete="new-password">
+          </div>
+
+          <div class="field span2">
+            <label>Contraseña de FiestaControl</label>
+            <input name="salonPassword" type="password" required autocomplete="current-password">
+          </div>
         </div>
+
         <div class="form-actions">
           <button type="button" class="secondary" id="fc-mail-test">Enviar prueba</button>
           <button class="primary">Guardar correo</button>
         </div>
-        <p class="fc-mail-help">La contraseña de aplicación de Google se guarda aparte de los datos visibles del salón y nunca se devuelve al navegador.</p>
-      </form>`;
+
+        <p class="fc-mail-help">
+          La clave del correo se guarda fuera de los datos visibles del salón. Algunos proveedores exigen
+          una contraseña de aplicación y otros pueden bloquear el acceso SMTP con usuario/contraseña.
+        </p>
+      </form>
+    `;
 
     content.appendChild(card);
 
-    const form=card.querySelector('#fc-mail-form');
+    const form = card.querySelector('#fc-mail-form');
+    form.querySelector('[name="provider"]').onchange = () => applyEmailProviderPreset(form);
+    applyEmailProviderPreset(form);
 
-    form.onsubmit=async e=>{
+    form.onsubmit = async e => {
       e.preventDefault();
-      const f=Object.fromEntries(new FormData(form));
-      const r=await fetch('/api/salon-email',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({salonId:s.id,email:f.email,appPassword:f.appPassword,salonPassword:f.salonPassword}),cache:'no-store'});
-      const res=await r.json().catch(()=>({}));
-      if(!r.ok||!res.ok){toast(res.error||'No se pudo guardar');return;}
-      form.querySelector('[name="appPassword"]').value='';
-      form.querySelector('[name="salonPassword"]').value='';
+      const f = Object.fromEntries(new FormData(form));
+
+      // Los campos deshabilitados no entran en FormData; recuperamos sus valores.
+      f.smtpHost = form.querySelector('[name="smtpHost"]').value;
+      f.smtpPort = form.querySelector('[name="smtpPort"]').value;
+      f.smtpSecurity = form.querySelector('[name="smtpSecurity"]').value;
+
+      const r = await fetch('/api/salon-email', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          salonId:s.id,
+          provider:f.provider,
+          email:f.email,
+          smtpHost:f.smtpHost,
+          smtpPort:f.smtpPort,
+          smtpSecurity:f.smtpSecurity,
+          appPassword:f.appPassword,
+          salonPassword:f.salonPassword
+        }),
+        cache:'no-store'
+      });
+
+      const res = await r.json().catch(() => ({}));
+      if (!r.ok || !res.ok) {
+        toast(res.error || 'No se pudo guardar');
+        return;
+      }
+
+      form.querySelector('[name="appPassword"]').value = '';
+      form.querySelector('[name="salonPassword"]').value = '';
       toast('Correo del salón configurado');
       loadSalonEmailStatus();
     };
 
-    card.querySelector('#fc-mail-test').onclick=async()=>{
-      const f=Object.fromEntries(new FormData(form));
-      if(!f.salonPassword){toast('Ingresá la contraseña de FiestaControl');return;}
-      const r=await fetch('/api/salon-email-test',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({salonId:s.id,salonPassword:f.salonPassword}),cache:'no-store'});
-      const res=await r.json().catch(()=>({}));
-      toast(res.ok?'Email de prueba enviado':(res.error||'No se pudo enviar la prueba'));
+    card.querySelector('#fc-mail-test').onclick = async () => {
+      const salonPassword = form.querySelector('[name="salonPassword"]').value;
+      if (!salonPassword) {
+        toast('Ingresá la contraseña de FiestaControl');
+        return;
+      }
+
+      const r = await fetch('/api/salon-email-test', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({salonId:s.id, salonPassword}),
+        cache:'no-store'
+      });
+
+      const res = await r.json().catch(() => ({}));
+      toast(res.ok ? 'Email de prueba enviado' : (res.error || 'No se pudo enviar la prueba'));
     };
 
     loadSalonEmailStatus();
   }
 
-  if(typeof renderProfile==='function'){
-    const originalRenderProfile=renderProfile;
-    renderProfile=function(){
+  if (typeof renderProfile === 'function') {
+    const originalRenderProfile = renderProfile;
+    renderProfile = function () {
       originalRenderProfile();
-      setTimeout(appendEmailSettings,0);
+      setTimeout(appendEmailSettings, 0);
     };
   }
+
 })();
