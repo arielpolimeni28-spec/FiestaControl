@@ -3652,3 +3652,704 @@
   };
 
 })();
+
+
+// ============================================================
+// V14 - BORRADO CON MOTIVO + LIMPIEZA DE MOVIMIENTOS + RESET FINANZAS/STOCK
+// ============================================================
+(function () {
+  'use strict';
+
+  data.auditLog = data.auditLog || [];
+
+  function v14SalonPasswordOk(pass) {
+    const s = salon();
+    return !!s && String(s.password || '') === String(pass || '');
+  }
+
+  function v14Audit(action, reason, extra={}) {
+    data.auditLog.push({
+      id:id(),
+      salonId:session?.salonId || '',
+      action,
+      reason:String(reason || ''),
+      createdAt:new Date().toISOString(),
+      ...extra
+    });
+  }
+
+  function v14DeleteEventCascade(eid, reason) {
+    const e = (data.events || []).find(x => x.id === eid);
+    if (!e) return false;
+
+    const sid = e.salonId;
+
+    // Devuelve al stock lo consumido por esa fiesta antes de borrar.
+    (e.stockItems || []).forEach(item => {
+      const p = (data.stockProducts || []).find(x => x.id === item.id && x.salonId === sid);
+      if (p) p.stock = Number(p.stock || 0) + Number(item.quantity || 0);
+    });
+
+    data.events = (data.events || []).filter(x => x.id !== eid);
+    data.assignments = (data.assignments || []).filter(x => x.eventId !== eid);
+    data.orders = (data.orders || []).filter(x => x.eventId !== eid);
+    data.cards = (data.cards || []).filter(x => x.eventId !== eid);
+    data.movements = (data.movements || []).filter(x => x.eventId !== eid);
+
+    v14Audit('Borrar fiesta', reason, {
+      eventId:eid,
+      eventName:e.child || '',
+      eventDate:e.date || ''
+    });
+
+    return true;
+  }
+
+  // ----------------------------------------------------------
+  // BORRAR FIESTA: contraseña + motivo + cascade real
+  // ----------------------------------------------------------
+  window.v14DeleteEventPrompt = function (eid) {
+    const e = (data.events || []).find(x => x.id === eid);
+    if (!e) return;
+
+    showModal(`
+      <div class="modal-title">
+        <div>
+          <h2>🗑 Borrar fiesta</h2>
+          <p>${esc(e.child || '')} · ${esc(e.date || '')}</p>
+        </div>
+        <button class="ghost small" onclick="closeModal()">✕</button>
+      </div>
+
+      <form id="v14-delete-event-form">
+        <div class="field">
+          <label>Contraseña del salón</label>
+          <input name="password" type="password" required>
+        </div>
+
+        <div class="field">
+          <label>Motivo del borrado</label>
+          <textarea name="reason" required placeholder="Ej: reserva duplicada, cancelación cargada por error..."></textarea>
+        </div>
+
+        <div class="admin-notice attention">
+          <span>⚠️</span>
+          <div>
+            <b>Se eliminará la fiesta y sus movimientos relacionados.</b>
+            <small>También se quitan asignaciones, pedidos y cargos de esa fiesta. Los productos de stock reservados vuelven al stock.</small>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+          <button class="danger">Borrar definitivamente</button>
+        </div>
+      </form>
+    `);
+
+    $('#v14-delete-event-form').onsubmit = ev => {
+      ev.preventDefault();
+      const f = Object.fromEntries(new FormData(ev.target));
+
+      if (!v14SalonPasswordOk(f.password)) {
+        return toast('Contraseña incorrecta');
+      }
+
+      if (!String(f.reason || '').trim()) {
+        return toast('Ingresá el motivo');
+      }
+
+      if (!v14DeleteEventCascade(eid, f.reason)) {
+        return toast('No se pudo borrar la fiesta');
+      }
+
+      save();
+      closeModal();
+      toast('Fiesta y movimientos eliminados');
+      renderSalonShell();
+    };
+  };
+
+  // Reemplaza cualquier botón anterior de borrar fiesta.
+  const prevOpenEventV14 = window.openEvent;
+  window.openEvent = function (eid) {
+    prevOpenEventV14(eid);
+
+    const modal = document.querySelector('#modal-body');
+    if (!modal) return;
+
+    // Quita botones viejos de borrado, si existen.
+    [...modal.querySelectorAll('button')].forEach(btn => {
+      const txt = (btn.textContent || '').toLowerCase();
+      if (txt.includes('borrar fiesta') || txt.includes('eliminar fiesta')) btn.remove();
+    });
+
+    const toolbar = modal.querySelector('.toolbar');
+    if (!toolbar) return;
+
+    const btn = document.createElement('button');
+    btn.className = 'danger small';
+    btn.textContent = '🗑 Borrar fiesta';
+    btn.onclick = () => window.v14DeleteEventPrompt(eid);
+    toolbar.appendChild(btn);
+  };
+
+  // ----------------------------------------------------------
+  // RESET FINANZAS + STOCK A CERO
+  // Mantiene salones y proveedores.
+  // ----------------------------------------------------------
+  window.v14ResetFinanceStock = function () {
+    showModal(`
+      <div class="modal-title">
+        <div>
+          <h2>🔄 Volver movimientos y stock a cero</h2>
+          <p>El salón conservará sus datos, proveedores, personal y reservas.</p>
+        </div>
+        <button class="ghost small" onclick="closeModal()">✕</button>
+      </div>
+
+      <form id="v14-reset-form">
+        <div class="field">
+          <label>Contraseña del salón</label>
+          <input name="password" type="password" required>
+        </div>
+
+        <div class="field">
+          <label>Motivo</label>
+          <textarea name="reason" required placeholder="Ej: inicio de operación real, limpieza de datos de prueba..."></textarea>
+        </div>
+
+        <div class="admin-notice attention">
+          <span>⚠️</span>
+          <div>
+            <b>Esto pondrá en cero los movimientos de plata y el stock del salón.</b>
+            <small>No borra salones, proveedores, personal ni reservas.</small>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+          <button class="danger">Confirmar puesta a cero</button>
+        </div>
+      </form>
+    `);
+
+    $('#v14-reset-form').onsubmit = ev => {
+      ev.preventDefault();
+      const f = Object.fromEntries(new FormData(ev.target));
+
+      if (!v14SalonPasswordOk(f.password)) {
+        return toast('Contraseña incorrecta');
+      }
+
+      if (!String(f.reason || '').trim()) {
+        return toast('Ingresá el motivo');
+      }
+
+      const sid = session.salonId;
+
+      // Movimientos financieros del salón a cero.
+      data.movements = (data.movements || []).filter(m => m.salonId !== sid);
+
+      // Compras de stock del salón a cero.
+      data.stockPurchases = (data.stockPurchases || []).filter(c => c.salonId !== sid);
+
+      // Stock físico a cero, sin borrar catálogo de productos.
+      (data.stockProducts || []).forEach(p => {
+        if (p.salonId === sid) p.stock = 0;
+      });
+
+      // Reinicia importes cobrados de reservas del salón para empezar limpio.
+      (data.events || []).forEach(e => {
+        if (e.salonId === sid) {
+          e.paid = 0;
+          if (e.finalNumbers) {
+            e.finalNumbers.paid = 0;
+            e.finalNumbers.balance = Number(e.total || 0);
+          }
+        }
+      });
+
+      // Proveedores quedan, pero sus saldos se ponen en cero.
+      (data.suppliers || []).forEach(p => {
+        if (p.salonId === sid) p.balance = 0;
+      });
+
+      // Pedidos quedan como historial, pero si estaban pagados se dejan sin pago asociado.
+      (data.orders || []).forEach(o => {
+        if (o.salonId === sid) {
+          o.paidAt = null;
+          o.paymentMethod = '';
+          o.paymentReference = '';
+          o.paidAmount = 0;
+          if (o.status === 'Pagado') o.status = 'Pendiente';
+        }
+      });
+
+      v14Audit('Reset finanzas y stock', f.reason, {salonId:sid});
+
+      save();
+      closeModal();
+      toast('Movimientos y stock puestos a cero');
+      renderSalonShell();
+    };
+  };
+
+  // ----------------------------------------------------------
+  // BOTÓN EN FINANZAS
+  // ----------------------------------------------------------
+  const prevRenderFinanceV14 = renderFinance;
+  renderFinance = function () {
+    prevRenderFinanceV14();
+
+    const content = document.querySelector('#content');
+    if (!content || document.querySelector('#v14-reset-finance-btn')) return;
+
+    const toolbar = document.createElement('div');
+    toolbar.className = 'toolbar';
+    toolbar.style.marginBottom = '16px';
+    toolbar.id = 'v14-reset-finance-btn';
+    toolbar.innerHTML = `
+      <button class="danger" onclick="v14ResetFinanceStock()">
+        🔄 Volver movimientos y stock a cero
+      </button>
+    `;
+
+    content.prepend(toolbar);
+  };
+
+})();
+
+
+// ============================================================
+// V15 - USUARIOS INTERNOS POR SALÓN + ROLES GENERALES
+// ============================================================
+(function () {
+  'use strict';
+
+  data.salonUsers = data.salonUsers || [];
+
+  const V15_ROLE_LABELS = {
+    general: 'Operador general',
+    reservas: 'Reservas',
+    caja: 'Caja / Finanzas',
+    stock: 'Stock / Proveedores'
+  };
+
+  const V15_ROLE_VIEWS = {
+    general: ['dashboard','calendar','events','cards','community','staff','suppliers','stock','finance'],
+    reservas: ['dashboard','calendar','events','cards','community'],
+    caja: ['dashboard','events','suppliers','stock','finance'],
+    stock: ['dashboard','suppliers','stock']
+  };
+
+  function v15IsOwner() {
+    return session?.role === 'salon' && session?.isSalonOwner !== false && !session?.salonUserId;
+  }
+
+  function v15CurrentUser() {
+    return session?.salonUserId
+      ? (data.salonUsers || []).find(u => u.id === session.salonUserId)
+      : null;
+  }
+
+  function v15AllowedView(v) {
+    if (v15IsOwner()) return true;
+    const u = v15CurrentUser();
+    if (!u) return true;
+    return (V15_ROLE_VIEWS[u.accessRole] || V15_ROLE_VIEWS.general).includes(v);
+  }
+
+  function v15UsersForSalon() {
+    return (data.salonUsers || []).filter(u => u.salonId === session?.salonId);
+  }
+
+  // ----------------------------------------------------------
+  // LOGIN: dueño del salón o usuario interno
+  // ----------------------------------------------------------
+  const prevBindAuthV15 = bindAuth;
+
+  bindAuth = function(mode) {
+    if (mode !== 'login') return prevBindAuthV15(mode);
+
+    const form = $('#auth-form');
+    if (!form) return;
+
+    form.onsubmit = e => {
+      e.preventDefault();
+      const f = Object.fromEntries(new FormData(e.target));
+      const email = String(f.email || '').toLowerCase().trim();
+      const password = String(f.password || '');
+
+      const admin = (data.admins || []).find(x =>
+        String(x.email || '').toLowerCase() === email &&
+        String(x.password || '') === password
+      );
+      if (admin) {
+        setSession({role:'superadmin',userId:admin.id,name:admin.name});
+        return render();
+      }
+
+      const s = (data.salons || []).find(x =>
+        String(x.email || '').toLowerCase() === email &&
+        String(x.password || '') === password
+      );
+      if (s) {
+        if (s.status === 'Pendiente') return toast('Tu salón aún está pendiente de aprobación');
+        if (s.status === 'Suspendido') return toast('La cuenta del salón está suspendida');
+
+        setSession({
+          role:'salon',
+          salonId:s.id,
+          name:s.owner,
+          isSalonOwner:true,
+          accessRole:'owner'
+        });
+        return render();
+      }
+
+      const u = (data.salonUsers || []).find(x =>
+        String(x.email || '').toLowerCase() === email &&
+        String(x.password || '') === password
+      );
+
+      if (!u) return toast('Email o contraseña incorrectos');
+      if (u.status === 'Inactivo') return toast('Este usuario está inactivo');
+
+      const su = (data.salons || []).find(x => x.id === u.salonId);
+      if (!su) return toast('El salón de este usuario no existe');
+      if (su.status === 'Pendiente') return toast('El salón aún está pendiente de aprobación');
+      if (su.status === 'Suspendido') return toast('La cuenta del salón está suspendida');
+
+      setSession({
+        role:'salon',
+        salonId:su.id,
+        salonUserId:u.id,
+        name:u.name,
+        isSalonOwner:false,
+        accessRole:u.accessRole || 'general'
+      });
+
+      render();
+    };
+  };
+
+  // ----------------------------------------------------------
+  // BLOQUEO DE MÓDULOS SEGÚN ROL
+  // ----------------------------------------------------------
+  const prevRenderSalonViewV15 = renderSalonView;
+
+  renderSalonView = function() {
+    if (!v15AllowedView(view)) {
+      setTitle('Acceso restringido','Este módulo no está habilitado para tu usuario');
+      $('#content').innerHTML = `
+        <div class="card">
+          <div class="empty">
+            Tu usuario tiene rol <b>${esc(V15_ROLE_LABELS[v15CurrentUser()?.accessRole] || 'Operador')}</b>
+            y no tiene acceso a esta sección.
+          </div>
+        </div>
+      `;
+      return;
+    }
+    return prevRenderSalonViewV15();
+  };
+
+  const prevRenderSalonShellV15 = renderSalonShell;
+
+  renderSalonShell = function() {
+    prevRenderSalonShellV15();
+
+    setTimeout(() => {
+      if (v15IsOwner()) return;
+
+      const u = v15CurrentUser();
+      if (!u) return;
+
+      $$('[data-v]').forEach(btn => {
+        const v = btn.dataset.v;
+        if (!v15AllowedView(v)) btn.style.display = 'none';
+      });
+
+      // Mi salón nunca visible para usuario interno.
+      const profileBtn = document.querySelector('[data-v="profile"]');
+      if (profileBtn) profileBtn.style.display = 'none';
+
+      const userChip = document.querySelector('.user-chip');
+      if (userChip) {
+        userChip.innerHTML = `
+          <b>${esc(u.name)}</b>
+          <small>${esc(V15_ROLE_LABELS[u.accessRole] || 'Operador')}</small>
+        `;
+      }
+    }, 0);
+  };
+
+  // ----------------------------------------------------------
+  // ADMINISTRACIÓN DE USUARIOS - SOLO DUEÑO DEL SALÓN
+  // ----------------------------------------------------------
+  function v15AppendUsersPanel() {
+    if (!v15IsOwner()) return;
+    const content = document.querySelector('#content');
+    if (!content || document.querySelector('#v15-users-panel')) return;
+
+    const users = v15UsersForSalon();
+
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.id = 'v15-users-panel';
+    card.style.marginTop = '16px';
+
+    card.innerHTML = `
+      <div class="section-title">
+        <div>
+          <h3>👤 Usuarios del salón</h3>
+          <small class="muted">
+            Creá usuarios para empleados sin compartir la contraseña administrativa del salón.
+          </small>
+        </div>
+        <button class="primary small" onclick="openSalonUserV15()">+ Crear usuario</button>
+      </div>
+
+      ${
+        users.length
+          ? `<div class="table-wrap">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>Nombre</th>
+                    <th>Email</th>
+                    <th>Rol</th>
+                    <th>Estado</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${users.map(u => `
+                    <tr>
+                      <td><b>${esc(u.name)}</b></td>
+                      <td>${esc(u.email)}</td>
+                      <td>${esc(V15_ROLE_LABELS[u.accessRole] || 'Operador general')}</td>
+                      <td>
+                        <span class="pill ${u.status === 'Inactivo' ? 'suspendido' : 'aprobado'}">
+                          ${esc(u.status || 'Activo')}
+                        </span>
+                      </td>
+                      <td style="white-space:nowrap">
+                        <button class="secondary small" onclick="openSalonUserV15('${esc(u.id)}')">Editar</button>
+                        <button class="ghost small" onclick="toggleSalonUserV15('${esc(u.id)}')">
+                          ${u.status === 'Inactivo' ? 'Activar' : 'Desactivar'}
+                        </button>
+                        <button class="danger small" onclick="deleteSalonUserV15('${esc(u.id)}')">Borrar</button>
+                      </td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>`
+          : `<div class="empty">Todavía no creaste usuarios internos.</div>`
+      }
+
+      <div class="admin-notice" style="margin-top:14px">
+        <span>🔐</span>
+        <div>
+          <b>Los usuarios internos pueden cargar información, pero no tienen la contraseña administrativa.</b>
+          <small>Los borrados y el reset financiero siguen requiriendo la contraseña del dueño del salón.</small>
+        </div>
+      </div>
+    `;
+
+    content.appendChild(card);
+  }
+
+  const prevRenderProfileV15 = renderProfile;
+  renderProfile = function() {
+    if (!v15IsOwner()) {
+      setTitle('Mi usuario','Datos de acceso');
+      const u = v15CurrentUser();
+      $('#content').innerHTML = `
+        <div class="card">
+          <div class="section-title"><h3>${esc(u?.name || 'Usuario')}</h3></div>
+          <p><b>Rol:</b> ${esc(V15_ROLE_LABELS[u?.accessRole] || 'Operador')}</p>
+          <p><b>Email:</b> ${esc(u?.email || '')}</p>
+        </div>
+      `;
+      return;
+    }
+
+    prevRenderProfileV15();
+    setTimeout(v15AppendUsersPanel, 0);
+  };
+
+  window.openSalonUserV15 = function(uid='') {
+    if (!v15IsOwner()) return toast('Solo el dueño del salón puede administrar usuarios');
+
+    const u = uid ? (data.salonUsers || []).find(x => x.id === uid) : null;
+
+    showModal(`
+      <div class="modal-title">
+        <div>
+          <h2>${u ? 'Editar usuario' : 'Crear usuario'}</h2>
+          <p>Acceso interno del salón</p>
+        </div>
+        <button class="ghost small" onclick="closeModal()">✕</button>
+      </div>
+
+      <form id="v15-user-form">
+        <div class="form-grid">
+          <div class="field">
+            <label>Nombre</label>
+            <input name="name" required value="${esc(u?.name || '')}">
+          </div>
+
+          <div class="field">
+            <label>Email</label>
+            <input name="email" type="email" required value="${esc(u?.email || '')}">
+          </div>
+
+          <div class="field">
+            <label>Rol</label>
+            <select name="accessRole">
+              <option value="general" ${u?.accessRole==='general'?'selected':''}>Operador general</option>
+              <option value="reservas" ${u?.accessRole==='reservas'?'selected':''}>Reservas</option>
+              <option value="caja" ${u?.accessRole==='caja'?'selected':''}>Caja / Finanzas</option>
+              <option value="stock" ${u?.accessRole==='stock'?'selected':''}>Stock / Proveedores</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label>${u ? 'Nueva contraseña (opcional)' : 'Contraseña'}</label>
+            <input name="password" type="password" ${u ? '' : 'required'} minlength="4">
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:12px;padding:12px">
+          <small class="muted">
+            Operador general: carga general. Reservas: agenda y fiestas.
+            Caja: finanzas, cobros y proveedores. Stock: stock y proveedores.
+          </small>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+          <button class="primary">${u ? 'Guardar cambios' : 'Crear usuario'}</button>
+        </div>
+      </form>
+    `);
+
+    $('#v15-user-form').onsubmit = ev => {
+      ev.preventDefault();
+      const f = Object.fromEntries(new FormData(ev.target));
+      const email = String(f.email || '').toLowerCase().trim();
+
+      const duplicateSalon = (data.salons || []).some(s =>
+        String(s.email || '').toLowerCase() === email
+      );
+
+      const duplicateUser = (data.salonUsers || []).some(x =>
+        x.id !== u?.id && String(x.email || '').toLowerCase() === email
+      );
+
+      if (duplicateSalon || duplicateUser) {
+        return toast('Ese email ya está registrado');
+      }
+
+      if (u) {
+        u.name = f.name;
+        u.email = email;
+        u.accessRole = f.accessRole;
+        if (f.password) u.password = f.password;
+      } else {
+        data.salonUsers.push({
+          id:id(),
+          salonId:session.salonId,
+          name:f.name,
+          email,
+          password:f.password,
+          accessRole:f.accessRole || 'general',
+          status:'Activo',
+          createdAt:new Date().toISOString()
+        });
+      }
+
+      save();
+      closeModal();
+      toast(u ? 'Usuario actualizado' : 'Usuario creado');
+      renderProfile();
+    };
+  };
+
+  window.toggleSalonUserV15 = function(uid) {
+    if (!v15IsOwner()) return toast('Solo el dueño del salón puede administrar usuarios');
+
+    const u = (data.salonUsers || []).find(x => x.id === uid);
+    if (!u) return;
+
+    u.status = u.status === 'Inactivo' ? 'Activo' : 'Inactivo';
+    save();
+    renderProfile();
+    toast(`Usuario ${u.status === 'Activo' ? 'activado' : 'desactivado'}`);
+  };
+
+  window.deleteSalonUserV15 = function(uid) {
+    if (!v15IsOwner()) return toast('Solo el dueño del salón puede administrar usuarios');
+
+    const u = (data.salonUsers || []).find(x => x.id === uid);
+    if (!u) return;
+
+    showModal(`
+      <div class="modal-title">
+        <div>
+          <h2>Borrar usuario</h2>
+          <p>${esc(u.name)}</p>
+        </div>
+      </div>
+
+      <form id="v15-delete-user-form">
+        <div class="field">
+          <label>Contraseña administrativa del salón</label>
+          <input name="password" type="password" required>
+        </div>
+
+        <div class="field">
+          <label>Motivo</label>
+          <textarea name="reason" required></textarea>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+          <button class="danger">Borrar usuario</button>
+        </div>
+      </form>
+    `);
+
+    $('#v15-delete-user-form').onsubmit = ev => {
+      ev.preventDefault();
+      const f = Object.fromEntries(new FormData(ev.target));
+      const s = salon();
+
+      if (String(f.password || '') !== String(s?.password || '')) {
+        return toast('Contraseña incorrecta');
+      }
+
+      data.salonUsers = (data.salonUsers || []).filter(x => x.id !== uid);
+
+      data.auditLog = data.auditLog || [];
+      data.auditLog.push({
+        id:id(),
+        salonId:session.salonId,
+        action:'Borrar usuario interno',
+        reason:f.reason,
+        userName:u.name,
+        userEmail:u.email,
+        createdAt:new Date().toISOString()
+      });
+
+      save();
+      closeModal();
+      toast('Usuario eliminado');
+      renderProfile();
+    };
+  };
+
+})();
