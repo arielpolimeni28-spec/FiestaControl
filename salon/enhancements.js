@@ -4353,3 +4353,353 @@
   };
 
 })();
+
+
+// ============================================================
+// V16 - FIX REAL: USUARIOS VISIBLES + RESET FINANCIERO TOTAL
+// ============================================================
+(function () {
+  'use strict';
+
+  data.salonUsers = data.salonUsers || [];
+  data.auditLog = data.auditLog || [];
+
+  function v16IsOwner() {
+    return session?.role === 'salon' && !session?.salonUserId;
+  }
+
+  function v16SalonUsers() {
+    return (data.salonUsers || []).filter(u => u.salonId === session?.salonId);
+  }
+
+  function v16OwnerPasswordOk(pass) {
+    const s = typeof salon === 'function' ? salon() : null;
+    return !!s && String(s.password || '') === String(pass || '');
+  }
+
+  // ----------------------------------------------------------
+  // NUEVA VISTA VISIBLE EN MENU: USUARIOS Y ROLES
+  // ----------------------------------------------------------
+  try {
+    if (Array.isArray(salonNav) && !salonNav.some(x => x[0] === 'users')) {
+      const profileIndex = salonNav.findIndex(x => x[0] === 'profile');
+      const pos = profileIndex >= 0 ? profileIndex : salonNav.length;
+      salonNav.splice(pos, 0, ['users','👤','Usuarios y roles']);
+    }
+  } catch (_) {}
+
+  window.renderUsersV16 = function () {
+    if (!v16IsOwner()) {
+      setTitle('Usuarios y roles','Acceso restringido');
+      $('#content').innerHTML = `
+        <div class="card"><div class="empty">
+          Solo el administrador del salón puede administrar usuarios.
+        </div></div>`;
+      return;
+    }
+
+    const users = v16SalonUsers();
+
+    setTitle('Usuarios y roles','Usuarios internos del salón');
+    $('#content').innerHTML = `
+      <div class="toolbar">
+        <button class="primary" onclick="openUserV16()">+ Crear usuario</button>
+      </div>
+
+      <div class="card">
+        <div class="section-title">
+          <div>
+            <h3>Usuarios del salón</h3>
+            <small class="muted">Cada empleado entra con su propio email y contraseña.</small>
+          </div>
+        </div>
+
+        ${
+          users.length ? `
+            <div class="table-wrap">
+              <table class="table">
+                <thead>
+                  <tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Estado</th><th></th></tr>
+                </thead>
+                <tbody>
+                  ${users.map(u => `
+                    <tr>
+                      <td><b>${esc(u.name || '')}</b></td>
+                      <td>${esc(u.email || '')}</td>
+                      <td>${esc(
+                        u.accessRole === 'reservas' ? 'Reservas' :
+                        u.accessRole === 'caja' ? 'Caja / Finanzas' :
+                        u.accessRole === 'stock' ? 'Stock / Proveedores' :
+                        'Operador general'
+                      )}</td>
+                      <td>${esc(u.status || 'Activo')}</td>
+                      <td>
+                        <button class="secondary small" onclick="openUserV16('${esc(u.id)}')">Editar</button>
+                        <button class="ghost small" onclick="toggleUserV16('${esc(u.id)}')">
+                          ${u.status === 'Inactivo' ? 'Activar' : 'Desactivar'}
+                        </button>
+                      </td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          ` : `<div class="empty">Todavía no hay usuarios internos.</div>`
+        }
+      </div>
+    `;
+  };
+
+  const prevRenderSalonViewV16 = renderSalonView;
+  renderSalonView = function () {
+    if (view === 'users') return window.renderUsersV16();
+    return prevRenderSalonViewV16();
+  };
+
+  window.openUserV16 = function(uid='') {
+    if (!v16IsOwner()) return toast('Solo el administrador del salón puede crear usuarios');
+
+    const u = uid ? (data.salonUsers || []).find(x => x.id === uid) : null;
+
+    showModal(`
+      <div class="modal-title">
+        <div>
+          <h2>${u ? 'Editar usuario' : 'Crear usuario'}</h2>
+          <p>Usuario interno del salón</p>
+        </div>
+        <button class="ghost small" onclick="closeModal()">✕</button>
+      </div>
+
+      <form id="v16-user-form">
+        <div class="form-grid">
+          <div class="field">
+            <label>Nombre</label>
+            <input name="name" required value="${esc(u?.name || '')}">
+          </div>
+          <div class="field">
+            <label>Email</label>
+            <input name="email" type="email" required value="${esc(u?.email || '')}">
+          </div>
+          <div class="field">
+            <label>Rol</label>
+            <select name="accessRole">
+              <option value="general" ${u?.accessRole==='general'?'selected':''}>Operador general</option>
+              <option value="reservas" ${u?.accessRole==='reservas'?'selected':''}>Reservas</option>
+              <option value="caja" ${u?.accessRole==='caja'?'selected':''}>Caja / Finanzas</option>
+              <option value="stock" ${u?.accessRole==='stock'?'selected':''}>Stock / Proveedores</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>${u ? 'Nueva contraseña (dejar vacío para mantener)' : 'Contraseña'}</label>
+            <input name="password" type="password" ${u ? '' : 'required'}>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+          <button class="primary">${u ? 'Guardar' : 'Crear usuario'}</button>
+        </div>
+      </form>
+    `);
+
+    $('#v16-user-form').onsubmit = ev => {
+      ev.preventDefault();
+      const f = Object.fromEntries(new FormData(ev.target));
+      const email = String(f.email || '').trim().toLowerCase();
+
+      const duplicateSalon = (data.salons || []).some(s => String(s.email || '').trim().toLowerCase() === email);
+      const duplicateUser = (data.salonUsers || []).some(x => x.id !== u?.id && String(x.email || '').trim().toLowerCase() === email);
+
+      if (duplicateSalon || duplicateUser) return toast('Ese email ya está registrado');
+
+      if (u) {
+        u.name = f.name;
+        u.email = email;
+        u.accessRole = f.accessRole || 'general';
+        if (f.password) u.password = f.password;
+      } else {
+        data.salonUsers.push({
+          id:id(),
+          salonId:session.salonId,
+          name:f.name,
+          email,
+          password:f.password,
+          accessRole:f.accessRole || 'general',
+          status:'Activo',
+          createdAt:new Date().toISOString()
+        });
+      }
+
+      save();
+      closeModal();
+      toast(u ? 'Usuario actualizado' : 'Usuario creado');
+      renderUsersV16();
+    };
+  };
+
+  window.toggleUserV16 = function(uid) {
+    if (!v16IsOwner()) return;
+    const u = (data.salonUsers || []).find(x => x.id === uid);
+    if (!u) return;
+    u.status = u.status === 'Inactivo' ? 'Activo' : 'Inactivo';
+    save();
+    renderUsersV16();
+  };
+
+  // ----------------------------------------------------------
+  // RESET TOTAL REAL DE FINANZAS Y STOCK
+  // ----------------------------------------------------------
+  window.resetEverythingV16 = function () {
+    if (!v16IsOwner()) return toast('Solo el administrador del salón puede hacer este reset');
+
+    showModal(`
+      <div class="modal-title">
+        <div>
+          <h2>🔄 Volver finanzas y stock a cero</h2>
+          <p>Este reset deja realmente todos los importes financieros en $0.</p>
+        </div>
+        <button class="ghost small" onclick="closeModal()">✕</button>
+      </div>
+
+      <form id="v16-reset-form">
+        <div class="field">
+          <label>Contraseña administrativa del salón</label>
+          <input name="password" type="password" required>
+        </div>
+
+        <div class="field">
+          <label>Motivo</label>
+          <textarea name="reason" required placeholder="Ej: borrar movimientos de prueba e iniciar operación real"></textarea>
+        </div>
+
+        <div class="admin-notice attention">
+          <span>⚠️</span>
+          <div>
+            <b>Se pondrá todo lo financiero de este salón en cero.</b>
+            <small>No se borran el salón, los proveedores, el personal, los productos ni las fiestas.</small>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+          <button class="danger">Confirmar reset total</button>
+        </div>
+      </form>
+    `);
+
+    $('#v16-reset-form').onsubmit = ev => {
+      ev.preventDefault();
+      const f = Object.fromEntries(new FormData(ev.target));
+
+      if (!v16OwnerPasswordOk(f.password)) return toast('Contraseña incorrecta');
+      if (!String(f.reason || '').trim()) return toast('Ingresá el motivo');
+
+      const sid = session.salonId;
+      const salonEventIds = new Set(
+        (data.events || []).filter(e => e.salonId === sid).map(e => e.id)
+      );
+
+      // 1) Borra movimientos reales y automáticos del salón.
+      data.movements = (data.movements || []).filter(m => m.salonId !== sid);
+
+      // 2) Borra historial de compras, pero conserva catálogo de productos.
+      data.stockPurchases = (data.stockPurchases || []).filter(c => c.salonId !== sid);
+
+      // 3) Stock físico a cero.
+      (data.stockProducts || []).forEach(p => {
+        if (p.salonId === sid) p.stock = 0;
+      });
+
+      // 4) Elimina asignaciones financieras de fiestas existentes para que
+      //    los sincronizadores viejos no vuelvan a generar gastos.
+      data.assignments = (data.assignments || []).filter(a => !salonEventIds.has(a.eventId));
+
+      // 5) Deja cada reserva existente financieramente en cero,
+      //    conservando fecha, cliente, horarios y datos generales.
+      (data.events || []).forEach(e => {
+        if (e.salonId !== sid) return;
+
+        e.paid = 0;
+        e.baseTotal = 0;
+        e.total = 0;
+        e.extras = [];
+        e.extrasTotal = 0;
+        e.stockItems = [];
+        e.stockItemsTotal = 0;
+
+        if (e.finalNumbers) {
+          e.finalNumbers.total = 0;
+          e.finalNumbers.paid = 0;
+          e.finalNumbers.balance = 0;
+          e.finalNumbers.staffCost = 0;
+          e.finalNumbers.supplierCost = 0;
+          e.finalNumbers.net = 0;
+        }
+      });
+
+      // 6) Proveedores se conservan, saldo a cero.
+      (data.suppliers || []).forEach(p => {
+        if (p.salonId === sid) p.balance = 0;
+      });
+
+      // 7) Pedidos se conservan como datos, pero sin pago financiero.
+      (data.orders || []).forEach(o => {
+        if (o.salonId === sid || salonEventIds.has(o.eventId)) {
+          o.paidAt = null;
+          o.paymentMethod = '';
+          o.paymentReference = '';
+          o.paidAmount = 0;
+          if (o.status === 'Pagado') o.status = 'Pendiente';
+        }
+      });
+
+      data.auditLog.push({
+        id:id(),
+        salonId:sid,
+        action:'RESET TOTAL FINANZAS Y STOCK',
+        reason:String(f.reason || '').trim(),
+        createdAt:new Date().toISOString()
+      });
+
+      save();
+      closeModal();
+      toast('Finanzas y stock quedaron en cero');
+      renderSalonShell();
+
+      setTimeout(() => {
+        try {
+          view = 'finance';
+          renderSalonView();
+        } catch (_) {}
+      }, 100);
+    };
+  };
+
+  // Último override para que el botón siempre ejecute el reset correcto V16.
+  const prevFinanceV16 = renderFinance;
+  renderFinance = function () {
+    prevFinanceV16();
+
+    const content = document.querySelector('#content');
+    if (!content) return;
+
+    // Quita botones anteriores de reset para evitar ejecutar lógica vieja.
+    [...content.querySelectorAll('button')].forEach(btn => {
+      const txt = String(btn.textContent || '').toLowerCase();
+      if (txt.includes('volver movimientos') || txt.includes('stock a cero') || txt.includes('puesta a cero')) {
+        btn.remove();
+      }
+    });
+
+    const bar = document.createElement('div');
+    bar.className = 'toolbar';
+    bar.style.marginBottom = '16px';
+    bar.innerHTML = `
+      <button class="danger" onclick="resetEverythingV16()">
+        🔄 Volver TODO finanzas y stock a cero
+      </button>
+    `;
+    content.prepend(bar);
+  };
+
+})();
