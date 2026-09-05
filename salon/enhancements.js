@@ -938,3 +938,375 @@
   };
 
 })();
+
+
+// ============================================================
+// ADICIONALES DEL SALÓN + SUMA AUTOMÁTICA EN LA RESERVA
+// ============================================================
+(function () {
+  'use strict';
+
+  data.salonExtras = data.salonExtras || [];
+
+  function fcExtrasForSalon() {
+    return (data.salonExtras || []).filter(x => x.salonId === session?.salonId);
+  }
+
+  function fcSelectedExtrasTotal(items) {
+    return (items || []).reduce((sum, x) => sum + Number(x.amount || 0), 0);
+  }
+
+  function fcOpenExtraForm(extraId) {
+    const extra = extraId ? (data.salonExtras || []).find(x => x.id === extraId) : null;
+
+    showModal(`
+      <div class="modal-title">
+        <div>
+          <h2>${extra ? 'Editar adicional' : 'Nuevo adicional'}</h2>
+          <p>Servicios extra que el salón puede sumar a una reserva.</p>
+        </div>
+        <button class="ghost small" onclick="closeModal()">✕</button>
+      </div>
+
+      <form id="fc-extra-form">
+        <div class="form-grid">
+          <div class="field">
+            <label>Nombre del adicional</label>
+            <input name="name" required placeholder="Ej: Mago, catering, inflable" value="${esc(extra?.name || '')}">
+          </div>
+          <div class="field">
+            <label>Precio</label>
+            <input name="amount" type="number" min="0" step="1" required value="${Number(extra?.amount || 0)}">
+          </div>
+          <div class="field span2">
+            <label>Descripción opcional</label>
+            <input name="description" placeholder="Detalle del servicio" value="${esc(extra?.description || '')}">
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+          <button class="primary">${extra ? 'Guardar cambios' : 'Agregar adicional'}</button>
+        </div>
+      </form>
+    `);
+
+    document.querySelector('#fc-extra-form').onsubmit = ev => {
+      ev.preventDefault();
+      const f = Object.fromEntries(new FormData(ev.target));
+      f.amount = Number(f.amount || 0);
+
+      if (extra) {
+        Object.assign(extra, f);
+      } else {
+        data.salonExtras.push({
+          id:id(),
+          salonId:session.salonId,
+          ...f
+        });
+      }
+
+      save();
+      closeModal();
+      toast(extra ? 'Adicional actualizado' : 'Adicional agregado');
+      renderSalonShell();
+    };
+  }
+
+  window.openExtraForm = fcOpenExtraForm;
+
+  window.deleteSalonExtra = function (extraId) {
+    const extra = (data.salonExtras || []).find(x => x.id === extraId);
+    if (!extra) return;
+
+    showModal(`
+      <div class="modal-title">
+        <div>
+          <h2>Eliminar adicional</h2>
+          <p>${esc(extra.name)}</p>
+        </div>
+        <button class="ghost small" onclick="closeModal()">✕</button>
+      </div>
+
+      <p>Esto lo quitará del catálogo para nuevas reservas. Las fiestas ya guardadas conservarán el adicional y su importe.</p>
+
+      <div class="form-actions">
+        <button class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="danger" id="fc-delete-extra-confirm">Eliminar</button>
+      </div>
+    `);
+
+    document.querySelector('#fc-delete-extra-confirm').onclick = () => {
+      data.salonExtras = (data.salonExtras || []).filter(x => x.id !== extraId);
+      save();
+      closeModal();
+      toast('Adicional eliminado');
+      renderSalonShell();
+    };
+  };
+
+  function fcAppendExtrasSettings() {
+    if (session?.role !== 'salon') return;
+    const content = document.querySelector('#content');
+    if (!content || document.querySelector('#fc-extras-settings')) return;
+
+    const extras = fcExtrasForSalon();
+    const card = document.createElement('div');
+    card.id = 'fc-extras-settings';
+    card.className = 'card';
+    card.style.marginTop = '16px';
+
+    card.innerHTML = `
+      <div class="section-title">
+        <div>
+          <h3>➕ Adicionales de las fiestas</h3>
+          <small class="muted">Creá servicios extras para poder sumarlos después a cada reserva.</small>
+        </div>
+        <button class="primary small" onclick="openExtraForm()">+ Nuevo adicional</button>
+      </div>
+
+      ${
+        extras.length
+          ? `<div class="table-wrap">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>Adicional</th>
+                    <th>Descripción</th>
+                    <th>Precio</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${extras.map(x => `
+                    <tr>
+                      <td><b>${esc(x.name)}</b></td>
+                      <td>${esc(x.description || '-')}</td>
+                      <td><b>${money(x.amount || 0)}</b></td>
+                      <td style="white-space:nowrap">
+                        <button class="secondary small" onclick="openExtraForm('${esc(x.id)}')">Editar</button>
+                        <button class="danger small" onclick="deleteSalonExtra('${esc(x.id)}')">Borrar</button>
+                      </td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>`
+          : `<div class="empty">
+              Todavía no cargaste adicionales. Ejemplos: Mago, Catering, Inflable.
+            </div>`
+      }
+    `;
+
+    content.appendChild(card);
+  }
+
+  // Agrega el catálogo a Mi salón.
+  if (typeof renderProfile === 'function') {
+    const fcPreviousRenderProfileExtras = renderProfile;
+    renderProfile = function () {
+      fcPreviousRenderProfileExtras();
+      setTimeout(fcAppendExtrasSettings, 0);
+    };
+  }
+
+  // Agrega selección de adicionales a Nueva/Editar fiesta.
+  const fcPreviousOpenEventFormExtras = window.openEventForm;
+
+  window.openEventForm = function (eid) {
+    const existing = eid ? (data.events || []).find(e => e.id === eid) : null;
+    const previousExtras = existing?.extras || [];
+    const previousExtraIds = new Set(previousExtras.map(x => x.id));
+    const previousExtrasTotal = fcSelectedExtrasTotal(previousExtras);
+
+    fcPreviousOpenEventFormExtras(eid);
+
+    const form = document.querySelector('#event-form');
+    if (!form) return;
+
+    const totalInput = form.querySelector('input[name="total"]');
+    if (!totalInput) return;
+
+    // "total" pasa a representar el precio base en pantalla.
+    const totalField = totalInput.closest('.field');
+    const totalLabel = totalField?.querySelector('label');
+    if (totalLabel) totalLabel.textContent = 'Precio base de la fiesta';
+
+    const inferredBase = existing
+      ? Number(existing.baseTotal ?? (Number(existing.total || 0) - previousExtrasTotal))
+      : Number(totalInput.value || 0);
+
+    totalInput.value = Number.isFinite(inferredBase) ? Math.max(0, inferredBase) : 0;
+
+    const extras = fcExtrasForSalon();
+    const actions = form.querySelector('.form-actions');
+
+    const block = document.createElement('div');
+    block.className = 'field span2';
+    block.style.marginTop = '8px';
+    block.innerHTML = `
+      <label>Adicionales</label>
+
+      ${
+        extras.length
+          ? `<div class="card" style="padding:12px;margin-top:6px">
+              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px">
+                ${extras.map(x => `
+                  <label style="display:flex;align-items:center;gap:8px;padding:8px;border:1px solid #ddd;border-radius:10px;cursor:pointer">
+                    <input
+                      type="checkbox"
+                      name="fcExtraId"
+                      value="${esc(x.id)}"
+                      data-amount="${Number(x.amount || 0)}"
+                      ${previousExtraIds.has(x.id) ? 'checked' : ''}
+                    >
+                    <span>
+                      <b>${esc(x.name)}</b>
+                      <small style="display:block">${esc(x.description || '')}${x.description ? ' · ' : ''}${money(x.amount || 0)}</small>
+                    </span>
+                  </label>
+                `).join('')}
+              </div>
+            </div>`
+          : `<div class="empty" style="margin-top:6px">
+              No hay adicionales cargados. Podés crearlos desde Mi salón.
+            </div>`
+      }
+
+      <div class="grid stats" style="grid-template-columns:repeat(3,1fr);margin-top:12px">
+        <div class="card">
+          <small class="muted">Precio base</small>
+          <strong id="fc-extra-base">${money(inferredBase)}</strong>
+        </div>
+        <div class="card">
+          <small class="muted">Adicionales</small>
+          <strong id="fc-extra-total">${money(previousExtrasTotal)}</strong>
+        </div>
+        <div class="card">
+          <small class="muted">Total reserva</small>
+          <strong id="fc-grand-total">${money(inferredBase + previousExtrasTotal)}</strong>
+        </div>
+      </div>
+    `;
+
+    if (actions) actions.before(block);
+
+    function recalcExtras() {
+      const base = Number(totalInput.value || 0);
+      const selected = [...form.querySelectorAll('input[name="fcExtraId"]:checked')];
+      const extrasTotal = selected.reduce((sum, el) => sum + Number(el.dataset.amount || 0), 0);
+
+      const baseEl = document.querySelector('#fc-extra-base');
+      const extrasEl = document.querySelector('#fc-extra-total');
+      const grandEl = document.querySelector('#fc-grand-total');
+
+      if (baseEl) baseEl.textContent = money(base);
+      if (extrasEl) extrasEl.textContent = money(extrasTotal);
+      if (grandEl) grandEl.textContent = money(base + extrasTotal);
+    }
+
+    totalInput.addEventListener('input', recalcExtras);
+    form.querySelectorAll('input[name="fcExtraId"]').forEach(el => {
+      el.addEventListener('change', recalcExtras);
+    });
+
+    const originalSubmit = form.onsubmit;
+
+    form.onsubmit = function (ev) {
+      const selectedIds = [...form.querySelectorAll('input[name="fcExtraId"]:checked')]
+        .map(el => el.value);
+
+      const baseTotal = Number(totalInput.value || 0);
+      const selectedExtras = selectedIds.map(extraId => {
+        const x = (data.salonExtras || []).find(e => e.id === extraId);
+        return x ? {
+          id:x.id,
+          name:x.name,
+          description:x.description || '',
+          amount:Number(x.amount || 0)
+        } : null;
+      }).filter(Boolean);
+
+      const extrasTotal = fcSelectedExtrasTotal(selectedExtras);
+
+      // Antes de guardar, el campo total lleva el total final.
+      totalInput.value = baseTotal + extrasTotal;
+
+      const result = originalSubmit ? originalSubmit.call(form, ev) : undefined;
+
+      // Ubica el evento y guarda el desglose.
+      setTimeout(() => {
+        let target = eid ? (data.events || []).find(e => e.id === eid) : null;
+
+        if (!target) {
+          const candidates = (data.events || []).filter(e => e.salonId === session.salonId);
+          target = candidates[candidates.length - 1] || null;
+        }
+
+        if (!target) return;
+
+        target.baseTotal = baseTotal;
+        target.extras = selectedExtras;
+        target.extrasTotal = extrasTotal;
+        target.total = baseTotal + extrasTotal;
+
+        save();
+      }, 0);
+
+      return result;
+    };
+  };
+
+  // Muestra adicionales en el detalle de fiesta.
+  const fcPreviousOpenEventExtras = window.openEvent;
+
+  window.openEvent = function (eid) {
+    fcPreviousOpenEventExtras(eid);
+
+    const event = (data.events || []).find(e => e.id === eid);
+    if (!event) return;
+
+    const extras = event.extras || [];
+    const extrasTotal = Number(event.extrasTotal ?? fcSelectedExtrasTotal(extras));
+    const baseTotal = Number(event.baseTotal ?? (Number(event.total || 0) - extrasTotal));
+
+    const modalBody = document.querySelector('#modal-body');
+    if (!modalBody || modalBody.querySelector('[data-fc-extras-detail]')) return;
+
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.style.marginTop = '16px';
+    card.setAttribute('data-fc-extras-detail','1');
+
+    card.innerHTML = `
+      <div class="section-title">
+        <h3>➕ Adicionales de la reserva</h3>
+      </div>
+
+      ${
+        extras.length
+          ? `<div class="list">
+              ${extras.map(x => `
+                <div class="list-item">
+                  <div>
+                    <strong>${esc(x.name)}</strong>
+                    <small>${esc(x.description || '')}</small>
+                  </div>
+                  <b>${money(x.amount || 0)}</b>
+                </div>
+              `).join('')}
+            </div>`
+          : `<div class="empty">Esta fiesta no tiene adicionales.</div>`
+      }
+
+      <div class="grid stats" style="grid-template-columns:repeat(3,1fr);margin-top:12px">
+        <div class="card"><small class="muted">Base</small><strong>${money(baseTotal)}</strong></div>
+        <div class="card"><small class="muted">Adicionales</small><strong>${money(extrasTotal)}</strong></div>
+        <div class="card"><small class="muted">Total</small><strong>${money(Number(event.total || 0))}</strong></div>
+      </div>
+    `;
+
+    modalBody.appendChild(card);
+  };
+
+})();
