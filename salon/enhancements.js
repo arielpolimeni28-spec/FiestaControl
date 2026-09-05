@@ -4703,3 +4703,348 @@
   };
 
 })();
+
+
+// ============================================================
+// V17 - RESET PERSISTENTE: EVITA QUE WRAPPERS VIEJOS RECREEN DATOS
+// ============================================================
+(function () {
+  'use strict';
+
+  data.financeResets = data.financeResets || [];
+
+  function v17ResetForSalon(sid) {
+    return (data.financeResets || []).find(r => r.salonId === sid && r.active);
+  }
+
+  function v17ForceZero(sid) {
+    const salonEventIds = new Set(
+      (data.events || []).filter(e => e.salonId === sid).map(e => e.id)
+    );
+
+    data.movements = (data.movements || []).filter(m => m.salonId !== sid);
+    data.stockPurchases = (data.stockPurchases || []).filter(c => c.salonId !== sid);
+    data.assignments = (data.assignments || []).filter(a => !salonEventIds.has(a.eventId));
+
+    (data.stockProducts || []).forEach(p => {
+      if (p.salonId === sid) p.stock = 0;
+    });
+
+    (data.events || []).forEach(e => {
+      if (e.salonId !== sid) return;
+      e.paid = 0;
+      e.baseTotal = 0;
+      e.total = 0;
+      e.extras = [];
+      e.extrasTotal = 0;
+      e.stockItems = [];
+      e.stockItemsTotal = 0;
+      e.financeResetLocked = true;
+
+      if (e.finalNumbers) {
+        e.finalNumbers.total = 0;
+        e.finalNumbers.paid = 0;
+        e.finalNumbers.balance = 0;
+        e.finalNumbers.staffCost = 0;
+        e.finalNumbers.supplierCost = 0;
+        e.finalNumbers.net = 0;
+      }
+    });
+
+    (data.suppliers || []).forEach(p => {
+      if (p.salonId === sid) p.balance = 0;
+    });
+
+    (data.orders || []).forEach(o => {
+      if (o.salonId === sid || salonEventIds.has(o.eventId)) {
+        o.paidAt = null;
+        o.paymentMethod = '';
+        o.paymentReference = '';
+        o.paidAmount = 0;
+        if (o.status === 'Pagado') o.status = 'Pendiente';
+      }
+    });
+  }
+
+  // Reemplazo final del reset V16.
+  window.resetEverythingV16 = function () {
+    if (session?.role !== 'salon' || session?.salonUserId) {
+      return toast('Solo el administrador del salón puede hacer este reset');
+    }
+
+    showModal(`
+      <div class="modal-title">
+        <div>
+          <h2>🔄 Volver TODO a cero</h2>
+          <p>Limpieza definitiva de movimientos financieros y stock.</p>
+        </div>
+        <button class="ghost small" onclick="closeModal()">✕</button>
+      </div>
+
+      <form id="v17-reset-form">
+        <div class="field">
+          <label>Contraseña administrativa</label>
+          <input name="password" type="password" required>
+        </div>
+
+        <div class="field">
+          <label>Motivo</label>
+          <textarea name="reason" required placeholder="Ej: eliminar datos de prueba e iniciar desde cero"></textarea>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+          <button class="danger">Confirmar y dejar todo en cero</button>
+        </div>
+      </form>
+    `);
+
+    document.querySelector('#v17-reset-form').onsubmit = async ev => {
+      ev.preventDefault();
+      const f = Object.fromEntries(new FormData(ev.target));
+      const s = salon();
+
+      if (String(f.password || '') !== String(s?.password || '')) {
+        return toast('Contraseña incorrecta');
+      }
+
+      const sid = session.salonId;
+
+      data.financeResets = (data.financeResets || []).filter(r => r.salonId !== sid);
+      data.financeResets.push({
+        id:id(),
+        salonId:sid,
+        active:true,
+        reason:String(f.reason || '').trim(),
+        createdAt:new Date().toISOString()
+      });
+
+      v17ForceZero(sid);
+
+      data.auditLog = data.auditLog || [];
+      data.auditLog.push({
+        id:id(),
+        salonId:sid,
+        action:'RESET TOTAL PERSISTENTE',
+        reason:String(f.reason || '').trim(),
+        createdAt:new Date().toISOString()
+      });
+
+      // Primer guardado.
+      await Promise.resolve(save());
+
+      // Los wrappers viejos pueden volver a crear movimientos unas décimas
+      // después. Los neutralizamos y guardamos nuevamente.
+      [250, 800, 1600].forEach(ms => {
+        setTimeout(() => {
+          const reset = v17ResetForSalon(sid);
+          if (!reset) return;
+          v17ForceZero(sid);
+          save();
+          if (ms === 1600) {
+            closeModal();
+            toast('Finanzas y stock quedaron definitivamente en cero');
+            try {
+              view = 'finance';
+              renderSalonShell();
+            } catch (_) {}
+          }
+        }, ms);
+      });
+    };
+  };
+
+  // Mientras el reset está activo, si un wrapper viejo intenta reconstruir
+  // datos al entrar en Finanzas, se vuelve a limpiar antes de mostrar.
+  const prevFinanceV17 = renderFinance;
+  renderFinance = function () {
+    const sid = session?.salonId;
+    if (sid && v17ResetForSalon(sid)) {
+      v17ForceZero(sid);
+    }
+    prevFinanceV17();
+
+    if (sid && v17ResetForSalon(sid)) {
+      // Los renderizadores anteriores pueden haber agregado movimientos.
+      v17ForceZero(sid);
+
+      const cards = document.querySelectorAll('#content .card.stat strong');
+      cards.forEach(el => {
+        const text = (el.textContent || '').trim();
+        if (text.includes('$')) el.textContent = money(0);
+      });
+    }
+  };
+
+  // Al recargar la página, respeta el reset guardado.
+  setTimeout(() => {
+    try {
+      const sid = session?.salonId;
+      if (sid && v17ResetForSalon(sid)) {
+        v17ForceZero(sid);
+        save();
+      }
+    } catch (_) {}
+  }, 1800);
+
+  // Cuando se guarda una NUEVA fiesta después del reset, se desactiva el
+  // bloqueo persistente para que desde ese momento la operatoria vuelva
+  // a registrar importes normalmente.
+  const prevEventFormV17 = window.openEventForm;
+  window.openEventForm = function(eid) {
+    const before = new Set((data.events || []).map(e => e.id));
+    prevEventFormV17(eid);
+
+    const form = document.querySelector('#event-form-v10') || document.querySelector('#event-form');
+    if (!form) return;
+
+    const oldSubmit = form.onsubmit;
+    form.onsubmit = function(ev) {
+      const result = oldSubmit ? oldSubmit.call(form, ev) : undefined;
+
+      setTimeout(() => {
+        const sid = session?.salonId;
+        const reset = sid ? v17ResetForSalon(sid) : null;
+        if (!reset) return;
+
+        // Solo una fiesta nueva inicia la nueva etapa financiera.
+        const created = (data.events || []).find(e => e.salonId === sid && !before.has(e.id));
+        if (created) {
+          reset.active = false;
+          created.financeResetLocked = false;
+          save();
+        }
+      }, 100);
+
+      return result;
+    };
+  };
+
+})();
+
+
+// ============================================================
+// V18 - BOTONES PERSISTENTES: VOLVER + CERRAR SESIÓN
+// ============================================================
+(function () {
+  'use strict';
+
+  const style = document.createElement('style');
+  style.textContent = `
+    .fc-persistent-actions{
+      display:flex;
+      gap:8px;
+      align-items:center;
+      flex-wrap:wrap;
+    }
+    .fc-persistent-actions .fc-back-btn,
+    .fc-persistent-actions .fc-logout-btn{
+      white-space:nowrap;
+    }
+    @media (max-width:760px){
+      .fc-persistent-actions{
+        width:100%;
+        justify-content:flex-end;
+        margin-top:8px;
+      }
+    }
+  `;
+  document.head.appendChild(style);
+
+  function ensurePersistentActions() {
+    if (session?.role !== 'salon') return;
+
+    const topbar = document.querySelector('.salon-shell .topbar');
+    if (!topbar) return;
+
+    let actions = topbar.querySelector('.top-actions');
+    if (!actions) {
+      actions = document.createElement('div');
+      actions.className = 'top-actions';
+      topbar.appendChild(actions);
+    }
+
+    let holder = actions.querySelector('.fc-persistent-actions');
+    if (!holder) {
+      holder = document.createElement('div');
+      holder.className = 'fc-persistent-actions';
+      actions.prepend(holder);
+    }
+
+    if (!holder.querySelector('.fc-back-btn')) {
+      const back = document.createElement('button');
+      back.type = 'button';
+      back.className = 'ghost fc-back-btn';
+      back.textContent = '← Volver';
+      back.onclick = () => {
+        try {
+          const modal = document.querySelector('#modal');
+          if (modal && modal.open) {
+            closeModal();
+            return;
+          }
+        } catch (_) {}
+
+        if (typeof view !== 'undefined' && view !== 'dashboard') {
+          view = 'dashboard';
+          renderSalonShell();
+        } else {
+          renderSalonShell();
+        }
+      };
+      holder.appendChild(back);
+    }
+
+    if (!holder.querySelector('.fc-logout-btn')) {
+      const out = document.createElement('button');
+      out.type = 'button';
+      out.className = 'secondary fc-logout-btn';
+      out.textContent = 'Cerrar sesión';
+      out.onclick = () => {
+        if (typeof logout === 'function') logout();
+        else {
+          try {
+            setSession(null);
+            render();
+          } catch (_) {
+            sessionStorage.clear();
+            location.reload();
+          }
+        }
+      };
+      holder.appendChild(out);
+    }
+
+    // También garantiza el botón del pie lateral si algún render lo eliminó.
+    const sideFoot = document.querySelector('.salon-shell .side-foot');
+    if (sideFoot && !sideFoot.querySelector('.logout')) {
+      const btn = document.createElement('button');
+      btn.className = 'logout';
+      btn.textContent = 'Cerrar sesión';
+      btn.onclick = () => typeof logout === 'function' ? logout() : location.reload();
+      sideFoot.appendChild(btn);
+    }
+  }
+
+  // Lo agrega al entrar y después de cada reconstrucción de pantalla.
+  const prevShellV18 = renderSalonShell;
+  renderSalonShell = function () {
+    const r = prevShellV18();
+    setTimeout(ensurePersistentActions, 0);
+    setTimeout(ensurePersistentActions, 100);
+    return r;
+  };
+
+  // Si cualquier pantalla o wrapper reemplaza el DOM, vuelve a colocarlos.
+  const observer = new MutationObserver(() => {
+    try { ensurePersistentActions(); } catch (_) {}
+  });
+
+  observer.observe(document.documentElement, {
+    childList:true,
+    subtree:true
+  });
+
+  setTimeout(ensurePersistentActions, 300);
+
+})();
