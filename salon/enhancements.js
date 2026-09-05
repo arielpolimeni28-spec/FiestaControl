@@ -2056,3 +2056,373 @@
   };
 
 })();
+
+
+// ============================================================
+// V10 - GUARDADO ATÓMICO DE RESERVA
+// Fiesta + personal + adicionales + movimientos se guardan juntos.
+// Evita la carrera entre wrappers/setTimeout de versiones anteriores.
+// ============================================================
+(function () {
+  'use strict';
+
+  data.movements = data.movements || [];
+  data.salonExtras = data.salonExtras || [];
+  data.assignments = data.assignments || [];
+
+  function v10SalonStaff() {
+    return (data.staff || []).filter(x => x.salonId === session?.salonId);
+  }
+
+  function v10SalonExtras() {
+    return (data.salonExtras || []).filter(x => x.salonId === session?.salonId);
+  }
+
+  function v10Assignments(eventId) {
+    return (data.assignments || []).filter(x => x.eventId === eventId);
+  }
+
+  function v10EventExtras(event) {
+    return Array.isArray(event?.extras) ? event.extras : [];
+  }
+
+  function v10RemoveAutoMovements(eventId) {
+    data.movements = (data.movements || []).filter(m => {
+      if (m.eventId !== eventId) return true;
+      const k = String(m.sourceKey || '');
+      return !(k.startsWith(`staff:${eventId}:`) || k.startsWith(`extra:${eventId}:`));
+    });
+  }
+
+  function v10BuildAutoMovements(event) {
+    v10RemoveAutoMovements(event.id);
+
+    v10Assignments(event.id).forEach(a => {
+      const p = (data.staff || []).find(s => s.id === a.staffId);
+      if (!p) return;
+      data.movements.push({
+        id:id(),
+        salonId:event.salonId,
+        eventId:event.id,
+        sourceKey:`staff:${event.id}:${a.staffId}`,
+        type:'Gasto',
+        category:'Personal',
+        concept:`${p.role || 'Personal'} · ${p.name}`,
+        amount:Number(a.amount || 0),
+        movementDate:event.date || '',
+        status:a.paid ? 'Pagado' : 'Pendiente',
+        method:'',
+        createdAt:new Date().toISOString()
+      });
+    });
+
+    v10EventExtras(event).forEach(x => {
+      data.movements.push({
+        id:id(),
+        salonId:event.salonId,
+        eventId:event.id,
+        sourceKey:`extra:${event.id}:${x.id}`,
+        type:'Cargo',
+        category:'Adicional',
+        concept:x.name || 'Adicional',
+        amount:Number(x.amount || 0),
+        movementDate:event.date || '',
+        status:'Incluido en reserva',
+        method:'',
+        createdAt:new Date().toISOString()
+      });
+    });
+  }
+
+  function v10PersistReservation(event, selectedStaffIds, selectedExtraIds, baseTotal) {
+    // Personal: se reemplaza la asignación del evento por la selección actual.
+    data.assignments = (data.assignments || []).filter(a => a.eventId !== event.id);
+
+    selectedStaffIds.forEach(staffId => {
+      const p = (data.staff || []).find(s => s.id === staffId && s.salonId === session.salonId);
+      if (!p) return;
+      data.assignments.push({
+        id:id(),
+        salonId:session.salonId,
+        eventId:event.id,
+        staffId:p.id,
+        amount:Number(p.defaultFee || 0),
+        paid:false
+      });
+    });
+
+    // Adicionales: snapshot de nombre/precio al momento de la reserva.
+    const selectedExtras = selectedExtraIds.map(extraId => {
+      const x = (data.salonExtras || []).find(e => e.id === extraId && e.salonId === session.salonId);
+      return x ? {
+        id:x.id,
+        name:x.name,
+        description:x.description || '',
+        amount:Number(x.amount || 0)
+      } : null;
+    }).filter(Boolean);
+
+    const extrasTotal = selectedExtras.reduce((s,x) => s + Number(x.amount || 0), 0);
+
+    event.baseTotal = Number(baseTotal || 0);
+    event.extras = selectedExtras;
+    event.extrasTotal = extrasTotal;
+    event.total = event.baseTotal + extrasTotal;
+
+    // Movimientos automáticos se generan en la MISMA operación.
+    v10BuildAutoMovements(event);
+
+    save();
+  }
+
+  // Reemplazo definitivo del formulario de reserva.
+  window.openEventForm = function (eid) {
+    const event = eid ? (data.events || []).find(x => x.id === eid) : null;
+    const staff = v10SalonStaff();
+    const extras = v10SalonExtras();
+
+    const assignedIds = new Set(event ? v10Assignments(event.id).map(a => a.staffId) : []);
+    const extraIds = new Set(event ? v10EventExtras(event).map(x => x.id) : []);
+
+    const oldExtrasTotal = event
+      ? Number(event.extrasTotal ?? v10EventExtras(event).reduce((s,x) => s + Number(x.amount || 0), 0))
+      : 0;
+
+    const baseTotal = event
+      ? Number(event.baseTotal ?? (Number(event.total || 0) - oldExtrasTotal))
+      : 0;
+
+    showModal(`
+      <div class="modal-title">
+        <div>
+          <h2>${event ? 'Editar fiesta' : 'Nueva fiesta'}</h2>
+          <p>Reserva, personal y adicionales</p>
+        </div>
+        <button class="ghost small" onclick="closeModal()">✕</button>
+      </div>
+
+      <form id="event-form-v10">
+        <div class="form-grid">
+          <div class="field">
+            <label>Cumpleañero/a</label>
+            <input name="child" required value="${esc(event?.child || '')}">
+          </div>
+
+          <div class="field">
+            <label>Edad</label>
+            <input name="age" type="number" value="${Number(event?.age || 0) || ''}">
+          </div>
+
+          <div class="field">
+            <label>Cliente / responsable</label>
+            <input name="client" required value="${esc(event?.client || '')}">
+          </div>
+
+          <div class="field">
+            <label>Email del cliente</label>
+            <input name="phone" type="email" value="${esc(event?.phone || '')}">
+          </div>
+
+          <div class="field">
+            <label>Fecha</label>
+            <input name="date" type="date" required value="${esc(event?.date || '')}">
+          </div>
+
+          <div class="field">
+            <label>Estado</label>
+            <select name="status">
+              ${['Consulta','Señada','Confirmada','Finalizada','Cancelada']
+                .map(x => `<option ${event?.status === x ? 'selected' : ''}>${x}</option>`).join('')}
+            </select>
+          </div>
+
+          <div class="field">
+            <label>Desde</label>
+            <input name="start" type="time" required value="${esc(event?.start || '17:00')}">
+          </div>
+
+          <div class="field">
+            <label>Hasta</label>
+            <input name="end" type="time" required value="${esc(event?.end || '20:00')}">
+          </div>
+
+          <div class="field">
+            <label>Paquete</label>
+            <input name="package" value="${esc(event?.package || 'Clásico')}">
+          </div>
+
+          <div class="field">
+            <label>Invitados estimados</label>
+            <input name="guests" type="number" min="0" value="${Number(event?.guests || 0)}">
+          </div>
+
+          <div class="field">
+            <label>Precio base de la fiesta</label>
+            <input name="baseTotal" type="number" min="0" value="${baseTotal}">
+          </div>
+
+          <div class="field">
+            <label>Ya cobrado</label>
+            <input name="paid" type="number" min="0" value="${Number(event?.paid || 0)}">
+          </div>
+
+          <div class="field span2">
+            <label>Personal a cargo</label>
+            ${
+              staff.length
+                ? `<div class="card" style="padding:12px;margin-top:6px">
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px">
+                      ${staff.map(p => `
+                        <label style="display:flex;align-items:center;gap:8px;padding:8px;border:1px solid #ddd;border-radius:10px;cursor:pointer">
+                          <input type="checkbox" name="staffId" value="${esc(p.id)}" ${assignedIds.has(p.id) ? 'checked' : ''}>
+                          <span>
+                            <b>${esc(p.name)}</b>
+                            <small style="display:block">${esc(p.role || '')} · ${money(p.defaultFee || 0)}</small>
+                          </span>
+                        </label>
+                      `).join('')}
+                    </div>
+                  </div>`
+                : `<div class="empty">No hay personal cargado.</div>`
+            }
+          </div>
+
+          <div class="field span2">
+            <label>Adicionales</label>
+            ${
+              extras.length
+                ? `<div class="card" style="padding:12px;margin-top:6px">
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px">
+                      ${extras.map(x => `
+                        <label style="display:flex;align-items:center;gap:8px;padding:8px;border:1px solid #ddd;border-radius:10px;cursor:pointer">
+                          <input type="checkbox" name="extraId" value="${esc(x.id)}" data-amount="${Number(x.amount || 0)}" ${extraIds.has(x.id) ? 'checked' : ''}>
+                          <span>
+                            <b>${esc(x.name)}</b>
+                            <small style="display:block">${money(x.amount || 0)}</small>
+                          </span>
+                        </label>
+                      `).join('')}
+                    </div>
+                  </div>`
+                : `<div class="empty">No hay adicionales cargados.</div>`
+            }
+          </div>
+
+          <div class="field span2">
+            <div class="grid stats" style="grid-template-columns:repeat(3,1fr)">
+              <div class="card">
+                <small class="muted">Precio base</small>
+                <strong id="v10-base">${money(baseTotal)}</strong>
+              </div>
+              <div class="card">
+                <small class="muted">Adicionales</small>
+                <strong id="v10-extras">${money(oldExtrasTotal)}</strong>
+              </div>
+              <div class="card">
+                <small class="muted">Total reserva</small>
+                <strong id="v10-total">${money(baseTotal + oldExtrasTotal)}</strong>
+              </div>
+            </div>
+          </div>
+
+          <div class="field span2">
+            <label>Observaciones</label>
+            <textarea name="notes">${esc(event?.notes || '')}</textarea>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+          <button class="primary">Guardar fiesta</button>
+        </div>
+      </form>
+    `);
+
+    const form = document.querySelector('#event-form-v10');
+    const baseInput = form.querySelector('[name="baseTotal"]');
+
+    function recalc() {
+      const base = Number(baseInput.value || 0);
+      const ext = [...form.querySelectorAll('[name="extraId"]:checked')]
+        .reduce((s,el) => s + Number(el.dataset.amount || 0), 0);
+
+      document.querySelector('#v10-base').textContent = money(base);
+      document.querySelector('#v10-extras').textContent = money(ext);
+      document.querySelector('#v10-total').textContent = money(base + ext);
+    }
+
+    baseInput.addEventListener('input', recalc);
+    form.querySelectorAll('[name="extraId"]').forEach(el => el.addEventListener('change', recalc));
+
+    form.onsubmit = ev => {
+      ev.preventDefault();
+
+      const fd = new FormData(form);
+      const previousStatus = event?.status || '';
+
+      const fields = {
+        child:String(fd.get('child') || ''),
+        age:Number(fd.get('age') || 0),
+        client:String(fd.get('client') || ''),
+        phone:String(fd.get('phone') || ''),
+        date:String(fd.get('date') || ''),
+        status:String(fd.get('status') || 'Consulta'),
+        start:String(fd.get('start') || ''),
+        end:String(fd.get('end') || ''),
+        package:String(fd.get('package') || ''),
+        guests:Number(fd.get('guests') || 0),
+        paid:Number(fd.get('paid') || 0),
+        notes:String(fd.get('notes') || '')
+      };
+
+      const selectedStaffIds = fd.getAll('staffId').map(String);
+      const selectedExtraIds = fd.getAll('extraId').map(String);
+      const base = Number(fd.get('baseTotal') || 0);
+
+      let target = event;
+
+      if (target) {
+        Object.assign(target, fields);
+      } else {
+        target = {
+          id:id(),
+          salonId:session.salonId,
+          ...fields,
+          rsvps:[]
+        };
+        data.events.push(target);
+      }
+
+      // TODO se guarda junto antes de cerrar el modal.
+      v10PersistReservation(target, selectedStaffIds, selectedExtraIds, base);
+
+      closeModal();
+      toast('Fiesta, personal y adicionales guardados');
+      renderSalonShell();
+
+      // Mantiene la confirmación por email de versiones anteriores.
+      if (previousStatus !== 'Confirmada' && target.status === 'Confirmada') {
+        try {
+          if (typeof sendConfirmationEmail === 'function') {
+            sendConfirmationEmail(target);
+          }
+        } catch (_) {}
+      }
+    };
+  };
+
+  // Recupera fiestas existentes: si ya tienen extras/asignaciones,
+  // reconstruye sus movimientos al entrar.
+  setTimeout(() => {
+    try {
+      if (session?.role !== 'salon') return;
+      (data.events || [])
+        .filter(e => e.salonId === session.salonId)
+        .forEach(e => v10BuildAutoMovements(e));
+      save();
+    } catch (err) {
+      console.error('V10 rebuild movements', err);
+    }
+  }, 1000);
+
+})();
