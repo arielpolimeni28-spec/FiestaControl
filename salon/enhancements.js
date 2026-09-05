@@ -2789,3 +2789,593 @@
   };
 
 })();
+
+
+// ============================================================
+// V12 - STOCK POR SALÓN + COMPRAS + PRODUCTOS EN RESERVA
+// ============================================================
+(function () {
+  'use strict';
+
+  data.stockProducts = data.stockProducts || [];
+  data.stockPurchases = data.stockPurchases || [];
+  data.movements = data.movements || [];
+
+  function v12Products() {
+    return (data.stockProducts || []).filter(p => p.salonId === session?.salonId);
+  }
+
+  function v12Product(pid) {
+    return (data.stockProducts || []).find(p => p.id === pid && p.salonId === session?.salonId);
+  }
+
+  function v12EventItems(e) {
+    return Array.isArray(e?.stockItems) ? e.stockItems : [];
+  }
+
+  function v12StockValue() {
+    return v12Products().reduce((s,p) => s + Number(p.stock || 0) * Number(p.costPrice || 0), 0);
+  }
+
+  function v12Units() {
+    return v12Products().reduce((s,p) => s + Number(p.stock || 0), 0);
+  }
+
+  function v12LowStock() {
+    return v12Products().filter(p => Number(p.stock || 0) <= Number(p.minStock || 0));
+  }
+
+  if (!salonNav.some(x => x[0] === 'stock')) {
+    const idx = salonNav.findIndex(x => x[0] === 'suppliers');
+    salonNav.splice(idx >= 0 ? idx : salonNav.length - 1, 0, ['stock','📦','Stock']);
+  }
+
+  const prevRenderSalonViewV12 = renderSalonView;
+  renderSalonView = function () {
+    if (view === 'stock') return renderStockV12();
+    return prevRenderSalonViewV12();
+  };
+
+  function renderStockV12() {
+    setTitle('Stock','Productos, compras y existencias del salón');
+
+    const products = v12Products();
+    const low = v12LowStock();
+
+    $('#content').innerHTML = `
+      <div class="grid stats">
+        <div class="card stat">
+          <small>Productos</small>
+          <strong>${products.length}</strong>
+        </div>
+        <div class="card stat">
+          <small>Unidades en stock</small>
+          <strong>${v12Units()}</strong>
+        </div>
+        <div class="card stat">
+          <small>Valor de stock a costo</small>
+          <strong>${money(v12StockValue())}</strong>
+        </div>
+        <div class="card stat">
+          <small>Stock bajo</small>
+          <strong class="${low.length ? 'bad' : 'good'}">${low.length}</strong>
+        </div>
+      </div>
+
+      <div class="toolbar" style="margin-top:16px">
+        <button class="primary" onclick="openStockProductV12()">+ Agregar producto</button>
+        <button class="secondary" onclick="openStockPurchaseV12()">🛒 Compra</button>
+      </div>
+
+      <div class="card">
+        <div class="section-title">
+          <div>
+            <h3>Productos</h3>
+            <small class="muted">Bebidas, aguas, gaseosas y otros productos del salón.</small>
+          </div>
+        </div>
+
+        ${
+          products.length ? `
+            <div class="table-wrap">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>Producto</th>
+                    <th>Stock</th>
+                    <th>Mínimo</th>
+                    <th>Costo</th>
+                    <th>Venta</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${products.map(p => `
+                    <tr>
+                      <td>
+                        <b>${esc(p.name)}</b>
+                        <small style="display:block">${esc(p.category || '')}</small>
+                      </td>
+                      <td><b class="${Number(p.stock||0) <= Number(p.minStock||0) ? 'bad' : 'good'}">${Number(p.stock || 0)}</b></td>
+                      <td>${Number(p.minStock || 0)}</td>
+                      <td>${money(p.costPrice || 0)}</td>
+                      <td>${money(p.salePrice || 0)}</td>
+                      <td>
+                        <button class="secondary small" onclick="openStockProductV12('${esc(p.id)}')">Editar</button>
+                        <button class="ghost small" onclick="openStockPurchaseV12('${esc(p.id)}')">Comprar</button>
+                      </td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          ` : `<div class="empty">Todavía no hay productos. Ejemplos: Coca-Cola, agua, jugos, cerveza sin alcohol.</div>`
+        }
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="section-title">
+          <div>
+            <h3>Últimas compras</h3>
+            <small class="muted">Cada compra aumenta automáticamente el stock.</small>
+          </div>
+        </div>
+        ${
+          (data.stockPurchases || []).filter(x => x.salonId === session.salonId).length
+            ? `<div class="table-wrap">
+                <table class="table">
+                  <thead><tr><th>Fecha</th><th>Producto</th><th>Cantidad</th><th>Costo unitario</th><th>Total</th><th>Medio</th></tr></thead>
+                  <tbody>
+                    ${(data.stockPurchases || [])
+                      .filter(x => x.salonId === session.salonId)
+                      .sort((a,b) => String(b.createdAt||b.date||'').localeCompare(String(a.createdAt||a.date||'')))
+                      .slice(0,30)
+                      .map(c => {
+                        const p = v12Product(c.productId);
+                        return `<tr>
+                          <td>${esc(c.date || '-')}</td>
+                          <td>${esc(p?.name || c.productName || '-')}</td>
+                          <td>${Number(c.quantity || 0)}</td>
+                          <td>${money(c.unitCost || 0)}</td>
+                          <td><b>${money(c.total || 0)}</b></td>
+                          <td>${esc(c.method || '-')}</td>
+                        </tr>`;
+                      }).join('')}
+                  </tbody>
+                </table>
+              </div>`
+            : `<div class="empty">Todavía no hay compras registradas.</div>`
+        }
+      </div>
+    `;
+  }
+
+  window.renderStockV12 = renderStockV12;
+
+  window.openStockProductV12 = function (pid) {
+    const p = pid ? v12Product(pid) : null;
+
+    showModal(`
+      <div class="modal-title">
+        <div>
+          <h2>${p ? 'Editar producto' : 'Agregar producto'}</h2>
+          <p>Catálogo de stock del salón</p>
+        </div>
+        <button class="ghost small" onclick="closeModal()">✕</button>
+      </div>
+
+      <form id="v12-product-form">
+        <div class="form-grid">
+          <div class="field">
+            <label>Producto</label>
+            <input name="name" required placeholder="Ej: Coca-Cola 2,25 L" value="${esc(p?.name || '')}">
+          </div>
+          <div class="field">
+            <label>Categoría</label>
+            <input name="category" placeholder="Bebidas" value="${esc(p?.category || '')}">
+          </div>
+          <div class="field">
+            <label>Costo unitario</label>
+            <input name="costPrice" type="number" min="0" step="1" value="${Number(p?.costPrice || 0)}">
+          </div>
+          <div class="field">
+            <label>Precio de venta</label>
+            <input name="salePrice" type="number" min="0" step="1" value="${Number(p?.salePrice || 0)}">
+          </div>
+          <div class="field">
+            <label>Stock inicial / actual</label>
+            <input name="stock" type="number" min="0" step="1" value="${Number(p?.stock || 0)}">
+          </div>
+          <div class="field">
+            <label>Stock mínimo</label>
+            <input name="minStock" type="number" min="0" step="1" value="${Number(p?.minStock || 0)}">
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+          <button class="primary">${p ? 'Guardar cambios' : 'Agregar producto'}</button>
+        </div>
+      </form>
+    `);
+
+    $('#v12-product-form').onsubmit = ev => {
+      ev.preventDefault();
+      const f = Object.fromEntries(new FormData(ev.target));
+      ['costPrice','salePrice','stock','minStock'].forEach(k => f[k] = Number(f[k] || 0));
+
+      if (p) Object.assign(p, f);
+      else data.stockProducts.push({id:id(), salonId:session.salonId, ...f});
+
+      save();
+      closeModal();
+      toast(p ? 'Producto actualizado' : 'Producto agregado');
+      renderStockV12();
+    };
+  };
+
+  window.openStockPurchaseV12 = function (preferredPid='') {
+    const products = v12Products();
+    if (!products.length) return toast('Primero agregá un producto al stock');
+
+    showModal(`
+      <div class="modal-title">
+        <div>
+          <h2>🛒 Registrar compra</h2>
+          <p>La cantidad comprada se suma automáticamente al stock.</p>
+        </div>
+        <button class="ghost small" onclick="closeModal()">✕</button>
+      </div>
+
+      <form id="v12-purchase-form">
+        <div class="form-grid">
+          <div class="field">
+            <label>Producto</label>
+            <select name="productId">
+              ${products.map(p => `<option value="${esc(p.id)}" ${p.id===preferredPid?'selected':''}>${esc(p.name)}</option>`).join('')}
+            </select>
+          </div>
+
+          <div class="field">
+            <label>Cantidad comprada</label>
+            <input name="quantity" type="number" min="1" step="1" required>
+          </div>
+
+          <div class="field">
+            <label>Costo unitario</label>
+            <input name="unitCost" type="number" min="0" step="1" required>
+          </div>
+
+          <div class="field">
+            <label>Medio de pago</label>
+            <select name="method">
+              <option>Efectivo</option>
+              <option>Transferencia</option>
+              <option>Mercado Pago</option>
+              <option>Tarjeta</option>
+              <option>Otro</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label>Fecha</label>
+            <input name="date" type="date" required value="${new Date().toISOString().slice(0,10)}">
+          </div>
+
+          <div class="field">
+            <label>Comprobante / referencia</label>
+            <input name="reference" placeholder="Opcional">
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+          <button class="primary">Registrar compra</button>
+        </div>
+      </form>
+    `);
+
+    const form = $('#v12-purchase-form');
+    const productSelect = form.querySelector('[name="productId"]');
+    const costInput = form.querySelector('[name="unitCost"]');
+
+    function fillCost() {
+      const p = v12Product(productSelect.value);
+      if (p) costInput.value = Number(p.costPrice || 0);
+    }
+    productSelect.onchange = fillCost;
+    fillCost();
+
+    form.onsubmit = ev => {
+      ev.preventDefault();
+      const f = Object.fromEntries(new FormData(form));
+      const p = v12Product(f.productId);
+      if (!p) return toast('Producto no encontrado');
+
+      const qty = Number(f.quantity || 0);
+      const unitCost = Number(f.unitCost || 0);
+      if (qty <= 0) return toast('Ingresá una cantidad válida');
+
+      p.stock = Number(p.stock || 0) + qty;
+      p.costPrice = unitCost;
+
+      const purchase = {
+        id:id(),
+        salonId:session.salonId,
+        productId:p.id,
+        productName:p.name,
+        quantity:qty,
+        unitCost,
+        total:qty * unitCost,
+        method:f.method,
+        date:f.date,
+        reference:f.reference || '',
+        createdAt:new Date().toISOString()
+      };
+      data.stockPurchases.push(purchase);
+
+      data.movements.push({
+        id:id(),
+        salonId:session.salonId,
+        eventId:'',
+        sourceKey:`stock-purchase:${purchase.id}`,
+        type:'Gasto',
+        category:'Compra de stock',
+        concept:`Compra ${p.name} x ${qty}`,
+        amount:purchase.total,
+        movementDate:f.date,
+        method:f.method,
+        reference:f.reference || '',
+        status:'Pagado',
+        createdAt:new Date().toISOString()
+      });
+
+      save();
+      closeModal();
+      toast('Compra registrada y stock actualizado');
+      renderStockV12();
+    };
+  };
+
+  // ------------------------------------------------------------------
+  // RESERVA V12: usa el formulario V10 como base y agrega productos stock
+  // ------------------------------------------------------------------
+  const prevOpenEventFormV12 = window.openEventForm;
+
+  window.openEventForm = function (eid) {
+    const existing = eid ? (data.events || []).find(e => e.id === eid) : null;
+    const oldItems = v12EventItems(existing);
+    const oldQtyMap = new Map(oldItems.map(x => [x.id, Number(x.quantity || 0)]));
+
+    prevOpenEventFormV12(eid);
+
+    const form = document.querySelector('#event-form-v10') || document.querySelector('#event-form');
+    if (!form) return;
+
+    const products = v12Products();
+    const actions = form.querySelector('.form-actions');
+
+    const block = document.createElement('div');
+    block.className = 'field span2';
+    block.innerHTML = `
+      <label>Productos de stock para esta fiesta</label>
+
+      ${
+        products.length ? `
+          <div class="card" style="padding:12px;margin-top:6px">
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px">
+              ${products.map(p => {
+                const old = oldItems.find(x => x.id === p.id);
+                const available = Number(p.stock || 0) + Number(old?.quantity || 0);
+                return `
+                  <div style="border:1px solid #ddd;border-radius:10px;padding:10px">
+                    <b>${esc(p.name)}</b>
+                    <small style="display:block">Disponible: ${available} · Venta ${money(p.salePrice || 0)}</small>
+                    <div class="field" style="margin-top:8px">
+                      <label>Cantidad para la fiesta</label>
+                      <input
+                        type="number"
+                        name="stockQty_${esc(p.id)}"
+                        min="0"
+                        max="${available}"
+                        step="1"
+                        value="${Number(old?.quantity || 0)}"
+                        data-product-id="${esc(p.id)}"
+                        data-sale-price="${Number(p.salePrice || 0)}"
+                      >
+                    </div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        ` : `<div class="empty">No hay productos cargados en Stock.</div>`
+      }
+
+      <div class="grid stats" style="grid-template-columns:repeat(2,1fr);margin-top:12px">
+        <div class="card">
+          <small class="muted">Productos de stock</small>
+          <strong id="v12-stock-products-total">${money(oldItems.reduce((s,x)=>s+Number(x.quantity||0)*Number(x.salePrice||0),0))}</strong>
+        </div>
+        <div class="card">
+          <small class="muted">Se suma a la reserva</small>
+          <strong id="v12-stock-grand-extra">${money(oldItems.reduce((s,x)=>s+Number(x.quantity||0)*Number(x.salePrice||0),0))}</strong>
+        </div>
+      </div>
+    `;
+
+    if (actions) actions.before(block);
+
+    function stockTotal() {
+      return [...form.querySelectorAll('[data-product-id]')].reduce((s,el) => {
+        return s + Number(el.value || 0) * Number(el.dataset.salePrice || 0);
+      }, 0);
+    }
+
+    function repaint() {
+      const t = stockTotal();
+      const a = document.querySelector('#v12-stock-products-total');
+      const b = document.querySelector('#v12-stock-grand-extra');
+      if (a) a.textContent = money(t);
+      if (b) b.textContent = money(t);
+
+      // Si existen las tarjetas V10, muestra total final incluyendo stock.
+      const baseInput = form.querySelector('[name="baseTotal"]');
+      const base = Number(baseInput?.value || 0);
+      const extras = [...form.querySelectorAll('[name="extraId"]:checked')]
+        .reduce((s,el) => s + Number(el.dataset.amount || 0), 0);
+      const totalEl = document.querySelector('#v10-total');
+      if (totalEl) totalEl.textContent = money(base + extras + t);
+    }
+
+    form.querySelectorAll('[data-product-id]').forEach(el => el.addEventListener('input', repaint));
+    form.querySelectorAll('[name="extraId"]').forEach(el => el.addEventListener('change', repaint));
+    form.querySelector('[name="baseTotal"]')?.addEventListener('input', repaint);
+    repaint();
+
+    const originalSubmit = form.onsubmit;
+
+    form.onsubmit = function (ev) {
+      // Validamos y capturamos productos ANTES del guardado V10.
+      const selectedItems = [];
+      let invalid = false;
+
+      form.querySelectorAll('[data-product-id]').forEach(el => {
+        const p = v12Product(el.dataset.productId);
+        if (!p) return;
+        const qty = Number(el.value || 0);
+        const oldQty = Number(oldQtyMap.get(p.id) || 0);
+        const available = Number(p.stock || 0) + oldQty;
+
+        if (qty > available) invalid = true;
+        if (qty > 0) {
+          selectedItems.push({
+            id:p.id,
+            name:p.name,
+            quantity:qty,
+            salePrice:Number(p.salePrice || 0),
+            unitCost:Number(p.costPrice || 0),
+            total:qty * Number(p.salePrice || 0)
+          });
+        }
+      });
+
+      if (invalid) {
+        ev.preventDefault();
+        ev.stopImmediatePropagation();
+        toast('No hay stock suficiente para uno de los productos');
+        return false;
+      }
+
+      const result = originalSubmit ? originalSubmit.call(form, ev) : undefined;
+
+      // El V10 crea/actualiza la fiesta de forma sincrónica.
+      let target = eid ? (data.events || []).find(e => e.id === eid) : null;
+      if (!target) {
+        const events = (data.events || []).filter(e => e.salonId === session.salonId);
+        target = events[events.length - 1] || null;
+      }
+
+      if (!target) return result;
+
+      // Devuelve al stock lo reservado anteriormente, y descuenta la nueva selección.
+      oldQtyMap.forEach((qty, pid) => {
+        const p = v12Product(pid);
+        if (p) p.stock = Number(p.stock || 0) + Number(qty || 0);
+      });
+
+      selectedItems.forEach(item => {
+        const p = v12Product(item.id);
+        if (p) p.stock = Math.max(0, Number(p.stock || 0) - Number(item.quantity || 0));
+      });
+
+      // El total V10 ya tiene base + adicionales. Sumamos productos una sola vez.
+      const stockItemsTotal = selectedItems.reduce((s,x) => s + Number(x.total || 0), 0);
+      target.stockItems = selectedItems;
+      target.stockItemsTotal = stockItemsTotal;
+      target.total = Number(target.baseTotal || 0) + Number(target.extrasTotal || 0) + stockItemsTotal;
+
+      // Movimientos de productos vendidos: cargo al cliente.
+      data.movements = (data.movements || []).filter(m =>
+        !(m.eventId === target.id && String(m.sourceKey || '').startsWith(`stock-sale:${target.id}:`))
+      );
+
+      selectedItems.forEach(item => {
+        data.movements.push({
+          id:id(),
+          salonId:session.salonId,
+          eventId:target.id,
+          productId:item.id,
+          sourceKey:`stock-sale:${target.id}:${item.id}`,
+          type:'Cargo',
+          category:'Producto de stock',
+          concept:`${item.name} x ${item.quantity}`,
+          amount:Number(item.total || 0),
+          movementDate:target.date || '',
+          method:'',
+          status:'Incluido en reserva',
+          createdAt:new Date().toISOString()
+        });
+      });
+
+      save();
+      return result;
+    };
+  };
+
+  // ------------------------------------------------------------------
+  // DETALLE DE FIESTA: productos de stock usados
+  // ------------------------------------------------------------------
+  const prevOpenEventV12 = window.openEvent;
+
+  window.openEvent = function (eid) {
+    prevOpenEventV12(eid);
+
+    const e = (data.events || []).find(x => x.id === eid);
+    const modal = document.querySelector('#modal-body');
+    if (!e || !modal || modal.querySelector('[data-v12-stock-event]')) return;
+
+    const items = v12EventItems(e);
+    const total = Number(e.stockItemsTotal ?? items.reduce((s,x)=>s+Number(x.total||0),0));
+
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.style.marginTop = '16px';
+    card.setAttribute('data-v12-stock-event','1');
+    card.innerHTML = `
+      <div class="section-title">
+        <div>
+          <h3>📦 Productos de stock</h3>
+          <small class="muted">Productos cargados a esta reserva.</small>
+        </div>
+      </div>
+
+      ${
+        items.length ? `
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>Producto</th><th>Cantidad</th><th>Precio unitario</th><th>Total</th></tr></thead>
+              <tbody>
+                ${items.map(x => `
+                  <tr>
+                    <td><b>${esc(x.name)}</b></td>
+                    <td>${Number(x.quantity || 0)}</td>
+                    <td>${money(x.salePrice || 0)}</td>
+                    <td><b>${money(x.total || 0)}</b></td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+          <div style="text-align:right;margin-top:12px">
+            <small class="muted">TOTAL PRODUCTOS</small>
+            <strong style="display:block;font-size:22px">${money(total)}</strong>
+          </div>
+        ` : `<div class="empty">Esta fiesta no tiene productos de stock.</div>`
+      }
+    `;
+
+    modal.appendChild(card);
+  };
+
+})();
