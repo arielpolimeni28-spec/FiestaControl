@@ -3379,3 +3379,276 @@
   };
 
 })();
+
+
+// ============================================================
+// V13 - IMPRESIÓN COMPLETA DE RESERVA / CIERRE DE FIESTA
+// ============================================================
+(function () {
+  'use strict';
+
+  function v13Assignments(eventId) {
+    return (data.assignments || []).filter(a => a.eventId === eventId);
+  }
+
+  function v13StaffRows(eventId) {
+    return v13Assignments(eventId).map(a => {
+      const p = (data.staff || []).find(s => s.id === a.staffId);
+      return p ? { ...p, amount:Number(a.amount || p.defaultFee || 0) } : null;
+    }).filter(Boolean);
+  }
+
+  function v13Movements(eventId) {
+    return (data.movements || [])
+      .filter(m => m.eventId === eventId && m.salonId === session?.salonId)
+      .sort((a,b) => String(a.movementDate || a.createdAt || '').localeCompare(String(b.movementDate || b.createdAt || '')));
+  }
+
+  function v13PrintEvent(eid) {
+    const e = (data.events || []).find(x => x.id === eid);
+    const s = salon();
+    if (!e || !s) return toast('No se pudo abrir la reserva');
+
+    const staff = v13StaffRows(eid);
+    const extras = Array.isArray(e.extras) ? e.extras : [];
+    const stockItems = Array.isArray(e.stockItems) ? e.stockItems : [];
+    const moves = v13Movements(eid);
+    const payments = moves.filter(m => m.type === 'Cobro');
+    const expenses = moves.filter(m => m.type === 'Gasto');
+
+    const totalPaid = payments.reduce((sum,m) => sum + Number(m.amount || 0), 0);
+    const totalExpenses = expenses.reduce((sum,m) => sum + Number(m.amount || 0), 0);
+    const total = Number(e.total || 0);
+    const balance = Math.max(0, total - Number(e.paid || totalPaid || 0));
+
+    const win = window.open('', '_blank', 'width=1000,height=800');
+    if (!win) return toast('El navegador bloqueó la ventana de impresión');
+
+    const logo = s.logo
+      ? `<img src="${s.logo}" style="max-height:80px;max-width:180px;object-fit:contain">`
+      : '';
+
+    win.document.write(`
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Reserva ${esc(e.child || '')}</title>
+<style>
+  body{font-family:Arial,sans-serif;color:#222;margin:28px}
+  .head{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #222;padding-bottom:14px;margin-bottom:20px}
+  .brand h1{margin:0 0 4px;font-size:26px}
+  .muted{color:#666}
+  .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px 22px}
+  .box{border:1px solid #ccc;border-radius:10px;padding:14px;margin-top:16px}
+  .box h2{font-size:18px;margin:0 0 10px}
+  table{width:100%;border-collapse:collapse;margin-top:8px}
+  th,td{border-bottom:1px solid #ddd;padding:8px;text-align:left;font-size:13px}
+  th{background:#f5f5f5}
+  .totals{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:18px}
+  .total-card{border:1px solid #ccc;padding:12px;border-radius:8px}
+  .total-card small{display:block;color:#666}
+  .total-card strong{font-size:18px}
+  .foot{margin-top:30px;padding-top:12px;border-top:1px solid #ccc;font-size:12px;color:#666}
+  @media print{
+    body{margin:12mm}
+    button{display:none!important}
+  }
+</style>
+</head>
+<body>
+  <div class="head">
+    <div class="brand">
+      ${logo}
+      <h1>${esc(s.name || 'Salón')}</h1>
+      <div>${esc(s.address || '')}</div>
+      <div>${esc(s.phone || '')}</div>
+      <div>${esc(s.email || '')}</div>
+    </div>
+    <div style="text-align:right">
+      <div><b>Resumen de reserva</b></div>
+      <div class="muted">${fmtDate(e.date)}</div>
+      <div class="muted">${esc(e.start || '')} a ${esc(e.end || '')}</div>
+    </div>
+  </div>
+
+  <div class="box">
+    <h2>Datos de la fiesta</h2>
+    <div class="grid">
+      <div><b>Cumpleañero/a:</b> ${esc(e.child || '')}</div>
+      <div><b>Edad:</b> ${Number(e.age || 0) || '-'}</div>
+      <div><b>Cliente:</b> ${esc(e.client || '')}</div>
+      <div><b>Contacto:</b> ${esc(e.phone || '')}</div>
+      <div><b>Fecha:</b> ${fmtDate(e.date)}</div>
+      <div><b>Horario:</b> ${esc(e.start || '')} a ${esc(e.end || '')}</div>
+      <div><b>Paquete:</b> ${esc(e.package || '')}</div>
+      <div><b>Invitados estimados:</b> ${Number(e.guests || 0)}</div>
+      <div><b>Estado:</b> ${esc(e.status || '')}</div>
+      <div><b>Observaciones:</b> ${esc(e.notes || 'Sin observaciones')}</div>
+    </div>
+  </div>
+
+  <div class="box">
+    <h2>Personal asignado</h2>
+    ${
+      staff.length
+        ? `<table>
+            <thead><tr><th>Nombre</th><th>Cargo</th><th>WhatsApp</th><th>Costo</th></tr></thead>
+            <tbody>
+              ${staff.map(p => `
+                <tr>
+                  <td>${esc(p.name)}</td>
+                  <td>${esc(p.role || '')}</td>
+                  <td>${esc(p.phone || '')}</td>
+                  <td>${money(p.amount || 0)}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+          <div style="margin-top:8px"><b>Cantidad de personal:</b> ${staff.length}</div>`
+        : `<div class="muted">Sin personal asignado.</div>`
+    }
+  </div>
+
+  <div class="box">
+    <h2>Adicionales</h2>
+    ${
+      extras.length
+        ? `<table>
+            <thead><tr><th>Adicional</th><th>Detalle</th><th>Importe</th></tr></thead>
+            <tbody>
+              ${extras.map(x => `
+                <tr>
+                  <td>${esc(x.name || '')}</td>
+                  <td>${esc(x.description || '')}</td>
+                  <td>${money(x.amount || 0)}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>`
+        : `<div class="muted">Sin adicionales.</div>`
+    }
+  </div>
+
+  <div class="box">
+    <h2>Productos de stock</h2>
+    ${
+      stockItems.length
+        ? `<table>
+            <thead><tr><th>Producto</th><th>Cantidad</th><th>Precio unitario</th><th>Total</th></tr></thead>
+            <tbody>
+              ${stockItems.map(x => `
+                <tr>
+                  <td>${esc(x.name || '')}</td>
+                  <td>${Number(x.quantity || 0)}</td>
+                  <td>${money(x.salePrice || 0)}</td>
+                  <td>${money(x.total || 0)}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>`
+        : `<div class="muted">Sin productos de stock.</div>`
+    }
+  </div>
+
+  <div class="box">
+    <h2>Movimientos de cobros</h2>
+    ${
+      payments.length
+        ? `<table>
+            <thead><tr><th>Fecha</th><th>Concepto</th><th>Medio</th><th>Referencia</th><th>Importe</th></tr></thead>
+            <tbody>
+              ${payments.map(m => `
+                <tr>
+                  <td>${esc(m.movementDate || '')}</td>
+                  <td>${esc(m.concept || 'Cobro')}</td>
+                  <td>${esc(m.method || '')}</td>
+                  <td>${esc(m.reference || '')}</td>
+                  <td>${money(m.amount || 0)}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>`
+        : `<div class="muted">Sin cobros registrados.</div>`
+    }
+  </div>
+
+  <div class="totals">
+    <div class="total-card">
+      <small>Total reserva</small>
+      <strong>${money(total)}</strong>
+    </div>
+    <div class="total-card">
+      <small>Total cobrado</small>
+      <strong>${money(Number(e.paid || totalPaid || 0))}</strong>
+    </div>
+    <div class="total-card">
+      <small>Saldo</small>
+      <strong>${money(balance)}</strong>
+    </div>
+    <div class="total-card">
+      <small>Gastos registrados</small>
+      <strong>${money(totalExpenses)}</strong>
+    </div>
+  </div>
+
+  <div class="foot">
+    Generado desde FiestaControl · ${new Date().toLocaleString('es-AR')}
+  </div>
+
+  <div style="margin-top:20px">
+    <button onclick="window.print()" style="padding:10px 18px;font-size:15px">Imprimir</button>
+  </div>
+</body>
+</html>
+    `);
+
+    win.document.close();
+    setTimeout(() => {
+      try { win.focus(); } catch (_) {}
+    }, 200);
+  }
+
+  window.printEventV13 = v13PrintEvent;
+
+  // Botón dentro del detalle de fiesta
+  const prevOpenEventV13 = window.openEvent;
+  window.openEvent = function (eid) {
+    prevOpenEventV13(eid);
+
+    const modal = document.querySelector('#modal-body');
+    if (!modal || modal.querySelector('[data-v13-print]')) return;
+
+    const toolbar = modal.querySelector('.toolbar');
+    const btn = document.createElement('button');
+    btn.className = 'secondary small';
+    btn.setAttribute('data-v13-print','1');
+    btn.innerHTML = '🖨 Imprimir resumen';
+    btn.onclick = () => v13PrintEvent(eid);
+
+    if (toolbar) toolbar.appendChild(btn);
+    else modal.prepend(btn);
+  };
+
+  // Botón también en cierre de fiesta
+  const prevFinalizeV13 = window.openFinalizeEvent;
+  window.openFinalizeEvent = function (eid) {
+    prevFinalizeV13(eid);
+
+    const modal = document.querySelector('#modal-body');
+    if (!modal || modal.querySelector('[data-v13-print-close]')) return;
+
+    const actions = modal.querySelector('.form-actions');
+    if (!actions) return;
+
+    const btn = document.createElement('button');
+    btn.className = 'secondary';
+    btn.type = 'button';
+    btn.setAttribute('data-v13-print-close','1');
+    btn.innerHTML = '🖨 Imprimir resumen';
+    btn.onclick = () => v13PrintEvent(eid);
+
+    actions.prepend(btn);
+  };
+
+})();
