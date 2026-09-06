@@ -15270,3 +15270,542 @@ setTimeout(repairResetButtons52,250);
 setInterval(repairResetButtons52,1200);
 
 })();
+
+
+// ============================================================
+// V53 - COMUNIDAD DE PROVEEDORES + CATÁLOGO Y COMPRAS
+// ============================================================
+(function(){
+'use strict';
+
+data.providerProducts=data.providerProducts||[];
+data.providerOffers=data.providerOffers||[];
+data.communityMessages=data.communityMessages||[];
+
+const N53=v=>Number(v||0);
+const norm53=v=>String(v||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+const esc53=v=>{
+  try{return esc(v)}catch(e){
+    return String(v??'').replace(/[&<>"']/g,ch=>({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[ch]));
+  }
+};
+const money53=v=>{
+  try{return money(v)}catch(e){
+    return '$ '+N53(v).toLocaleString('es-AR');
+  }
+};
+const SID53=()=>{
+  try{return session?.salonId}catch(e){return window.session?.salonId}
+};
+
+function provider53(){
+  const list=data.marketSuppliers||[];
+  let p=null;
+  const ss=(typeof session!=='undefined'?session:window.session)||{};
+
+  const ids=[
+    ss.providerId,ss.supplierId,ss.marketSupplierId,ss.userId,ss.id
+  ].filter(Boolean).map(String);
+
+  p=list.find(x=>ids.includes(String(x.id)));
+  if(p)return p;
+
+  const email=norm53(ss.email||ss.userEmail);
+  if(email)p=list.find(x=>norm53(x.email)===email);
+  if(p)return p;
+
+  const name=norm53(ss.name||ss.businessName||ss.providerName);
+  if(name)p=list.find(x=>norm53(x.name||x.businessName)===name);
+  return p||null;
+}
+function providerId53(){
+  const p=provider53();
+  const ss=(typeof session!=='undefined'?session:window.session)||{};
+  return p?.id || ss.providerId || ss.supplierId || ss.marketSupplierId || ss.userId || '';
+}
+function providerProducts53(pid=providerId53()){
+  return (data.providerProducts||[]).filter(x=>String(x.providerId)===String(pid)&&x.active!==false);
+}
+function communityProviders53(){
+  return (data.marketSuppliers||[]).filter(x=>x.status!=='Suspendido'&&x.active!==false);
+}
+function ownProviders53(){
+  return (data.suppliers||[]).filter(x=>x.salonId===SID53());
+}
+function stockProducts53(){
+  return (data.stockProducts||[]).filter(x=>x.salonId===SID53());
+}
+
+// ------------------------------------------------------------
+// PROVEEDOR - BOTÓN COMUNIDAD
+// ------------------------------------------------------------
+function injectProviderCommunityButton53(){
+  const ss=(typeof session!=='undefined'?session:window.session)||{};
+  if(ss.role!=='provider' && ss.role!=='supplier')return;
+
+  if(document.querySelector('#provider-community-btn53'))return;
+
+  const candidates=[
+    document.querySelector('.topbar .toolbar'),
+    document.querySelector('.nav'),
+    document.querySelector('.toolbar'),
+    document.querySelector('header'),
+    document.querySelector('#app')
+  ].filter(Boolean);
+
+  const host=candidates[0];
+  if(!host)return;
+
+  const btn=document.createElement('button');
+  btn.id='provider-community-btn53';
+  btn.className='secondary';
+  btn.innerHTML='💬 Comunidad';
+  btn.onclick=()=>renderProviderCommunity53();
+  host.appendChild(btn);
+}
+
+window.renderProviderCommunity53=function(){
+  const p=provider53();
+  const pid=providerId53();
+
+  if(!pid){
+    return toast('No se pudo identificar el proveedor de la sesión');
+  }
+
+  const products=providerProducts53(pid);
+  const offers=(data.providerOffers||[])
+    .filter(x=>String(x.providerId)===String(pid))
+    .sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
+
+  $('#content').innerHTML=`
+    <div class="card">
+      <div class="section-title">
+        <div>
+          <h2>💬 Comunidad de salones</h2>
+          <small class="muted">Publicá ofertas para que las vean los salones de la comunidad.</small>
+        </div>
+        <button class="primary" onclick="openProviderOffer53()">+ Publicar oferta</button>
+      </div>
+    </div>
+
+    <div class="grid" style="margin-top:14px">
+      <div class="card">
+        <div class="section-title">
+          <div><h3>Mis productos</h3><small class="muted">Estos productos y precios aparecen cuando un salón te elige para comprar.</small></div>
+          <button class="secondary small" onclick="openProviderProduct53()">+ Producto</button>
+        </div>
+
+        ${products.length?`
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>Producto</th><th>Precio</th><th>Unidad</th><th></th></tr></thead>
+              <tbody>${products.map(x=>`
+                <tr>
+                  <td><b>${esc53(x.name)}</b><small style="display:block">${esc53(x.description||'')}</small></td>
+                  <td>${money53(x.price)}</td>
+                  <td>${esc53(x.unit||'unidad')}</td>
+                  <td><button class="secondary small" onclick="openProviderProduct53('${x.id}')">Editar</button></td>
+                </tr>`).join('')}</tbody>
+            </table>
+          </div>`:'<div class="empty">Todavía no cargaste productos.</div>'}
+      </div>
+
+      <div class="card">
+        <h3>Ofertas publicadas</h3>
+        ${offers.length?offers.map(o=>`
+          <div class="card" style="margin:8px 0;padding:12px">
+            <b>${esc53(o.title)}</b>
+            <div>${esc53(o.message)}</div>
+            <small>${new Date(o.createdAt).toLocaleString('es-AR')}</small>
+          </div>`).join(''):'<div class="empty">Sin ofertas publicadas.</div>'}
+      </div>
+    </div>
+  `;
+};
+
+window.openProviderProduct53=function(idp=''){
+  const pid=providerId53();
+  const old=idp?(data.providerProducts||[]).find(x=>x.id===idp&&String(x.providerId)===String(pid)):null;
+
+  showModal(`
+    <div class="modal-title">
+      <div><h2>${old?'Editar':'Agregar'} producto</h2><p>Producto visible para los salones.</p></div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+    <form id="providerProduct53">
+      <div class="form-grid">
+        <div class="field span2"><label>Producto</label><input name="name" required value="${esc53(old?.name||'')}"></div>
+        <div class="field"><label>Precio</label><input name="price" type="number" min="0" required value="${N53(old?.price)}"></div>
+        <div class="field"><label>Unidad</label><input name="unit" value="${esc53(old?.unit||'unidad')}" placeholder="unidad, caja, kg..."></div>
+        <div class="field span2"><label>Descripción</label><textarea name="description">${esc53(old?.description||'')}</textarea></div>
+      </div>
+      <div class="form-actions"><button class="primary">Guardar</button></div>
+    </form>
+  `);
+
+  document.querySelector('#providerProduct53').onsubmit=e=>{
+    e.preventDefault();
+    const f=Object.fromEntries(new FormData(e.target));
+    const obj={
+      ...(old||{}),
+      id:old?.id||id(),
+      providerId:pid,
+      providerName:provider53()?.name||provider53()?.businessName||'Proveedor',
+      name:String(f.name||'').trim(),
+      price:N53(f.price),
+      unit:String(f.unit||'unidad').trim(),
+      description:String(f.description||'').trim(),
+      active:true
+    };
+    if(old){
+      const ix=data.providerProducts.findIndex(x=>x.id===old.id);
+      data.providerProducts[ix]=obj;
+    }else data.providerProducts.push(obj);
+    save(); closeModal(); renderProviderCommunity53(); toast('Producto guardado');
+  };
+};
+
+window.openProviderOffer53=function(){
+  const pid=providerId53();
+  const p=provider53();
+
+  showModal(`
+    <div class="modal-title">
+      <div><h2>Publicar oferta</h2><p>La verán los salones en su comunidad.</p></div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+    <form id="offer53">
+      <div class="field"><label>Título</label><input name="title" required></div>
+      <div class="field"><label>Mensaje / oferta</label><textarea name="message" required></textarea></div>
+      <div class="form-actions"><button class="primary">Publicar</button></div>
+    </form>
+  `);
+
+  document.querySelector('#offer53').onsubmit=e=>{
+    e.preventDefault();
+    const f=Object.fromEntries(new FormData(e.target));
+    data.providerOffers.push({
+      id:id(),
+      providerId:pid,
+      providerName:p?.name||p?.businessName||'Proveedor',
+      title:String(f.title||'').trim(),
+      message:String(f.message||'').trim(),
+      createdAt:new Date().toISOString(),
+      active:true
+    });
+    save(); closeModal(); renderProviderCommunity53(); toast('Oferta publicada');
+  };
+};
+
+// ------------------------------------------------------------
+// SALÓN - OFERTAS DE PROVEEDORES COMO COMUNIDAD
+// ------------------------------------------------------------
+function providerOffersCard53(){
+  const offers=(data.providerOffers||[])
+    .filter(x=>x.active!==false)
+    .sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')))
+    .slice(0,20);
+
+  return `
+    <div class="card" style="margin-top:14px">
+      <div class="section-title">
+        <div>
+          <h3>💬 Ofertas de proveedores · Comunidad</h3>
+          <small class="muted">Mensajes y promociones publicados por proveedores de la comunidad.</small>
+        </div>
+      </div>
+      ${offers.length?offers.map(o=>`
+        <div class="card" style="margin:8px 0;padding:12px">
+          <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+            <div>
+              <b>${esc53(o.providerName||'Proveedor')}</b>
+              <div style="margin-top:4px"><b>${esc53(o.title)}</b></div>
+              <div>${esc53(o.message)}</div>
+            </div>
+            <button class="secondary small" onclick="openPurchaseFromCommunity53('${o.providerId}')">Ver productos / comprar</button>
+          </div>
+        </div>`).join(''):'<div class="empty">Todavía no hay ofertas publicadas.</div>'}
+    </div>
+  `;
+}
+
+// ------------------------------------------------------------
+// SALÓN - PROVEEDORES Y NUEVA COMPRA
+// ------------------------------------------------------------
+window.renderSuppliersV53=function(){
+  const own=ownProviders53();
+  const community=communityProviders53();
+  const purchases=(data.stockPurchases||[])
+    .filter(x=>x.salonId===SID53())
+    .sort((a,b)=>String(b.createdAt||b.date||'').localeCompare(String(a.createdAt||a.date||'')));
+
+  setTitle('Proveedores','Compras y comunidad');
+
+  $('#content').innerHTML=`
+    <div class="card">
+      <div class="section-title">
+        <div>
+          <h3>🚚 Proveedores</h3>
+          <small class="muted">Comprá a proveedores propios o a proveedores de la comunidad.</small>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="secondary" onclick="openManualSupplier51()">+ Agregar proveedor manual</button>
+          <button class="primary" onclick="openStockPurchase53()">+ Nueva compra</button>
+        </div>
+      </div>
+    </div>
+
+    ${providerOffersCard53()}
+
+    <div class="grid" style="margin-top:14px">
+      <div class="card">
+        <h3>Mis proveedores</h3>
+        ${own.length?own.map(s=>`
+          <div style="padding:10px 0;border-bottom:1px solid #eee">
+            <b>${esc53(s.name||s.businessName||'Proveedor')}</b>
+            <small style="display:block">${esc53(s.phone||s.whatsapp||'')} ${s.email?'· '+esc53(s.email):''}</small>
+          </div>`).join(''):'<div class="empty">Sin proveedores manuales.</div>'}
+      </div>
+
+      <div class="card">
+        <h3>Proveedores de la comunidad</h3>
+        ${community.length?community.map(s=>{
+          const cnt=providerProducts53(s.id).length;
+          return `
+          <div style="padding:10px 0;border-bottom:1px solid #eee;display:flex;justify-content:space-between;gap:8px">
+            <div>
+              <b>${esc53(s.name||s.businessName||'Proveedor')}</b>
+              <small style="display:block">${cnt} producto(s) publicados</small>
+            </div>
+            <button class="secondary small" onclick="openPurchaseFromCommunity53('${s.id}')">Ver productos</button>
+          </div>`;
+        }).join(''):'<div class="empty">No hay proveedores comunitarios.</div>'}
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h3>Compras registradas</h3>
+      ${purchases.length?`
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr><th>Fecha</th><th>Proveedor</th><th>Producto</th><th>Cantidad</th><th>Unitario</th><th>Total</th><th>Pago</th><th>Entrega</th></tr></thead>
+            <tbody>${purchases.map(p=>`
+              <tr>
+                <td>${esc53(p.date||p.createdAt?.slice?.(0,10)||'')}</td>
+                <td>${esc53(p.supplierName||'')}</td>
+                <td>${esc53(p.productName||'')}</td>
+                <td>${N53(p.qty)}</td>
+                <td>${money53(p.unitCost||0)}</td>
+                <td>${money53(p.total||0)}</td>
+                <td>${esc53(p.paymentStatus||'Pendiente')}</td>
+                <td>${esc53(p.deliveryStatus||'Pendiente de entrega')}</td>
+              </tr>`).join('')}</tbody>
+          </table>
+        </div>`:'<div class="empty">Todavía no hay compras.</div>'}
+    </div>
+  `;
+};
+
+window.openPurchaseFromCommunity53=function(providerId){
+  openStockPurchase53(`community:${providerId}`);
+};
+
+window.openStockPurchase53=function(preselect=''){
+  const own=ownProviders53();
+  const community=communityProviders53();
+
+  const options=[
+    '<option value="">Seleccionar proveedor</option>',
+    own.length?'<optgroup label="Mis proveedores">'+own.map(s=>`<option value="own:${s.id}" ${preselect===`own:${s.id}`?'selected':''}>${esc53(s.name||s.businessName||'Proveedor')}</option>`).join('')+'</optgroup>':'',
+    community.length?'<optgroup label="Proveedores de la comunidad">'+community.map(s=>`<option value="community:${s.id}" ${preselect===`community:${s.id}`?'selected':''}>${esc53(s.name||s.businessName||'Proveedor')}</option>`).join('')+'</optgroup>':''
+  ].join('');
+
+  showModal(`
+    <div class="modal-title">
+      <div><h2>Nueva compra</h2><p>Proveedor propio o proveedor de la comunidad.</p></div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="purchase53">
+      <div class="form-grid">
+        <div class="field span2">
+          <label>Proveedor</label>
+          <select id="supplier53" name="supplier" required>${options}</select>
+        </div>
+
+        <div class="field span2">
+          <label>Producto</label>
+          <select id="product53" name="product" required>
+            <option value="">Primero seleccioná un proveedor</option>
+          </select>
+          <small id="productHelp53" class="muted"></small>
+        </div>
+
+        <div class="field"><label>Cantidad</label><input id="qty53" name="qty" type="number" min="1" value="1" required></div>
+        <div class="field"><label>Costo unitario</label><input id="cost53" name="unitCost" type="number" min="0" required></div>
+        <div class="field"><label>Total</label><input id="total53" readonly></div>
+        <div class="field"><label>Fecha</label><input name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required></div>
+
+        <div class="field">
+          <label>Estado de pago</label>
+          <select name="paymentStatus"><option>Pendiente</option><option>Pagado</option></select>
+        </div>
+        <div class="field">
+          <label>Entrega</label>
+          <select name="deliveryStatus"><option>Pendiente de entrega</option><option>Entregado</option></select>
+        </div>
+      </div>
+
+      <div class="form-actions"><button class="primary">Registrar compra</button></div>
+    </form>
+  `);
+
+  const sEl=$('#supplier53'), pEl=$('#product53'), qEl=$('#qty53'), cEl=$('#cost53'), tEl=$('#total53'), help=$('#productHelp53');
+
+  function syncProducts(){
+    const [source,pid]=String(sEl.value||'').split(':');
+    if(!pid){
+      pEl.innerHTML='<option value="">Primero seleccioná un proveedor</option>';
+      cEl.value='';
+      return;
+    }
+
+    if(source==='community'){
+      const ps=providerProducts53(pid);
+      pEl.innerHTML='<option value="">Seleccionar producto del proveedor</option>'+
+        ps.map(p=>`<option value="communityProduct:${p.id}">${esc53(p.name)} · ${money53(p.price)} / ${esc53(p.unit||'unidad')}</option>`).join('');
+      help.textContent='Productos y precios publicados por este proveedor en la comunidad.';
+      cEl.readOnly=true;
+    }else{
+      const ps=stockProducts53();
+      pEl.innerHTML='<option value="">Seleccionar producto de Stock</option>'+
+        ps.map(p=>`<option value="stockProduct:${p.id}">${esc53(p.name)}</option>`).join('');
+      help.textContent='Para proveedores manuales se utilizan los productos creados en Stock.';
+      cEl.readOnly=false;
+    }
+    cEl.value='';
+    tEl.value=money53(0);
+  }
+
+  function syncPrice(){
+    const [source,pid]=String(sEl.value||'').split(':');
+    const [ptype,prodId]=String(pEl.value||'').split(':');
+    if(source==='community'){
+      const p=(data.providerProducts||[]).find(x=>x.id===prodId&&String(x.providerId)===String(pid));
+      cEl.value=N53(p?.price);
+    }else{
+      const p=(data.stockProducts||[]).find(x=>x.id===prodId&&x.salonId===SID53());
+      if(p && !cEl.value)cEl.value=N53(p.costPrice);
+    }
+    tEl.value=money53(N53(qEl.value)*N53(cEl.value));
+  }
+
+  sEl.onchange=syncProducts;
+  pEl.onchange=syncPrice;
+  qEl.oninput=syncPrice;
+  cEl.oninput=syncPrice;
+
+  syncProducts();
+  if(preselect){
+    sEl.value=preselect;
+    syncProducts();
+  }
+
+  $('#purchase53').onsubmit=e=>{
+    e.preventDefault();
+    const f=Object.fromEntries(new FormData(e.target));
+    const [source,supplierId]=String(f.supplier).split(':');
+    const [,productId]=String(f.product).split(':');
+
+    let sup=null, prod=null;
+    if(source==='community'){
+      sup=communityProviders53().find(x=>String(x.id)===String(supplierId));
+      prod=(data.providerProducts||[]).find(x=>x.id===productId&&String(x.providerId)===String(supplierId));
+    }else{
+      sup=ownProviders53().find(x=>String(x.id)===String(supplierId));
+      prod=stockProducts53().find(x=>x.id===productId);
+    }
+    if(!sup||!prod)return toast('Proveedor o producto no encontrado');
+
+    const qty=N53(f.qty);
+    const unitCost=source==='community'?N53(prod.price):N53(f.unitCost);
+    const total=qty*unitCost;
+
+    data.stockPurchases=data.stockPurchases||[];
+    const purchase={
+      id:id(),salonId:SID53(),
+      supplierId,supplierSource:source,
+      supplierName:sup.name||sup.businessName||'Proveedor',
+      productId:prod.id,
+      productName:prod.name,
+      qty,unitCost,total,
+      date:f.date,
+      paymentStatus:f.paymentStatus,
+      deliveryStatus:f.deliveryStatus,
+      createdAt:new Date().toISOString()
+    };
+    data.stockPurchases.push(purchase);
+
+    // Si viene de comunidad y se entrega, intenta sumar al producto de stock del mismo nombre.
+    if(f.deliveryStatus==='Entregado'){
+      let stock=stockProducts53().find(x=>norm53(x.name)===norm53(prod.name));
+      if(!stock){
+        stock={
+          id:id(),salonId:SID53(),name:prod.name,
+          category:'Compra a comunidad',
+          stock:0,minStock:0,costPrice:unitCost,salePrice:0
+        };
+        data.stockProducts.push(stock);
+      }
+      stock.stock=N53(stock.stock)+qty;
+      stock.costPrice=unitCost;
+    }
+
+    if(f.paymentStatus==='Pagado'){
+      data.movements=data.movements||[];
+      data.movements.push({
+        id:id(),salonId:SID53(),
+        type:'Gasto',category:'Compra de stock',
+        concept:`Compra ${prod.name} · ${purchase.supplierName}`,
+        amount:total,movementDate:f.date,
+        createdAt:new Date().toISOString(),
+        sourceKey:`v53:purchase:${purchase.id}`
+      });
+    }
+
+    save(); closeModal(); renderSuppliersV53(); toast('Compra registrada');
+  };
+};
+
+// ------------------------------------------------------------
+// RUTAS / INYECCIÓN
+// ------------------------------------------------------------
+const route53=renderSalonView;
+renderSalonView=function(){
+  if(view==='suppliers')return renderSuppliersV53();
+  return route53();
+};
+
+// Si ya existe una pantalla "community" para salón, agrega ofertas.
+const oldCommunity53=window.renderCommunity;
+if(typeof oldCommunity53==='function'){
+  window.renderCommunity=function(){
+    const r=oldCommunity53.apply(this,arguments);
+    setTimeout(()=>{
+      if(session?.role==='salon' && !document.querySelector('#provider-offers-community53')){
+        const c=document.createElement('div');
+        c.id='provider-offers-community53';
+        c.innerHTML=providerOffersCard53();
+        document.querySelector('#content')?.appendChild(c);
+      }
+    },50);
+    return r;
+  };
+}
+
+setTimeout(injectProviderCommunityButton53,300);
+setInterval(injectProviderCommunityButton53,1400);
+
+})();
