@@ -20278,3 +20278,226 @@ setInterval(()=>{
 },1000);
 
 })();
+
+
+// ============================================================
+// V65 - MIS PRODUCTOS EN LISTADO + CAMPOS DEFINITIVOS
+// Campos: Producto, Categoría, Costo, Descripción, Foto
+// ============================================================
+(function(){
+'use strict';
+
+const esc65=v=>{
+  try{return esc(v)}catch(e){
+    return String(v??'').replace(/[&<>"']/g,ch=>({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[ch]));
+  }
+};
+const money65=v=>{
+  try{return money(v)}catch(e){return '$ '+Number(v||0).toLocaleString('es-AR')}
+};
+
+window.openProviderProduct65=function(productId=''){
+  const p=typeof provider64==='function'?provider64():null;
+  if(!p)return toast('Proveedor no identificado');
+
+  if(typeof migrateRealProviderProducts64==='function')migrateRealProviderProducts64();
+  const list=typeof products64==='function'?products64():[];
+  const old=productId?list.find(x=>String(x.id)===String(productId)):null;
+
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>${old?'Editar producto':'Agregar producto'}</h2>
+        <p>${esc65(typeof providerDisplay64==='function'?providerDisplay64(p):'Proveedor')}</p>
+      </div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="providerProduct65">
+      <div class="form-grid">
+        <div class="field span2">
+          <label>Producto</label>
+          <input name="name" required value="${esc65(old?.name||'')}" placeholder="Nombre del producto">
+        </div>
+
+        <div class="field">
+          <label>Categoría</label>
+          <input name="category" required value="${esc65(old?.category||p.category||'')}" placeholder="Ej.: Bebidas">
+        </div>
+
+        <div class="field">
+          <label>Costo</label>
+          <input name="price" type="number" min="0" step="0.01" required value="${Number(old?.price||0)}">
+        </div>
+
+        <div class="field span2">
+          <label>Descripción</label>
+          <textarea name="description" required placeholder="Descripción del producto">${esc65(old?.description||'')}</textarea>
+        </div>
+
+        <div class="field span2">
+          <label>Foto del producto</label>
+          <input name="photoFile" type="file" accept="image/*">
+          ${old?.photo?`
+            <div style="margin-top:10px">
+              <img src="${old.photo}" style="width:120px;height:120px;object-fit:cover;border-radius:12px">
+            </div>
+          `:''}
+        </div>
+
+        <div class="field span2">
+          <label style="display:flex;align-items:center;gap:10px">
+            <input name="visibleToSalons" type="checkbox" ${old?.visibleToSalons===false?'':'checked'}>
+            <span>Visible para los salones</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="primary">Guardar producto</button>
+      </div>
+    </form>
+  `);
+
+  document.querySelector('#providerProduct65').onsubmit=e=>{
+    e.preventDefault();
+    const fd=new FormData(e.target);
+    const file=e.target.querySelector('[name="photoFile"]')?.files?.[0];
+
+    const finish=photo=>{
+      const obj={
+        id:old?.id||id(),
+        providerId:p.id,
+        providerUserId:p.userId||p.id,
+        providerEmail:p.email||'',
+        providerName:typeof providerDisplay64==='function'?providerDisplay64(p):'Proveedor',
+        name:String(fd.get('name')||'').trim(),
+        category:String(fd.get('category')||'').trim(),
+        price:Number(fd.get('price')||0),
+        description:String(fd.get('description')||'').trim(),
+        photo:photo||old?.photo||'',
+        visibleToSalons:fd.has('visibleToSalons'),
+        active:true
+      };
+
+      data.providerProducts=data.providerProducts||[];
+      const ix=data.providerProducts.findIndex(x=>String(x.id)===String(obj.id));
+      if(ix>=0)data.providerProducts[ix]={...data.providerProducts[ix],...obj};
+      else data.providerProducts.push(obj);
+
+      p.products=Array.isArray(p.products)?p.products:[];
+      const px=p.products.findIndex(x=>String(x.id)===String(obj.id));
+      const legacy={
+        id:obj.id,
+        name:obj.name,
+        category:obj.category,
+        price:obj.price,
+        description:obj.description,
+        photo:obj.photo,
+        visibleToSalons:obj.visibleToSalons,
+        active:true
+      };
+      if(px>=0)p.products[px]={...p.products[px],...legacy};
+      else p.products.push(legacy);
+
+      save();
+      closeModal();
+      renderMyProducts65();
+      toast('Producto guardado');
+    };
+
+    if(file){
+      const reader=new FileReader();
+      reader.onload=()=>finish(String(reader.result||''));
+      reader.onerror=()=>finish('');
+      reader.readAsDataURL(file);
+    }else finish('');
+  };
+};
+
+window.renderMyProducts65=function(){
+  const p=typeof provider64==='function'?provider64():null;
+  if(!p)return toast('Proveedor no identificado');
+
+  if(typeof migrateRealProviderProducts64==='function')migrateRealProviderProducts64();
+  const products=typeof products64==='function'?products64():[];
+  const content=document.querySelector('#content');
+  if(!content)return;
+
+  content.dataset.v64Products='1';
+  content.dataset.v65Products='1';
+
+  try{
+    if(typeof setTitle==='function')setTitle('Mis productos','Administrá el catálogo de productos del proveedor.');
+  }catch(e){}
+
+  content.innerHTML=`
+    <div class="card">
+      <div class="section-title">
+        <div>
+          <h2>Mis productos</h2>
+          <small class="muted">Productos cargados en formato listado.</small>
+        </div>
+        <button class="primary" onclick="openProviderProduct65()">+ Agregar producto</button>
+      </div>
+
+      ${products.length?`
+        <div class="table-wrap" style="margin-top:16px">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Foto</th>
+                <th>Producto</th>
+                <th>Categoría</th>
+                <th>Costo</th>
+                <th>Descripción</th>
+                <th>Visible</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${products.map(x=>`
+                <tr>
+                  <td>
+                    ${x.photo
+                      ? `<img src="${x.photo}" style="width:64px;height:64px;object-fit:cover;border-radius:10px">`
+                      : `<div style="width:64px;height:64px;border-radius:10px;background:#f1f2f6;display:flex;align-items:center;justify-content:center;font-size:24px">📦</div>`
+                    }
+                  </td>
+                  <td><b>${esc65(x.name||'')}</b></td>
+                  <td>${esc65(x.category||'')}</td>
+                  <td><b>${money65(x.price||0)}</b></td>
+                  <td style="min-width:220px">${esc65(x.description||'')}</td>
+                  <td>${x.visibleToSalons!==false?'✅ Sí':'🚫 No'}</td>
+                  <td>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap">
+                      <button class="secondary small" onclick="openProviderProduct65('${x.id}')">✏️ Editar</button>
+                      <button class="danger small" onclick="deleteProviderProduct64('${x.id}')">🗑️ Borrar</button>
+                    </div>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `:'<div class="empty" style="margin-top:16px">Todavía no hay productos cargados.</div>'}
+    </div>
+  `;
+};
+
+// Aliases finales.
+window.renderMyProducts64=window.renderMyProducts65;
+window.renderMyProducts63=window.renderMyProducts65;
+window.renderMyProducts62=window.renderMyProducts65;
+window.renderMyProducts61=window.renderMyProducts65;
+
+window.openProviderProduct64=window.openProviderProduct65;
+window.openProviderProduct56=window.openProviderProduct65;
+window.openProviderProduct55=window.openProviderProduct65;
+window.openProviderProduct54=window.openProviderProduct65;
+window.openProviderProduct53=window.openProviderProduct65;
+
+})();
