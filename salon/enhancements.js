@@ -10593,3 +10593,654 @@ renderSalonView=function(){
 };
 
 })();
+
+
+// ============================================================
+// V38 - REINICIO VISIBLE EN FINANZAS + LIMPIEZA REAL A CERO
+// ============================================================
+(function(){
+'use strict';
+
+data.movements=data.movements||[];
+data.providerPayments=data.providerPayments||[];
+data.stockPurchases=data.stockPurchases||[];
+data.orders=data.orders||[];
+data.assignments=data.assignments||[];
+data.auditLog=data.auditLog||[];
+
+const SID38=()=>session?.salonId;
+
+function zeroMoney38(){
+  const sid=SID38();
+
+  // Elimina ABSOLUTAMENTE todos los movimientos contables del salón.
+  data.movements=(data.movements||[]).filter(m=>m.salonId!==sid);
+
+  // Elimina pagos a proveedores del salón.
+  data.providerPayments=(data.providerPayments||[]).filter(p=>p.salonId!==sid);
+
+  // Reservas existentes, si hubiera: sin seña ni cobros.
+  (data.events||[]).forEach(e=>{
+    if(e.salonId!==sid)return;
+    e.deposit=0;
+    e.paid=0;
+    e.depositMethod='';
+    e.balance=Math.max(0,Number(e.total||0));
+  });
+
+  // Compras quedan sin pago.
+  (data.stockPurchases||[]).forEach(c=>{
+    if(c.salonId!==sid)return;
+    c.paymentStatus='Pendiente';
+    c.paymentMethod='';
+    c.reference='';
+    c.paidAt=null;
+  });
+
+  // Pedidos quedan sin pago.
+  (data.orders||[]).forEach(o=>{
+    if(o.salonId!==sid)return;
+    o.paymentId=null;
+    o.paidAt=null;
+    o.paymentMethod='';
+    o.paymentReference='';
+    o.paidAmount=0;
+    if(['Pagado','Pagado - pendiente de entrega','Entregado'].includes(o.status)){
+      o.status='Pendiente';
+    }
+  });
+
+  // Proveedores sin saldos.
+  (data.suppliers||[]).forEach(p=>{
+    if(p.salonId!==sid)return;
+    p.balance=0;
+    p.paid=0;
+    p.totalPaid=0;
+    p.totalPending=0;
+  });
+
+  // Pagos del servicio fuera del movimiento general.
+  if(Array.isArray(data.servicePayments)){
+    data.servicePayments=data.servicePayments.filter(p=>p.salonId!==sid);
+  }
+
+  // Desactiva resets/baselines viejos para que no reconstruyan montos.
+  if(Array.isArray(data.financeResets)){
+    data.financeResets=data.financeResets.filter(r=>r.salonId!==sid);
+  }
+  if(Array.isArray(data.accountingEpochs)){
+    data.accountingEpochs=data.accountingEpochs.filter(r=>r.salonId!==sid);
+  }
+}
+
+function deleteReservations38(){
+  const sid=SID38();
+  const events=(data.events||[]).filter(e=>e.salonId===sid);
+  const ids=new Set(events.map(e=>e.id));
+
+  // Restaura stock usado por reservas.
+  events.forEach(e=>{
+    (e.stockItems||[]).forEach(i=>{
+      const p=(data.stockProducts||[]).find(x=>x.id===i.productId&&x.salonId===sid);
+      if(p)p.stock=Number(p.stock||0)+Number(i.qty||0);
+    });
+  });
+
+  // Todo lo asociado desaparece.
+  data.movements=(data.movements||[]).filter(m=>!ids.has(m.eventId));
+  data.assignments=(data.assignments||[]).filter(a=>!ids.has(a.eventId));
+
+  const orderIds=(data.orders||[]).filter(o=>ids.has(o.eventId)).map(o=>o.id);
+  data.orders=(data.orders||[]).filter(o=>!ids.has(o.eventId));
+  data.providerPayments=(data.providerPayments||[]).filter(p=>!orderIds.includes(p.orderId));
+  data.cards=(data.cards||[]).filter(c=>!ids.has(c.eventId));
+  data.events=(data.events||[]).filter(e=>e.salonId!==sid);
+}
+
+function deleteOrders38(){
+  const sid=SID38();
+  const ids=new Set((data.orders||[]).filter(o=>o.salonId===sid).map(o=>o.id));
+  data.movements=(data.movements||[]).filter(m=>
+    !(m.salonId===sid && (ids.has(m.orderId) || m.category==='Proveedor'))
+  );
+  data.providerPayments=(data.providerPayments||[]).filter(p=>!ids.has(p.orderId));
+  data.orders=(data.orders||[]).filter(o=>o.salonId!==sid);
+}
+
+function deleteStaff38(){
+  const sid=SID38();
+  const ids=new Set((data.staff||[]).filter(s=>s.salonId===sid).map(s=>s.id));
+
+  data.movements=(data.movements||[]).filter(m=>
+    !(m.salonId===sid && (ids.has(m.staffId) || m.category==='Personal'))
+  );
+  data.assignments=(data.assignments||[]).filter(a=>!ids.has(a.staffId));
+  (data.events||[]).forEach(e=>{
+    if(e.salonId===sid){
+      e.staffExpenseTotal=0;
+      e.staffClientChargeTotal=0;
+    }
+  });
+  data.staff=(data.staff||[]).filter(s=>s.salonId!==sid);
+}
+
+window.openResetSectionsV38=function(){
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>🔄 Reinicio por secciones</h2>
+        <p>Marcá solamente lo que querés borrar.</p>
+      </div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="reset38">
+      <div class="card">
+        <label class="check-card">
+          <input type="checkbox" name="money" value="1">
+          <span><b>💰 Movimientos de dinero</b>
+          <small>Deja en $0 ingresos, egresos, señas, cobros, pagos y saldos.</small></span>
+        </label>
+
+        <label class="check-card" style="margin-top:8px">
+          <input type="checkbox" name="reservations" value="1">
+          <span><b>🎉 Reservas</b>
+          <small>Borra reservas y todos sus movimientos relacionados.</small></span>
+        </label>
+
+        <label class="check-card" style="margin-top:8px">
+          <input type="checkbox" name="orders" value="1">
+          <span><b>🚚 Pedidos</b>
+          <small>Borra pedidos, pagos a proveedores y sus movimientos.</small></span>
+        </label>
+
+        <label class="check-card" style="margin-top:8px">
+          <input type="checkbox" name="staff" value="1">
+          <span><b>👤 Personal</b>
+          <small>Borra empleados, asignaciones y gastos de personal.</small></span>
+        </label>
+      </div>
+
+      <div class="field" style="margin-top:14px">
+        <label>Contraseña administrativa</label>
+        <input type="password" name="password" required>
+      </div>
+
+      <div class="field">
+        <label>Motivo</label>
+        <textarea name="reason" required placeholder="Ej: limpiar datos de prueba"></textarea>
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="danger">Ejecutar borrado seleccionado</button>
+      </div>
+    </form>
+  `);
+
+  $('#reset38').onsubmit=e=>{
+    e.preventDefault();
+    const fd=new FormData(e.target);
+    const s=salon();
+
+    if(String(fd.get('password')||'')!==String(s?.password||'')){
+      return toast('Contraseña incorrecta');
+    }
+
+    const money=fd.get('money')==='1';
+    const reservations=fd.get('reservations')==='1';
+    const orders=fd.get('orders')==='1';
+    const staff=fd.get('staff')==='1';
+
+    if(!money&&!reservations&&!orders&&!staff){
+      return toast('Seleccioná al menos una opción');
+    }
+
+    if(reservations)deleteReservations38();
+    if(orders)deleteOrders38();
+    if(staff)deleteStaff38();
+    if(money)zeroMoney38();
+
+    data.auditLog.push({
+      id:id(),
+      salonId:SID38(),
+      action:'REINICIO POR SECCIONES V38',
+      options:{money,reservations,orders,staff},
+      reason:String(fd.get('reason')||''),
+      createdAt:new Date().toISOString()
+    });
+
+    save();
+
+    // Segundo guardado para evitar que capas viejas reconstruyan movimientos.
+    setTimeout(()=>{
+      if(money)zeroMoney38();
+      save();
+      closeModal();
+      toast('Reinicio realizado correctamente');
+      view='finance';
+      renderSalonShell();
+    },400);
+  };
+};
+
+// Reinicio rápido SOLO dinero, visible en Finanzas.
+window.quickZeroMoneyV38=function(){
+  showModal(`
+    <div class="modal-title">
+      <div><h2>💰 Poner movimientos en $0</h2><p>Borra todos los ingresos, egresos y pagos del salón.</p></div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+    <form id="quickzero38">
+      <div class="field"><label>Contraseña administrativa</label><input name="password" type="password" required></div>
+      <div class="field"><label>Motivo</label><textarea name="reason" required></textarea></div>
+      <div class="form-actions"><button type="button" class="ghost" onclick="closeModal()">Cancelar</button><button class="danger">Poner todo el dinero en $0</button></div>
+    </form>
+  `);
+
+  $('#quickzero38').onsubmit=e=>{
+    e.preventDefault();
+    const f=Object.fromEntries(new FormData(e.target));
+    if(String(f.password||'')!==String(salon()?.password||''))return toast('Contraseña incorrecta');
+
+    zeroMoney38();
+    save();
+
+    setTimeout(()=>{
+      zeroMoney38();
+      save();
+      closeModal();
+      toast('Todos los movimientos quedaron en $0');
+      view='finance';
+      renderSalonShell();
+    },350);
+  };
+};
+
+// Agrega los botones SIEMPRE arriba de Finanzas.
+window.renderFinanceV38=function(){
+  if(typeof renderFinanceV36==='function')renderFinanceV36();
+  else if(typeof renderFinanceV33==='function')renderFinanceV33();
+  else renderFinance();
+
+  const content=$('#content');
+  if(!content)return;
+
+  let bar=content.querySelector('.toolbar');
+  if(!bar){
+    bar=document.createElement('div');
+    bar.className='toolbar';
+    bar.style.marginBottom='16px';
+    content.prepend(bar);
+  }
+
+  if(!bar.querySelector('#zero-money38')){
+    const b=document.createElement('button');
+    b.id='zero-money38';
+    b.className='danger';
+    b.textContent='💰 Poner movimientos en $0';
+    b.onclick=quickZeroMoneyV38;
+    bar.appendChild(b);
+  }
+
+  if(!bar.querySelector('#reset-sections38')){
+    const b=document.createElement('button');
+    b.id='reset-sections38';
+    b.className='secondary';
+    b.textContent='🔄 Reinicio por secciones';
+    b.onclick=openResetSectionsV38;
+    bar.appendChild(b);
+  }
+};
+
+// Si no hay reservas y quedaron gastos viejos huérfanos,
+// NO los inventa ni los arrastra: se mantienen solo hasta usar el botón de cero.
+// La limpieza real la hace zeroMoney38.
+
+const route38=renderSalonView;
+renderSalonView=function(){
+  if(view==='finance')return renderFinanceV38();
+  return route38();
+};
+
+})();
+
+
+// ============================================================
+// V39 - PERSONAL INCLUIDO: 1 MOZO + 1 COCINA SIN CARGO AL CLIENTE
+//       PERSONAL ADICIONAL SÍ SUMA + GASTO SIN DUPLICAR
+// ============================================================
+(function(){
+'use strict';
+
+data.assignments=data.assignments||[];
+data.movements=data.movements||[];
+
+const SID39=()=>session?.salonId;
+const STAFF39=()=> (data.staff||[]).filter(s=>s.salonId===SID39() && s.staffStatus!=='Suspendido');
+const EVENT39=eid=> (data.events||[]).find(e=>e.id===eid && e.salonId===SID39());
+
+function norm39(v){
+  return String(v||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+}
+
+function isMozo39(s){
+  const r=norm39(s?.role);
+  return r.includes('mozo') || r.includes('moza');
+}
+function isCocina39(s){
+  const r=norm39(s?.role);
+  return r.includes('cocina') || r.includes('cocinero') || r.includes('cocinera');
+}
+
+// Un único gasto de personal por empleado asignado a una fiesta.
+window.rebuildStaffExpenseV39=function(eventId){
+  const e=EVENT39(eventId);
+  if(!e)return;
+
+  const ass=(data.assignments||[]).filter(a=>a.eventId===eventId);
+  let totalExpense=0;
+
+  // Borra TODOS los movimientos automáticos viejos de personal para esta fiesta.
+  data.movements=(data.movements||[]).filter(m=>{
+    if(m.eventId!==eventId)return true;
+    if(m.category!=='Personal')return true;
+    return false;
+  });
+
+  ass.forEach(a=>{
+    const s=(data.staff||[]).find(x=>x.id===a.staffId&&x.salonId===SID39());
+    const fee=Number(s?.defaultFee ?? a.amount ?? 0);
+
+    a.amount=fee;
+    a.staffName=s?.name||a.staffName||'Personal';
+
+    totalExpense+=fee;
+
+    if(fee>0){
+      data.movements.push({
+        id:id(),
+        salonId:SID39(),
+        eventId,
+        staffId:a.staffId,
+        sourceKey:`v39:staff:${eventId}:${a.staffId}`,
+        type:'Gasto',
+        category:'Personal',
+        concept:`${s?.role||'Personal'} - ${s?.name||a.staffName||''} · ${e.child||e.client||''}`,
+        amount:fee,
+        autoStaffExpense:true,
+        movementDate:e.date||new Date().toISOString().slice(0,10),
+        createdAt:new Date().toISOString()
+      });
+    }
+  });
+
+  e.staffExpenseTotal=totalExpense;
+  save();
+};
+
+// Toma formulario V30/V36 y ajusta selección inicial + textos.
+const baseForm39=window.openEventFormV36 || window.openEventFormV30 || window.openEventForm;
+
+window.openEventFormV39=function(eid=''){
+  const isNew=!eid;
+  baseForm39(eid);
+
+  const form=document.querySelector('#ev30');
+  if(!form)return;
+
+  const rows=[...document.querySelectorAll('.staffrow30')];
+  const staff=STAFF39();
+
+  // En una fiesta nueva: incluye automáticamente 1 mozo y 1 persona de cocina,
+  // si existen empleados activos con esos roles.
+  if(isNew){
+    let mozoChosen=false, cocinaChosen=false;
+
+    rows.forEach(r=>{
+      const sid=r.dataset.id;
+      const s=staff.find(x=>x.id===sid);
+      const selected=r.querySelector('.staffsel30');
+      const charge=r.querySelector('.staffcharge30');
+
+      if(selected && isMozo39(s) && !mozoChosen){
+        selected.checked=true;
+        if(charge)charge.checked=false;
+        mozoChosen=true;
+      } else if(selected && isCocina39(s) && !cocinaChosen){
+        selected.checked=true;
+        if(charge)charge.checked=false;
+        cocinaChosen=true;
+      }
+    });
+  }
+
+  // Mejora de textos para que sea claro qué suma y qué no suma.
+  rows.forEach(r=>{
+    const sid=r.dataset.id;
+    const s=staff.find(x=>x.id===sid);
+    const selected=r.querySelector('.staffsel30');
+    const charge=r.querySelector('.staffcharge30');
+
+    const selectedLabel=selected?.closest('label');
+    const chargeLabel=charge?.closest('label');
+
+    if(selectedLabel){
+      const small=selectedLabel.querySelector('small');
+      if(small){
+        small.textContent=`${s?.role||''} · costo salón ${money(s?.defaultFee||0)} · NO suma al cliente`;
+      }
+    }
+
+    if(chargeLabel){
+      const b=chargeLabel.querySelector('b');
+      const small=chargeLabel.querySelector('small');
+      if(b)b.textContent='Personal adicional';
+      if(small)small.textContent='Si lo marcás, este valor SÍ se suma al total de la fiesta';
+    }
+  });
+
+  // Aviso superior en personal.
+  const staffCard=rows[0]?.closest('.card');
+  if(staffCard && !staffCard.querySelector('#included-staff39')){
+    const notice=document.createElement('div');
+    notice.id='included-staff39';
+    notice.className='admin-notice';
+    notice.style.marginBottom='12px';
+    notice.innerHTML=`
+      <span>👥</span>
+      <div>
+        <b>Incluido en la fiesta: 1 mozo + 1 persona de cocina</b>
+        <small>No se suma al precio del cliente. Su costo se registra como gasto del salón. Si marcás “Personal adicional”, sí se suma al total.</small>
+      </div>`;
+    staffCard.insertBefore(notice, staffCard.children[1] || null);
+  }
+
+  // Recalcula visualmente si existe la función vía eventos disparados.
+  rows.forEach(r=>{
+    r.querySelectorAll('input').forEach(inp=>{
+      inp.dispatchEvent(new Event('change',{bubbles:true}));
+      inp.dispatchEvent(new Event('input',{bubbles:true}));
+    });
+  });
+
+  const oldSubmit=form.onsubmit;
+  form.onsubmit=function(ev){
+    const result=oldSubmit ? oldSubmit.call(form,ev) : undefined;
+
+    setTimeout(()=>{
+      let eventId=eid;
+      if(!eventId){
+        const latest=(data.events||[])
+          .filter(e=>e.salonId===SID39())
+          .sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')))[0];
+        eventId=latest?.id||'';
+      }
+      if(eventId)rebuildStaffExpenseV39(eventId);
+    },300);
+
+    return result;
+  };
+};
+
+// Cuando se abre una fiesta también limpia cualquier duplicado viejo.
+const baseOpen39=window.openEventV33 || window.openEventV31 || window.openEvent;
+window.openEventV39=function(eid){
+  rebuildStaffExpenseV39(eid);
+  return baseOpen39(eid);
+};
+
+// Aliases finales
+window.openEventForm=window.openEventFormV39;
+window.openEventFormV36=window.openEventFormV39;
+window.openEventFormV30=window.openEventFormV39;
+window.openEvent=window.openEventV39;
+
+})();
+
+
+// ============================================================
+// V40 - PERSONAL INCLUIDO EN COSTO BASE:
+// 1 MOZO + 1 COCINA/AYUDANTE + 2 ANIMADORES
+// Adicionales solo cuando se marcan como extra
+// ============================================================
+(function(){
+'use strict';
+
+const SID40=()=>session?.salonId;
+const STAFF40=()=> (data.staff||[]).filter(s=>s.salonId===SID40() && s.staffStatus!=='Suspendido');
+
+function norm40(v){
+  return String(v||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+}
+function isMozo40(s){
+  const r=norm40(s?.role);
+  return r.includes('mozo') || r.includes('moza');
+}
+function isCocina40(s){
+  const r=norm40(s?.role);
+  return r.includes('cocina') || r.includes('cocinero') || r.includes('cocinera') || r.includes('ayudante de cocina');
+}
+function isAnimador40(s){
+  const r=norm40(s?.role);
+  return r.includes('animador') || r.includes('animadora');
+}
+
+// Mejora formulario de empleado: roles sugeridos frecuentes.
+const oldStaff40=window.openStaffV31 || window.openStaffForm;
+window.openStaffV40=function(staffId=''){
+  oldStaff40(staffId);
+
+  const form=document.querySelector('#staff31');
+  if(!form)return;
+
+  const roleInput=form.querySelector('[name="role"]');
+  if(roleInput && !document.querySelector('#roles40')){
+    const dl=document.createElement('datalist');
+    dl.id='roles40';
+    dl.innerHTML=`
+      <option value="Mozo">
+      <option value="Moza">
+      <option value="Animador">
+      <option value="Animadora">
+      <option value="Ayudante de cocina">
+      <option value="Cocinero">
+      <option value="Cocinera">
+      <option value="Encargado">
+    `;
+    document.body.appendChild(dl);
+    roleInput.setAttribute('list','roles40');
+    roleInput.placeholder='Ej: Mozo, Animador, Ayudante de cocina';
+  }
+};
+
+// Toma V39 y amplía incluidos de costo base.
+const baseForm40=window.openEventFormV39 || window.openEventForm;
+
+window.openEventFormV40=function(eid=''){
+  const isNew=!eid;
+  baseForm40(eid);
+
+  const form=document.querySelector('#ev30');
+  if(!form)return;
+
+  const rows=[...document.querySelectorAll('.staffrow30')];
+  const staff=STAFF40();
+
+  if(isNew){
+    let mozoCount=0, cocinaCount=0, animCount=0;
+
+    rows.forEach(r=>{
+      const staffId=r.dataset.id;
+      const s=staff.find(x=>x.id===staffId);
+      const selected=r.querySelector('.staffsel30');
+      const charge=r.querySelector('.staffcharge30');
+      if(!selected)return;
+
+      if(isMozo40(s) && mozoCount<1){
+        selected.checked=true;
+        if(charge)charge.checked=false;
+        mozoCount++;
+        return;
+      }
+
+      if(isCocina40(s) && cocinaCount<1){
+        selected.checked=true;
+        if(charge)charge.checked=false;
+        cocinaCount++;
+        return;
+      }
+
+      if(isAnimador40(s) && animCount<2){
+        selected.checked=true;
+        if(charge)charge.checked=false;
+        animCount++;
+      }
+    });
+  }
+
+  // Texto explicativo de incluidos base.
+  const staffCard=rows[0]?.closest('.card');
+  if(staffCard){
+    const old=staffCard.querySelector('#included-staff39');
+    if(old){
+      old.innerHTML=`
+        <span>👥</span>
+        <div>
+          <b>Incluido en el costo base: 1 mozo + 1 cocina/ayudante + 2 animadores</b>
+          <small>No se suman al precio del cliente. Su costo queda como gasto del salón. Si necesitás otro mozo, animador o ayudante, marcá “Personal adicional” y recién ahí se suma al total de la fiesta.</small>
+        </div>`;
+    }
+  }
+
+  // Ajusta textos por rol para que quede claro.
+  rows.forEach(r=>{
+    const staffId=r.dataset.id;
+    const s=staff.find(x=>x.id===staffId);
+    const charge=r.querySelector('.staffcharge30');
+    const label=charge?.closest('label');
+    if(label){
+      const b=label.querySelector('b');
+      const small=label.querySelector('small');
+      if(b)b.textContent='Personal adicional';
+      if(small){
+        small.textContent=`Si este ${s?.role||'empleado'} es adicional, marcar acá para sumarlo al total del cliente`;
+      }
+    }
+  });
+
+  rows.forEach(r=>{
+    r.querySelectorAll('input').forEach(inp=>{
+      inp.dispatchEvent(new Event('change',{bubbles:true}));
+      inp.dispatchEvent(new Event('input',{bubbles:true}));
+    });
+  });
+};
+
+// aliases finales
+window.openStaffForm=window.openStaffV40;
+window.openStaffV31=window.openStaffV40;
+window.openEventForm=window.openEventFormV40;
+window.openEventFormV39=window.openEventFormV40;
+
+})();
