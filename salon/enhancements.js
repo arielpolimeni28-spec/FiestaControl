@@ -16983,3 +16983,335 @@ renderSalonView=function(){
 };
 
 })();
+
+
+// ============================================================
+// V56 - EDITAR USUARIO PROVEEDOR + VISIBILIDAD DE PRODUCTOS
+// ============================================================
+(function(){
+'use strict';
+
+const N56=v=>Number(v||0);
+const esc56=v=>{
+  try{return esc(v)}catch(e){
+    return String(v??'').replace(/[&<>"']/g,ch=>({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[ch]));
+  }
+};
+
+function provider56(){
+  try{
+    if(typeof providerAccount55==='function') return providerAccount55();
+  }catch(e){}
+  const s=(typeof session!=='undefined'?session:window.session)||{};
+  const list=data.marketSuppliers||[];
+  return list.find(p=>
+    String(p.id)===String(s.providerId||s.supplierId||s.marketSupplierId||s.userId||s.id) ||
+    (s.email && String(p.email||'').toLowerCase()===String(s.email).toLowerCase())
+  )||null;
+}
+function providerName56(p){
+  return String(p?.fantasyName||p?.businessName||p?.name||'Proveedor');
+}
+function belongs56(prod,p){
+  if(!prod||!p)return false;
+  return String(prod.providerId)===String(p.id) ||
+         String(prod.providerUserId)===String(p.userId||p.id) ||
+         (!!prod.providerEmail && !!p.email &&
+          String(prod.providerEmail).toLowerCase()===String(p.email).toLowerCase());
+}
+function products56(p){
+  return (data.providerProducts||[]).filter(x=>belongs56(x,p));
+}
+
+// ------------------------------------------------------------
+// EDITAR USUARIO / DATOS DEL PROVEEDOR
+// ------------------------------------------------------------
+window.openEditProviderUser56=function(){
+  const p=provider56();
+  if(!p)return toast('No se pudo identificar el proveedor');
+
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>Editar usuario proveedor</h2>
+        <p>Datos comerciales y de contacto visibles para los salones.</p>
+      </div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="editProviderUser56">
+      <div class="form-grid">
+        <div class="field span2">
+          <label>Nombre de fantasía</label>
+          <input name="fantasyName" required value="${esc56(p.fantasyName||p.businessName||p.name||'')}">
+        </div>
+
+        <div class="field span2">
+          <label>Dirección</label>
+          <input name="address" value="${esc56(p.address||'')}">
+        </div>
+
+        <div class="field">
+          <label>Teléfono</label>
+          <input name="phone" value="${esc56(p.phone||p.whatsapp||'')}">
+        </div>
+
+        <div class="field">
+          <label>Mail</label>
+          <input name="email" type="email" value="${esc56(p.email||'')}">
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="primary">Guardar cambios</button>
+      </div>
+    </form>
+  `);
+
+  document.querySelector('#editProviderUser56').onsubmit=e=>{
+    e.preventDefault();
+    const f=Object.fromEntries(new FormData(e.target));
+
+    p.fantasyName=String(f.fantasyName||'').trim();
+    p.businessName=p.fantasyName;
+    p.name=p.fantasyName;
+    p.address=String(f.address||'').trim();
+    p.phone=String(f.phone||'').trim();
+    p.whatsapp=p.phone;
+    p.email=String(f.email||'').trim();
+
+    // Mantiene actualizado el nombre del proveedor en todos sus productos.
+    (data.providerProducts||[]).forEach(prod=>{
+      if(belongs56(prod,p)){
+        prod.providerName=p.fantasyName;
+        prod.providerEmail=p.email;
+      }
+    });
+
+    save();
+    closeModal();
+    renderProviderCommunity56();
+    toast('Usuario proveedor actualizado');
+  };
+};
+
+// ------------------------------------------------------------
+// PRODUCTO: TILDE "VISIBLE PARA SALONES"
+// ------------------------------------------------------------
+window.openProviderProduct56=function(productId=''){
+  const p=provider56();
+  if(!p)return toast('Proveedor no identificado');
+
+  const old=productId?(data.providerProducts||[]).find(x=>x.id===productId&&belongs56(x,p)):null;
+  const visible = old ? old.visibleToSalons!==false : true;
+
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>${old?'Editar':'Agregar'} producto</h2>
+        <p>Proveedor: <b>${esc56(providerName56(p))}</b></p>
+      </div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="providerProduct56">
+      <div class="form-grid">
+        <div class="field span2">
+          <label>Producto</label>
+          <input name="name" required value="${esc56(old?.name||'')}">
+        </div>
+
+        <div class="field">
+          <label>Categoría</label>
+          <input name="category" required value="${esc56(old?.category||'')}">
+        </div>
+
+        <div class="field">
+          <label>Costo / precio</label>
+          <input name="price" type="number" min="0" required value="${N56(old?.price)}">
+        </div>
+
+        <div class="field">
+          <label>Unidad</label>
+          <input name="unit" value="${esc56(old?.unit||'unidad')}" placeholder="unidad, caja, kg...">
+        </div>
+
+        <div class="field span2">
+          <label>Descripción</label>
+          <textarea name="description" required>${esc56(old?.description||'')}</textarea>
+        </div>
+
+        <div class="field span2">
+          <label>Foto del producto</label>
+          <input name="photoFile" type="file" accept="image/*">
+          ${old?.photo?`<img src="${old.photo}" style="margin-top:8px;max-width:180px;max-height:130px;object-fit:cover;border-radius:12px">`:''}
+        </div>
+
+        <div class="field span2">
+          <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
+            <input name="visibleToSalons" type="checkbox" ${visible?'checked':''}>
+            <span>
+              <b>Visible para los salones</b><br>
+              <small>Si está tildado, este producto aparecerá a los salones cuando quieran hacer un pedido.</small>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="primary">Guardar producto</button>
+      </div>
+    </form>
+  `);
+
+  document.querySelector('#providerProduct56').onsubmit=e=>{
+    e.preventDefault();
+    const fd=new FormData(e.target);
+    const file=e.target.querySelector('[name="photoFile"]')?.files?.[0];
+
+    const finish=photo=>{
+      const obj={
+        ...(old||{}),
+        id:old?.id||id(),
+        providerId:p.id,
+        providerUserId:p.userId||p.id,
+        providerEmail:p.email||'',
+        providerName:providerName56(p),
+        name:String(fd.get('name')||'').trim(),
+        category:String(fd.get('category')||'').trim(),
+        description:String(fd.get('description')||'').trim(),
+        price:N56(fd.get('price')),
+        unit:String(fd.get('unit')||'unidad').trim(),
+        active:true,
+        visibleToSalons:fd.has('visibleToSalons')
+      };
+      if(photo)obj.photo=photo;
+
+      if(old){
+        const ix=data.providerProducts.findIndex(x=>x.id===old.id);
+        if(ix>=0)data.providerProducts[ix]=obj;
+      }else{
+        data.providerProducts.push(obj);
+      }
+
+      save();
+      closeModal();
+      renderProviderCommunity56();
+      toast(obj.visibleToSalons?'Producto visible para salones':'Producto guardado como no visible');
+    };
+
+    if(file){
+      const r=new FileReader();
+      r.onload=()=>finish(String(r.result||''));
+      r.onerror=()=>finish('');
+      r.readAsDataURL(file);
+    }else finish('');
+  };
+};
+
+// ------------------------------------------------------------
+// PANTALLA PROVEEDOR
+// ------------------------------------------------------------
+window.renderProviderCommunity56=function(){
+  const p=provider56();
+  if(!p)return toast('No se pudo identificar el proveedor');
+
+  const products=products56(p);
+
+  document.querySelector('#content').innerHTML=`
+    <div class="card">
+      <div class="section-title">
+        <div style="display:flex;align-items:center;gap:12px">
+          ${p.logo?`<img src="${p.logo}" style="width:58px;height:58px;object-fit:contain;border-radius:12px">`:''}
+          <div>
+            <h2>${esc56(providerName56(p))}</h2>
+            <small class="muted">${esc56(p.address||'')} ${p.phone?'· '+esc56(p.phone):''} ${p.email?'· '+esc56(p.email):''}</small>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="secondary" onclick="openEditProviderUser56()">✏️ Editar usuario</button>
+          <button class="secondary" onclick="openProviderProfile55()">🖼️ Logo / perfil</button>
+          <button class="primary" onclick="openProviderOffer53()">+ Publicar oferta</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <div class="section-title">
+        <div>
+          <h3>Mis productos</h3>
+          <small class="muted">Elegí cuáles querés mostrar a los salones.</small>
+        </div>
+        <button class="primary" onclick="openProviderProduct56()">+ Agregar producto</button>
+      </div>
+
+      ${products.length?`
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr><th>Producto</th><th>Categoría</th><th>Precio</th><th>Visible</th><th></th></tr>
+            </thead>
+            <tbody>
+              ${products.map(x=>`
+                <tr>
+                  <td>
+                    <div style="display:flex;gap:8px;align-items:center">
+                      ${x.photo?`<img src="${x.photo}" style="width:48px;height:48px;object-fit:cover;border-radius:8px">`:''}
+                      <div><b>${esc56(x.name)}</b><small style="display:block">${esc56(x.description||'')}</small></div>
+                    </div>
+                  </td>
+                  <td>${esc56(x.category||'')}</td>
+                  <td><b>${money(x.price||0)}</b></td>
+                  <td>${x.visibleToSalons!==false?'✅ Sí':'🚫 No'}</td>
+                  <td><button class="secondary small" onclick="openProviderProduct56('${x.id}')">Editar</button></td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      `:'<div class="empty">Todavía no cargaste productos.</div>'}
+    </div>
+  `;
+};
+
+// Alias para botones/rutas de versiones anteriores.
+window.renderProviderCommunity55=window.renderProviderCommunity56;
+window.renderProviderCommunity54=window.renderProviderCommunity56;
+window.renderProviderCommunity53=window.renderProviderCommunity56;
+window.openProviderProduct55=window.openProviderProduct56;
+window.openProviderProduct54=window.openProviderProduct56;
+window.openProviderProduct53=window.openProviderProduct56;
+
+// ------------------------------------------------------------
+// FILTRO GLOBAL: LOS SALONES SOLO VEN PRODUCTOS TILDADOS.
+// Productos viejos sin el campo se consideran visibles para no perderlos.
+// ------------------------------------------------------------
+const oldProductsForProvider55_56 = (typeof productsForProvider55==='function') ? productsForProvider55 : null;
+if(oldProductsForProvider55_56){
+  window.productsForProvider55=function(p){
+    return oldProductsForProvider55_56(p).filter(x=>x.visibleToSalons!==false);
+  };
+}
+
+// Reemplaza las funciones de comunidad usadas por compras V55.
+const oldCommunityProviders55_56 = (typeof communityProviders55==='function') ? communityProviders55 : null;
+if(oldCommunityProviders55_56){
+  window.communityProviders55=function(){
+    return (data.marketSuppliers||[])
+      .filter(p=>p.status!=='Suspendido'&&p.active!==false)
+      .map(p=>({
+        raw:p,
+        id:p.id,
+        display:providerName56(p),
+        products:(data.providerProducts||[])
+          .filter(x=>belongs56(x,p)&&x.active!==false&&x.visibleToSalons!==false)
+          .sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')))
+      }));
+  };
+}
+
+})();
