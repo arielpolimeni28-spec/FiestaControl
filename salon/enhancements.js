@@ -11742,3 +11742,254 @@ renderSalonView=function(){
 };
 
 })();
+
+
+// ============================================================
+// V43 - PERSONAL EXTRA AUTOMÁTICO POR CANTIDAD DE INVITADOS
+// Sin necesidad de elegir un empleado con nombre.
+// ============================================================
+(function(){
+'use strict';
+
+const SID43=()=>session?.salonId;
+const SALON43=()=>salon();
+
+function ensureCfg43(){
+  const s=SALON43();
+  if(!s)return;
+  s.basicPartyConfig=s.basicPartyConfig||{};
+  const c=s.basicPartyConfig;
+  if(c.extraWaiterPrice==null)c.extraWaiterPrice=0;
+  if(c.extraAnimatorPrice==null)c.extraAnimatorPrice=0;
+  if(c.adultsPerExtraWaiter==null)c.adultsPerExtraWaiter=20;
+  if(c.childrenPerExtraAnimator==null)c.childrenPerExtraAnimator=15;
+  if(c.baseAdults==null)c.baseAdults=30;
+  if(c.baseChildren==null)c.baseChildren=30;
+}
+ensureCfg43();
+
+function calcAutoStaff43(adults, children, cfg){
+  const extraAdults=Math.max(0,Number(adults||0)-Number(cfg.baseAdults||0));
+  const extraChildren=Math.max(0,Number(children||0)-Number(cfg.baseChildren||0));
+
+  const extraWaiters=extraAdults>0
+    ? Math.ceil(extraAdults/Math.max(1,Number(cfg.adultsPerExtraWaiter||1)))
+    : 0;
+
+  const extraAnimators=extraChildren>0
+    ? Math.ceil(extraChildren/Math.max(1,Number(cfg.childrenPerExtraAnimator||1)))
+    : 0;
+
+  const waiterCharge=extraWaiters*Number(cfg.extraWaiterPrice||0);
+  const animatorCharge=extraAnimators*Number(cfg.extraAnimatorPrice||0);
+
+  return {
+    extraAdults, extraChildren,
+    extraWaiters, extraAnimators,
+    waiterCharge, animatorCharge,
+    totalAutoStaff:waiterCharge+animatorCharge
+  };
+}
+
+// ----------------------------------------------------------
+// MI SALÓN: precio genérico del mozo y animador adicional
+// ----------------------------------------------------------
+const oldProfile43=window.renderProfileV42 || window.renderProfile;
+
+window.renderProfileV43=function(){
+  oldProfile43();
+  ensureCfg43();
+
+  const cfg=SALON43().basicPartyConfig;
+  const form=document.querySelector('#basic41');
+  if(!form || document.querySelector('#auto-staff-prices43'))return;
+
+  const box=document.createElement('div');
+  box.id='auto-staff-prices43';
+  box.className='form-grid';
+  box.style.marginTop='12px';
+  box.innerHTML=`
+    <div class="field">
+      <label>Costo de mozo adicional automático</label>
+      <input name="extraWaiterPrice" type="number" min="0" value="${Number(cfg.extraWaiterPrice||0)}">
+      <small class="muted">Se suma automáticamente cuando los adultos superan el límite configurado.</small>
+    </div>
+
+    <div class="field">
+      <label>Costo de animador adicional automático</label>
+      <input name="extraAnimatorPrice" type="number" min="0" value="${Number(cfg.extraAnimatorPrice||0)}">
+      <small class="muted">Se suma automáticamente cuando los chicos superan el límite configurado.</small>
+    </div>
+  `;
+
+  const actions=form.querySelector('.form-actions');
+  form.insertBefore(box,actions);
+
+  const oldSubmit=form.onsubmit;
+  form.onsubmit=function(e){
+    const fd=new FormData(form);
+    cfg.extraWaiterPrice=Number(fd.get('extraWaiterPrice')||0);
+    cfg.extraAnimatorPrice=Number(fd.get('extraAnimatorPrice')||0);
+    return oldSubmit ? oldSubmit.call(form,e) : undefined;
+  };
+};
+
+// ----------------------------------------------------------
+// RESERVA: suma automática de mozo/animador adicional
+// ----------------------------------------------------------
+const oldForm43=window.openEventFormV42 || window.openEventForm;
+
+window.openEventFormV43=function(eid=''){
+  ensureCfg43();
+  oldForm43(eid);
+
+  const form=document.querySelector('#ev30');
+  if(!form)return;
+
+  const cfg=SALON43().basicPartyConfig;
+  const adults=document.querySelector('#adults41');
+  const children=document.querySelector('#children41');
+
+  const totalGrid=document.querySelector('#totalSum30')?.closest('.grid');
+
+  if(totalGrid && !document.querySelector('#waiterAutoSum43')){
+    const waiter=document.createElement('div');
+    waiter.className='card stat';
+    waiter.innerHTML=`<small>Mozo adicional automático</small><strong id="waiterAutoSum43">$ 0</strong>`;
+
+    const animator=document.createElement('div');
+    animator.className='card stat';
+    animator.innerHTML=`<small>Animador adicional automático</small><strong id="animatorAutoSum43">$ 0</strong>`;
+
+    totalGrid.insertBefore(waiter,document.querySelector('#totalSum30')?.closest('.card'));
+    totalGrid.insertBefore(animator,document.querySelector('#totalSum30')?.closest('.card'));
+  }
+
+  const suggestion=document.querySelector('#party-suggestion41');
+
+  function refreshAuto43(){
+    const a=Number(adults?.value||0);
+    const c=Number(children?.value||0);
+    const r=calcAutoStaff43(a,c,cfg);
+
+    const ws=document.querySelector('#waiterAutoSum43');
+    const as=document.querySelector('#animatorAutoSum43');
+
+    if(ws)ws.textContent=money(r.waiterCharge);
+    if(as)as.textContent=money(r.animatorCharge);
+
+    if(suggestion){
+      let old=suggestion.querySelector('#auto-staff-detail43');
+      if(!old){
+        old=document.createElement('div');
+        old.id='auto-staff-detail43';
+        old.style.marginTop='8px';
+        suggestion.appendChild(old);
+      }
+
+      old.innerHTML=`
+        ${r.extraWaiters>0
+          ? `<div>👤 Se agregan automáticamente <b>${r.extraWaiters} mozo${r.extraWaiters>1?'s':''} adicional${r.extraWaiters>1?'es':''}</b> × ${money(cfg.extraWaiterPrice||0)} = <b>${money(r.waiterCharge)}</b></div>`
+          : ''}
+        ${r.extraAnimators>0
+          ? `<div>🎈 Se agregan automáticamente <b>${r.extraAnimators} animador${r.extraAnimators>1?'es':''} adicional${r.extraAnimators>1?'es':''}</b> × ${money(cfg.extraAnimatorPrice||0)} = <b>${money(r.animatorCharge)}</b></div>`
+          : ''}
+      `;
+    }
+
+    return r;
+  }
+
+  adults?.addEventListener('input',refreshAuto43);
+  children?.addEventListener('input',refreshAuto43);
+  refreshAuto43();
+
+  const oldSubmit=form.onsubmit;
+  form.onsubmit=function(ev){
+    const auto=refreshAuto43();
+    const result=oldSubmit ? oldSubmit.call(form,ev) : undefined;
+
+    setTimeout(()=>{
+      let e=eid ? (data.events||[]).find(x=>x.id===eid) : (data.events||[])
+        .filter(x=>x.salonId===SID43())
+        .sort((x,y)=>String(y.createdAt||'').localeCompare(String(x.createdAt||'')))[0];
+
+      if(!e)return;
+
+      e.autoExtraWaiters=auto.extraWaiters;
+      e.autoExtraAnimators=auto.extraAnimators;
+      e.autoExtraWaiterPrice=Number(cfg.extraWaiterPrice||0);
+      e.autoExtraAnimatorPrice=Number(cfg.extraAnimatorPrice||0);
+      e.autoExtraWaiterTotal=auto.waiterCharge;
+      e.autoExtraAnimatorTotal=auto.animatorCharge;
+      e.autoExtraStaffTotal=auto.totalAutoStaff;
+
+      // Recalcula total final de forma única.
+      const base=Number(e.basePrice||0);
+      const extras=Number(e.extrasTotal||0);
+      const stock=Number(e.stockItemsTotal||0);
+      const manualStaff=Number(e.staffClientChargeTotal||0);
+      const adultGuest=Number(e.extraAdultsTotal||0);
+      const childGuest=Number(e.extraChildrenTotal||0);
+
+      e.total=
+        base +
+        extras +
+        stock +
+        manualStaff +
+        adultGuest +
+        childGuest +
+        auto.totalAutoStaff;
+
+      e.balance=Math.max(0,Number(e.total||0)-Number(e.paid||0));
+
+      save();
+    },350);
+
+    return result;
+  };
+};
+
+// ----------------------------------------------------------
+// DETALLE DE FIESTA
+// ----------------------------------------------------------
+const oldOpen43=window.openEventV42 || window.openEvent;
+
+window.openEventV43=function(eid){
+  oldOpen43(eid);
+
+  setTimeout(()=>{
+    const e=(data.events||[]).find(x=>x.id===eid&&x.salonId===SID43());
+    const modal=document.querySelector('#modal-body');
+    if(!e || !modal || modal.querySelector('#auto-staff-card43'))return;
+
+    const card=document.createElement('div');
+    card.id='auto-staff-card43';
+    card.className='card';
+    card.style.marginTop='14px';
+
+    card.innerHTML=`
+      <h3>Personal adicional automático por cantidad de invitados</h3>
+      <div>Mozo adicional: <b>${Number(e.autoExtraWaiters||0)}</b> × ${money(e.autoExtraWaiterPrice||0)} = <b>${money(e.autoExtraWaiterTotal||0)}</b></div>
+      <div style="margin-top:6px">Animador adicional: <b>${Number(e.autoExtraAnimators||0)}</b> × ${money(e.autoExtraAnimatorPrice||0)} = <b>${money(e.autoExtraAnimatorTotal||0)}</b></div>
+      <div style="margin-top:8px"><b>Total personal adicional automático: ${money(e.autoExtraStaffTotal||0)}</b></div>
+      <small class="muted">No requiere seleccionar un empleado por nombre. Es un cargo automático de la reserva.</small>
+    `;
+
+    modal.appendChild(card);
+  },0);
+};
+
+// aliases
+window.renderProfile=window.renderProfileV43;
+window.openEventForm=window.openEventFormV43;
+window.openEventFormV42=window.openEventFormV43;
+window.openEvent=window.openEventV43;
+
+const route43=renderSalonView;
+renderSalonView=function(){
+  if(view==='profile')return renderProfileV43();
+  return route43();
+};
+
+})();
