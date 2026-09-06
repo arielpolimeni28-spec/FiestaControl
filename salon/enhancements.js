@@ -11244,3 +11244,291 @@ window.openEventForm=window.openEventFormV40;
 window.openEventFormV39=window.openEventFormV40;
 
 })();
+
+
+// ============================================================
+// V41 - FIESTA BÁSICA CONFIGURABLE POR SALÓN
+// Incluye: 1 mozo + 1 cocinero + 2 animadores
+// Sugerencias automáticas según adultos y chicos
+// ============================================================
+(function(){
+'use strict';
+
+const SID41=()=>session?.salonId;
+const SALON41=()=>salon();
+
+function ensureBasicConfig41(){
+  const s=SALON41();
+  if(!s)return;
+  s.basicPartyConfig=s.basicPartyConfig||{
+    enabled:true,
+    includedWaiters:1,
+    includedKitchen:1,
+    includedAnimators:2,
+    baseAdults:30,
+    baseChildren:30,
+    adultsPerExtraWaiter:20,
+    childrenPerExtraAnimator:15
+  };
+}
+
+ensureBasicConfig41();
+
+// ----------------------------------------------------------
+// MI SALÓN - CONFIGURACIÓN DE FIESTA BÁSICA
+// ----------------------------------------------------------
+const oldProfile41=window.renderProfileV24 || window.renderProfile;
+
+window.renderProfileV41=function(){
+  oldProfile41();
+  ensureBasicConfig41();
+
+  const s=SALON41();
+  const cfg=s.basicPartyConfig;
+  const content=document.querySelector('#content');
+  if(!content || document.querySelector('#basic-party-config41'))return;
+
+  const card=document.createElement('div');
+  card.id='basic-party-config41';
+  card.className='card';
+  card.style.marginTop='16px';
+  card.innerHTML=`
+    <div class="section-title">
+      <div>
+        <h3>🎉 Fiesta básica</h3>
+        <small class="muted">Configurá qué incluye la fiesta base y cuándo sugerir personal adicional.</small>
+      </div>
+    </div>
+
+    <form id="basic41">
+      <div class="admin-notice">
+        <span>✅</span>
+        <div>
+          <b>Incluido en la fiesta básica</b>
+          <small>1 mozo · 1 cocinero/ayudante · 2 animadores</small>
+        </div>
+      </div>
+
+      <div class="form-grid" style="margin-top:12px">
+        <div class="field">
+          <label>Adultos incluidos en la base</label>
+          <input name="baseAdults" type="number" min="0" value="${Number(cfg.baseAdults||0)}">
+        </div>
+
+        <div class="field">
+          <label>Chicos incluidos en la base</label>
+          <input name="baseChildren" type="number" min="0" value="${Number(cfg.baseChildren||0)}">
+        </div>
+
+        <div class="field">
+          <label>Agregar sugerencia de 1 mozo cada</label>
+          <input name="adultsPerExtraWaiter" type="number" min="1" value="${Number(cfg.adultsPerExtraWaiter||20)}">
+          <small class="muted">Adultos extra por encima de la base.</small>
+        </div>
+
+        <div class="field">
+          <label>Agregar sugerencia de 1 animador cada</label>
+          <input name="childrenPerExtraAnimator" type="number" min="1" value="${Number(cfg.childrenPerExtraAnimator||15)}">
+          <small class="muted">Chicos extra por encima de la base.</small>
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button class="primary">Guardar configuración de fiesta básica</button>
+      </div>
+    </form>
+  `;
+
+  content.appendChild(card);
+
+  document.querySelector('#basic41').onsubmit=e=>{
+    e.preventDefault();
+    const f=Object.fromEntries(new FormData(e.target));
+    cfg.enabled=true;
+    cfg.includedWaiters=1;
+    cfg.includedKitchen=1;
+    cfg.includedAnimators=2;
+    cfg.baseAdults=Number(f.baseAdults||0);
+    cfg.baseChildren=Number(f.baseChildren||0);
+    cfg.adultsPerExtraWaiter=Math.max(1,Number(f.adultsPerExtraWaiter||1));
+    cfg.childrenPerExtraAnimator=Math.max(1,Number(f.childrenPerExtraAnimator||1));
+    save();
+    toast('Configuración de fiesta básica guardada');
+  };
+};
+
+// ----------------------------------------------------------
+// RESERVA - ADULTOS / CHICOS + SUGERENCIAS
+// ----------------------------------------------------------
+const baseForm41=window.openEventFormV40 || window.openEventForm;
+
+window.openEventFormV41=function(eid=''){
+  ensureBasicConfig41();
+  baseForm41(eid);
+
+  const form=document.querySelector('#ev30');
+  if(!form)return;
+
+  const e=eid ? (data.events||[]).find(x=>x.id===eid&&x.salonId===SID41()) : null;
+  const cfg=SALON41().basicPartyConfig;
+
+  // Reemplaza/acompaña cantidad total de invitados por adultos y chicos.
+  const guestsField=form.querySelector('[name="guests"]')?.closest('.field');
+
+  if(guestsField && !document.querySelector('#guest-split41')){
+    const wrapper=document.createElement('div');
+    wrapper.id='guest-split41';
+    wrapper.className='field span2';
+    wrapper.innerHTML=`
+      <label>Invitados</label>
+      <div class="form-grid">
+        <div class="field">
+          <label>Adultos</label>
+          <input id="adults41" name="adults" type="number" min="0" value="${Number(e?.adults||0)}">
+        </div>
+        <div class="field">
+          <label>Chicos</label>
+          <input id="children41" name="children" type="number" min="0" value="${Number(e?.children||0)}">
+        </div>
+      </div>
+      <div id="party-suggestion41" class="admin-notice" style="margin-top:10px"></div>
+    `;
+    guestsField.replaceWith(wrapper);
+  }
+
+  const adults=document.querySelector('#adults41');
+  const children=document.querySelector('#children41');
+  const suggestion=document.querySelector('#party-suggestion41');
+
+  function suggestions41(){
+    if(!suggestion)return;
+
+    const a=Number(adults?.value||0);
+    const c=Number(children?.value||0);
+
+    const extraAdults=Math.max(0,a-Number(cfg.baseAdults||0));
+    const extraChildren=Math.max(0,c-Number(cfg.baseChildren||0));
+
+    const waiterSuggest=extraAdults>0
+      ? Math.ceil(extraAdults/Math.max(1,Number(cfg.adultsPerExtraWaiter||1)))
+      : 0;
+
+    const animatorSuggest=extraChildren>0
+      ? Math.ceil(extraChildren/Math.max(1,Number(cfg.childrenPerExtraAnimator||1)))
+      : 0;
+
+    let lines=[];
+    lines.push(`<b>Fiesta básica incluida:</b> 1 mozo · 1 cocinero · 2 animadores`);
+
+    if(waiterSuggest>0){
+      lines.push(`👤 Por ${a} adultos se sugiere agregar <b>${waiterSuggest} mozo${waiterSuggest>1?'s':''} adicional${waiterSuggest>1?'es':''}</b>.`);
+    }
+    if(animatorSuggest>0){
+      lines.push(`🎈 Por ${c} chicos se sugiere agregar <b>${animatorSuggest} animador${animatorSuggest>1?'es':''} adicional${animatorSuggest>1?'es':''}</b>.`);
+    }
+
+    if(waiterSuggest===0 && animatorSuggest===0){
+      lines.push(`✅ La cantidad de invitados está dentro de la configuración base del salón.`);
+    }
+
+    suggestion.innerHTML=`<span>💡</span><div>${lines.map(x=>`<div>${x}</div>`).join('')}</div>`;
+  }
+
+  adults?.addEventListener('input',suggestions41);
+  children?.addEventListener('input',suggestions41);
+  suggestions41();
+
+  // Guarda adultos/chicos y total de invitados.
+  const oldSubmit=form.onsubmit;
+  form.onsubmit=function(ev){
+    const a=Number(adults?.value||0);
+    const c=Number(children?.value||0);
+
+    // Como V30 espera guests, recreamos input oculto.
+    let hidden=form.querySelector('[name="guests"]');
+    if(!hidden){
+      hidden=document.createElement('input');
+      hidden.type='hidden';
+      hidden.name='guests';
+      form.appendChild(hidden);
+    }
+    hidden.value=String(a+c);
+
+    const result=oldSubmit ? oldSubmit.call(form,ev) : undefined;
+
+    setTimeout(()=>{
+      let target=eid ? (data.events||[]).find(x=>x.id===eid) : (data.events||[])
+        .filter(x=>x.salonId===SID41())
+        .sort((x,y)=>String(y.createdAt||'').localeCompare(String(x.createdAt||'')))[0];
+
+      if(target){
+        target.adults=a;
+        target.children=c;
+        target.guests=a+c;
+        target.basicPartySnapshot={
+          includedWaiters:1,
+          includedKitchen:1,
+          includedAnimators:2,
+          baseAdults:Number(cfg.baseAdults||0),
+          baseChildren:Number(cfg.baseChildren||0),
+          adultsPerExtraWaiter:Number(cfg.adultsPerExtraWaiter||1),
+          childrenPerExtraAnimator:Number(cfg.childrenPerExtraAnimator||1)
+        };
+        save();
+      }
+    },250);
+
+    return result;
+  };
+};
+
+// ----------------------------------------------------------
+// DETALLE DE FIESTA - MUESTRA BASE + SUGERENCIAS
+// ----------------------------------------------------------
+const baseOpen41=window.openEventV39 || window.openEvent;
+
+window.openEventV41=function(eid){
+  baseOpen41(eid);
+
+  setTimeout(()=>{
+    const e=(data.events||[]).find(x=>x.id===eid&&x.salonId===SID41());
+    const modal=document.querySelector('#modal-body');
+    if(!e || !modal || modal.querySelector('#party-base-detail41'))return;
+
+    ensureBasicConfig41();
+    const cfg=e.basicPartySnapshot||SALON41().basicPartyConfig;
+    const a=Number(e.adults||0), c=Number(e.children||0);
+
+    const extraAdults=Math.max(0,a-Number(cfg.baseAdults||0));
+    const extraChildren=Math.max(0,c-Number(cfg.baseChildren||0));
+    const waiters=extraAdults>0?Math.ceil(extraAdults/Math.max(1,Number(cfg.adultsPerExtraWaiter||1))):0;
+    const animators=extraChildren>0?Math.ceil(extraChildren/Math.max(1,Number(cfg.childrenPerExtraAnimator||1))):0;
+
+    const card=document.createElement('div');
+    card.id='party-base-detail41';
+    card.className='card';
+    card.style.marginTop='14px';
+    card.innerHTML=`
+      <h3>Fiesta básica</h3>
+      <div>Incluye <b>1 mozo · 1 cocinero · 2 animadores</b></div>
+      <div style="margin-top:6px">Adultos: <b>${a}</b> · Chicos: <b>${c}</b></div>
+      ${waiters>0?`<div style="margin-top:6px">💡 Sugerencia: <b>${waiters} mozo${waiters>1?'s':''} adicional${waiters>1?'es':''}</b></div>`:''}
+      ${animators>0?`<div style="margin-top:6px">💡 Sugerencia: <b>${animators} animador${animators>1?'es':''} adicional${animators>1?'es':''}</b></div>`:''}
+    `;
+    modal.appendChild(card);
+  },0);
+};
+
+// Aliases finales
+window.renderProfile=window.renderProfileV41;
+window.openEventForm=window.openEventFormV41;
+window.openEventFormV40=window.openEventFormV41;
+window.openEvent=window.openEventV41;
+
+const route41=renderSalonView;
+renderSalonView=function(){
+  if(view==='profile')return renderProfileV41();
+  return route41();
+};
+
+})();
