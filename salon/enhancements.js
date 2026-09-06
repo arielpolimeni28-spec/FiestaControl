@@ -12299,3 +12299,662 @@ window.openEventFormV43=window.openEventFormV44;
 window.openEvent=window.openEventV44;
 
 })();
+
+
+// ============================================================
+// V45 - RESERVAS POR TIPO DE EVENTO + CONFIGURACIÓN POR SALÓN
+// ============================================================
+(function(){
+'use strict';
+
+const SID45=()=>session?.salonId;
+const SALON45=()=>salon();
+const EV45=id=>(data.events||[]).find(e=>e.id===id&&e.salonId===SID45());
+const N45=v=>Number(v||0);
+
+function defaultTypes45(){
+  return [
+    {
+      id:'infantil', name:'Cumple infantil', kind:'children', active:true,
+      durationHours:4, extraHourPrice:0,
+      includedWaiters:1, includedKitchen:1, includedAnimators:2,
+      maxAdults:30, maxChildren:30,
+      extraAdultPrice:0, extraChildPrice:0,
+      extraWaiterPrice:0, extraKitchenPrice:0, extraAnimatorPrice:0,
+      includesTableware:true, includesLinen:true, includesCoffee:true
+    },
+    {
+      id:'adulto', name:'Cumple adulto', kind:'adult', active:true,
+      durationHours:4, extraHourPrice:0,
+      includedWaiters:2, includedKitchen:1, includedAnimators:0,
+      maxAdults:50, maxChildren:0,
+      extraAdultPrice:0, extraChildPrice:0,
+      extraWaiterPrice:0, extraKitchenPrice:0, extraAnimatorPrice:0,
+      includesTableware:true, includesLinen:true, includesCoffee:true
+    },
+    {
+      id:'social', name:'Eventos Sociales', kind:'general', active:true,
+      durationHours:5, extraHourPrice:0,
+      includedWaiters:2, includedKitchen:1, includedAnimators:0,
+      maxAdults:80, maxChildren:0,
+      extraAdultPrice:0, extraChildPrice:0,
+      extraWaiterPrice:0, extraKitchenPrice:0, extraAnimatorPrice:0,
+      includesTableware:true, includesLinen:true, includesCoffee:true
+    },
+    {
+      id:'casamiento', name:'Casamientos', kind:'general', active:true,
+      durationHours:6, extraHourPrice:0,
+      includedWaiters:3, includedKitchen:1, includedAnimators:0,
+      maxAdults:100, maxChildren:0,
+      extraAdultPrice:0, extraChildPrice:0,
+      extraWaiterPrice:0, extraKitchenPrice:0, extraAnimatorPrice:0,
+      includesTableware:true, includesLinen:true, includesCoffee:true
+    },
+    {
+      id:'quince', name:'Cumple de 15', kind:'general', active:true,
+      durationHours:6, extraHourPrice:0,
+      includedWaiters:3, includedKitchen:1, includedAnimators:0,
+      maxAdults:100, maxChildren:0,
+      extraAdultPrice:0, extraChildPrice:0,
+      extraWaiterPrice:0, extraKitchenPrice:0, extraAnimatorPrice:0,
+      includesTableware:true, includesLinen:true, includesCoffee:true
+    }
+  ];
+}
+
+function ensureTypes45(){
+  const s=SALON45();
+  if(!s)return [];
+  if(!Array.isArray(s.eventTypes)||!s.eventTypes.length){
+    s.eventTypes=defaultTypes45();
+  } else {
+    // Completa nuevos campos sin borrar configuraciones existentes.
+    s.eventTypes=s.eventTypes.map((x,i)=>({
+      durationHours:4, extraHourPrice:0,
+      includedWaiters:0, includedKitchen:0, includedAnimators:0,
+      maxAdults:0, maxChildren:0,
+      extraAdultPrice:0, extraChildPrice:0,
+      extraWaiterPrice:0, extraKitchenPrice:0, extraAnimatorPrice:0,
+      includesTableware:true, includesLinen:true, includesCoffee:true,
+      active:true,
+      ...x,
+      id:x.id||('tipo_'+i+'_'+Date.now())
+    }));
+  }
+  return s.eventTypes;
+}
+ensureTypes45();
+
+function type45(id){
+  return ensureTypes45().find(x=>x.id===id) || ensureTypes45()[0];
+}
+function uid45(){
+  return 'evt_'+Date.now().toString(36)+Math.random().toString(36).slice(2,7);
+}
+function checked45(v){return v?'checked':'';}
+
+function addHours45(start,duration,extra){
+  if(!start)return '';
+  const [h,m]=String(start).split(':').map(Number);
+  if(!Number.isFinite(h)||!Number.isFinite(m))return '';
+  let mins=h*60+m+Math.round((N45(duration)+N45(extra))*60);
+  mins=((mins%1440)+1440)%1440;
+  return String(Math.floor(mins/60)).padStart(2,'0')+':'+String(mins%60).padStart(2,'0');
+}
+
+// ------------------------------------------------------------
+// NAVEGACIÓN ORDENADA Y MI SALÓN SIEMPRE A LA VISTA
+// ------------------------------------------------------------
+function nav45(v,label,icon){
+  const active=view===v?'primary':'secondary';
+  return `<button class="${active} small" onclick="view='${v}';renderSalonShell()">${icon} ${label}</button>`;
+}
+function addTopNav45(){
+  const c=document.querySelector('#content');
+  if(!c || document.querySelector('#salon-top-nav45'))return;
+  const bar=document.createElement('div');
+  bar.id='salon-top-nav45';
+  bar.className='card';
+  bar.style.marginBottom='14px';
+  bar.innerHTML=`
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      ${nav45('dashboard','Inicio','🏠')}
+      ${nav45('calendar','Agenda','📅')}
+      ${nav45('staff','Personal','👥')}
+      ${nav45('finance','Finanzas','💰')}
+      ${nav45('stock','Stock','📦')}
+      ${nav45('suppliers','Proveedores','🚚')}
+      ${nav45('profile','Mi salón','⚙️')}
+    </div>`;
+  c.insertBefore(bar,c.firstChild);
+}
+
+// ------------------------------------------------------------
+// MI SALÓN - CONFIGURACIÓN DE TIPOS DE EVENTO
+// ------------------------------------------------------------
+function summaryType45(t){
+  const inc=[
+    `${N45(t.includedWaiters)} mozo${N45(t.includedWaiters)===1?'':'s'}`,
+    `${N45(t.includedKitchen)} cocina`,
+    `${N45(t.includedAnimators)} animador${N45(t.includedAnimators)===1?'':'es'}`
+  ].join(' · ');
+  return `${inc} · ${N45(t.durationHours)} h`;
+}
+
+window.openEventType45=function(id=''){
+  const existing=id?type45(id):null;
+  const t=existing||{
+    id:'',name:'',kind:'general',active:true,durationHours:4,extraHourPrice:0,
+    includedWaiters:0,includedKitchen:0,includedAnimators:0,
+    maxAdults:0,maxChildren:0,extraAdultPrice:0,extraChildPrice:0,
+    extraWaiterPrice:0,extraKitchenPrice:0,extraAnimatorPrice:0,
+    includesTableware:true,includesLinen:true,includesCoffee:true
+  };
+
+  showModal(`
+    <div class="modal-title">
+      <div><h2>${existing?'Editar':'Agregar'} tipo de evento</h2><p>Esta configuración se usa automáticamente en las reservas.</p></div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="type45form">
+      <div class="form-grid">
+        <div class="field span2"><label>Nombre del tipo de evento</label><input name="name" required value="${esc(t.name||'')}"></div>
+        <div class="field">
+          <label>Modalidad</label>
+          <select name="kind">
+            <option value="children" ${t.kind==='children'?'selected':''}>Infantil</option>
+            <option value="adult" ${t.kind==='adult'?'selected':''}>Adultos</option>
+            <option value="general" ${t.kind==='general'?'selected':''}>General / Social</option>
+          </select>
+        </div>
+        <div class="field"><label>Duración base (horas)</label><input name="durationHours" type="number" min="1" step="0.5" value="${N45(t.durationHours)||4}"></div>
+        <div class="field"><label>Costo por hora extra</label><input name="extraHourPrice" type="number" min="0" value="${N45(t.extraHourPrice)}"></div>
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <h3>Personal incluido</h3>
+        <div class="form-grid">
+          <div class="field"><label>Cantidad de mozos</label><input name="includedWaiters" type="number" min="0" value="${N45(t.includedWaiters)}"></div>
+          <div class="field"><label>Cantidad de cocineros / cocina</label><input name="includedKitchen" type="number" min="0" value="${N45(t.includedKitchen)}"></div>
+          <div class="field"><label>Cantidad de animadores</label><input name="includedAnimators" type="number" min="0" value="${N45(t.includedAnimators)}"></div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <h3>Costo de personal adicional</h3>
+        <div class="form-grid">
+          <div class="field"><label>Mozo adicional</label><input name="extraWaiterPrice" type="number" min="0" value="${N45(t.extraWaiterPrice)}"></div>
+          <div class="field"><label>Cocinero adicional</label><input name="extraKitchenPrice" type="number" min="0" value="${N45(t.extraKitchenPrice)}"></div>
+          <div class="field"><label>Animador adicional</label><input name="extraAnimatorPrice" type="number" min="0" value="${N45(t.extraAnimatorPrice)}"></div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <h3>Cantidad máxima incluida</h3>
+        <div class="form-grid">
+          <div class="field">
+            <label>Adultos máximos</label>
+            <input name="maxAdults" type="number" min="0" value="${N45(t.maxAdults)}">
+          </div>
+          <div class="field">
+            <label>Costo por adulto que excede el máximo</label>
+            <input name="extraAdultPrice" type="number" min="0" value="${N45(t.extraAdultPrice)}">
+          </div>
+          <div class="field">
+            <label>Niños máximos</label>
+            <input name="maxChildren" type="number" min="0" value="${N45(t.maxChildren)}">
+          </div>
+          <div class="field">
+            <label>Costo por niño que excede el máximo</label>
+            <input name="extraChildPrice" type="number" min="0" value="${N45(t.extraChildPrice)}">
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <h3>Servicios incluidos</h3>
+        <div class="form-grid">
+          <label class="check-card"><input name="includesTableware" type="checkbox" ${checked45(t.includesTableware)}><span><b>Vajilla</b></span></label>
+          <label class="check-card"><input name="includesLinen" type="checkbox" ${checked45(t.includesLinen)}><span><b>Mantelería</b></span></label>
+          <label class="check-card"><input name="includesCoffee" type="checkbox" ${checked45(t.includesCoffee)}><span><b>Cafetería</b></span></label>
+          <label class="check-card"><input name="active" type="checkbox" ${checked45(t.active!==false)}><span><b>Tipo de evento activo</b></span></label>
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button class="primary">Guardar tipo de evento</button>
+      </div>
+    </form>
+  `);
+
+  document.querySelector('#type45form').onsubmit=e=>{
+    e.preventDefault();
+    const f=new FormData(e.target);
+    const obj={
+      id:existing?.id||uid45(),
+      name:String(f.get('name')||'').trim(),
+      kind:String(f.get('kind')||'general'),
+      durationHours:N45(f.get('durationHours')),
+      extraHourPrice:N45(f.get('extraHourPrice')),
+      includedWaiters:N45(f.get('includedWaiters')),
+      includedKitchen:N45(f.get('includedKitchen')),
+      includedAnimators:N45(f.get('includedAnimators')),
+      extraWaiterPrice:N45(f.get('extraWaiterPrice')),
+      extraKitchenPrice:N45(f.get('extraKitchenPrice')),
+      extraAnimatorPrice:N45(f.get('extraAnimatorPrice')),
+      maxAdults:N45(f.get('maxAdults')),
+      maxChildren:N45(f.get('maxChildren')),
+      extraAdultPrice:N45(f.get('extraAdultPrice')),
+      extraChildPrice:N45(f.get('extraChildPrice')),
+      includesTableware:f.has('includesTableware'),
+      includesLinen:f.has('includesLinen'),
+      includesCoffee:f.has('includesCoffee'),
+      active:f.has('active')
+    };
+    const arr=ensureTypes45();
+    if(existing){
+      const ix=arr.findIndex(x=>x.id===existing.id);
+      if(ix>=0)arr[ix]=obj;
+    }else arr.push(obj);
+    save(); closeModal(); renderSalonShell(); toast('Tipo de evento guardado');
+  };
+};
+
+window.deleteEventType45=function(id){
+  const arr=ensureTypes45();
+  const t=arr.find(x=>x.id===id);
+  if(!t)return;
+  if(['infantil','adulto','social','casamiento','quince'].includes(id)){
+    t.active=false;
+    save(); renderSalonShell(); toast('Tipo desactivado');
+    return;
+  }
+  if(!confirm(`¿Eliminar "${t.name}"?`))return;
+  SALON45().eventTypes=arr.filter(x=>x.id!==id);
+  save(); renderSalonShell();
+};
+
+function appendTypesConfig45(){
+  const content=document.querySelector('#content');
+  if(!content || document.querySelector('#event-types45'))return;
+  const types=ensureTypes45();
+
+  const card=document.createElement('div');
+  card.id='event-types45';
+  card.className='card';
+  card.style.marginTop='16px';
+  card.innerHTML=`
+    <div class="section-title">
+      <div>
+        <h3>🎉 Tipos de evento y reservas</h3>
+        <small class="muted">Cada salón define qué incluye cada evento, duración, máximos y adicionales.</small>
+      </div>
+      <button class="primary" onclick="openEventType45()">+ Agregar tipo de evento</button>
+    </div>
+
+    <div style="display:grid;gap:10px">
+      ${types.map(t=>`
+        <div class="card" style="margin:0;padding:12px;${t.active===false?'opacity:.55':''}">
+          <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">
+            <div>
+              <b>${esc(t.name)}</b>
+              <small style="display:block;margin-top:3px">${summaryType45(t)}</small>
+              <small style="display:block">
+                Máx. adultos ${N45(t.maxAdults)} · Máx. niños ${N45(t.maxChildren)}
+                · Vajilla ${t.includesTableware?'✓':'—'} · Mantelería ${t.includesLinen?'✓':'—'} · Cafetería ${t.includesCoffee?'✓':'—'}
+              </small>
+            </div>
+            <div style="display:flex;gap:6px">
+              <button class="secondary small" onclick="openEventType45('${t.id}')">Editar</button>
+              <button class="ghost small" onclick="deleteEventType45('${t.id}')">${['infantil','adulto','social','casamiento','quince'].includes(t.id)?(t.active===false?'Desactivado':'Desactivar'):'Borrar'}</button>
+            </div>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+  content.appendChild(card);
+}
+
+// ------------------------------------------------------------
+// RESERVA - NUEVO BLOQUE POR TIPO
+// ------------------------------------------------------------
+const oldOpen45=window.openEventFormV44 || window.openEventForm;
+
+window.openEventFormV45=function(eid=''){
+  oldOpen45(eid);
+
+  const form=document.querySelector('#ev30');
+  if(!form)return;
+
+  const e=eid?EV45(eid):null;
+  const types=ensureTypes45().filter(x=>x.active!==false);
+  if(!types.length)return;
+
+  // Oculta campos viejos que ahora controla V45.
+  const oldChild=form.querySelector('[name="child"]')?.closest('.field');
+  const oldAge=form.querySelector('[name="age"]')?.closest('.field');
+  const oldStart=form.querySelector('[name="start"]')?.closest('.field');
+  const oldEnd=form.querySelector('[name="end"]')?.closest('.field');
+  const oldGuests=form.querySelector('[name="guests"]')?.closest('.field');
+  const oldSplit=document.querySelector('#guest-split41');
+  const oldGeneric=document.querySelector('#generic-staff44');
+  [oldChild,oldAge,oldStart,oldEnd,oldGuests,oldSplit,oldGeneric].forEach(x=>{if(x)x.style.display='none';});
+
+  // Campos hidden requeridos por formularios anteriores.
+  const childInput=form.querySelector('[name="child"]');
+  const startInput=form.querySelector('[name="start"]');
+  const endInput=form.querySelector('[name="end"]');
+  if(childInput)childInput.required=false;
+  if(startInput)startInput.required=false;
+  if(endInput)endInput.required=false;
+
+  const firstGrid=form.querySelector('.form-grid');
+  if(!firstGrid || document.querySelector('#reservation45'))return;
+
+  const wrap=document.createElement('div');
+  wrap.id='reservation45';
+  wrap.className='card span2';
+  wrap.style.margin='0 0 12px 0';
+  wrap.innerHTML=`
+    <div class="section-title">
+      <div><h3>Datos del evento</h3><small class="muted">La duración y los valores se toman de la configuración de Mi salón.</small></div>
+    </div>
+
+    <div class="form-grid">
+      <div class="field">
+        <label>Tipo de evento</label>
+        <select id="eventType45">
+          ${types.map(t=>`<option value="${t.id}" ${(e?.eventTypeId||'infantil')===t.id?'selected':''}>${esc(t.name)}</option>`).join('')}
+        </select>
+      </div>
+
+      <div class="field">
+        <label>Nombre / homenajeado</label>
+        <input id="eventName45" value="${esc(e?.eventName||e?.child||'')}" required>
+      </div>
+
+      <div class="field" id="birthdayWrap45">
+        <label>Fecha de cumpleaños</label>
+        <input id="birthday45" type="date" value="${esc(e?.birthdayDate||'')}">
+      </div>
+
+      <div class="field">
+        <label>Hora de inicio</label>
+        <input id="start45" type="time" required value="${esc(e?.start||'')}">
+      </div>
+
+      <div class="field">
+        <label>Duración programada</label>
+        <input id="duration45" readonly>
+      </div>
+
+      <div class="field">
+        <label>Horas extra</label>
+        <input id="extraHours45" type="number" min="0" step="0.5" value="${N45(e?.extraHours)}">
+      </div>
+
+      <div class="field">
+        <label>Hora estimada de finalización</label>
+        <input id="end45" readonly>
+      </div>
+
+      <div class="field">
+        <label>Adultos</label>
+        <input id="adults45" type="number" min="0" value="${N45(e?.adults)}">
+      </div>
+
+      <div class="field" id="childrenWrap45">
+        <label>Niños</label>
+        <input id="children45" type="number" min="0" value="${N45(e?.children)}">
+      </div>
+    </div>
+
+    <div id="included45" class="admin-notice" style="margin-top:10px"></div>
+
+    <div class="card" style="margin-top:12px">
+      <h3>Personal adicional</h3>
+      <small class="muted">No se muestran nombres. Elegí solamente cantidad adicional.</small>
+      <div class="form-grid" style="margin-top:10px">
+        <div class="field">
+          <label>Mozo adicional</label>
+          <input id="extraWaiters45" type="number" min="0" value="${N45(e?.extraWaiters)}">
+        </div>
+        <div class="field">
+          <label>Cocinero adicional</label>
+          <input id="extraKitchen45" type="number" min="0" value="${N45(e?.extraKitchen)}">
+        </div>
+        <div class="field">
+          <label>Animador adicional</label>
+          <input id="extraAnimators45" type="number" min="0" value="${N45(e?.extraAnimators)}">
+        </div>
+      </div>
+    </div>
+
+    <div id="calc45" class="admin-notice" style="margin-top:10px"></div>
+  `;
+  firstGrid.parentNode.insertBefore(wrap,firstGrid);
+
+  const $45=id=>document.querySelector(id);
+
+  function selected45(){return type45($45('#eventType45').value);}
+  function calculate45(){
+    const t=selected45();
+    const adults=N45($45('#adults45').value);
+    const kids=N45($45('#children45').value);
+    const ew=N45($45('#extraWaiters45').value);
+    const ek=N45($45('#extraKitchen45').value);
+    const ea=N45($45('#extraAnimators45').value);
+    const eh=N45($45('#extraHours45').value);
+
+    const extraAdultQty=Math.max(0,adults-N45(t.maxAdults));
+    const extraChildQty=Math.max(0,kids-N45(t.maxChildren));
+    const extraAdultTotal=extraAdultQty*N45(t.extraAdultPrice);
+    const extraChildTotal=extraChildQty*N45(t.extraChildPrice);
+    const waiterTotal=ew*N45(t.extraWaiterPrice);
+    const kitchenTotal=ek*N45(t.extraKitchenPrice);
+    const animatorTotal=ea*N45(t.extraAnimatorPrice);
+    const extraHourTotal=eh*N45(t.extraHourPrice);
+    const typeExtrasTotal=extraAdultTotal+extraChildTotal+waiterTotal+kitchenTotal+animatorTotal+extraHourTotal;
+
+    $45('#duration45').value=`${N45(t.durationHours)} horas`;
+    $45('#end45').value=addHours45($45('#start45').value,t.durationHours,eh);
+
+    const isChild=t.kind==='children';
+    $45('#childrenWrap45').style.display=isChild?'':'none';
+    $45('#birthdayWrap45').style.display=(isChild||t.id==='adulto'||t.id==='quince')?'':'none';
+    if(!isChild && t.kind==='adult') $45('#children45').value=0;
+
+    const includes=[];
+    if(t.includesTableware)includes.push('Vajilla');
+    if(t.includesLinen)includes.push('Mantelería');
+    if(t.includesCoffee)includes.push('Cafetería');
+
+    $45('#included45').innerHTML=`
+      <span>✅</span>
+      <div>
+        <b>${esc(t.name)} incluye:</b>
+        <div>${N45(t.includedWaiters)} mozo${N45(t.includedWaiters)===1?'':'s'} · ${N45(t.includedKitchen)} cocina · ${N45(t.includedAnimators)} animador${N45(t.includedAnimators)===1?'':'es'} · ${N45(t.durationHours)} horas</div>
+        <small>${includes.length?includes.join(' · '):'Sin servicios adicionales marcados'}</small>
+      </div>`;
+
+    $45('#calc45').innerHTML=`
+      <span>💰</span>
+      <div>
+        <b>Adicionales calculados</b>
+        <div>Adultos excedidos: ${extraAdultQty} × ${money(t.extraAdultPrice)} = <b>${money(extraAdultTotal)}</b></div>
+        ${isChild?`<div>Niños excedidos: ${extraChildQty} × ${money(t.extraChildPrice)} = <b>${money(extraChildTotal)}</b></div>`:''}
+        <div>Mozo adicional: ${ew} × ${money(t.extraWaiterPrice)} = <b>${money(waiterTotal)}</b></div>
+        <div>Cocinero adicional: ${ek} × ${money(t.extraKitchenPrice)} = <b>${money(kitchenTotal)}</b></div>
+        <div>Animador adicional: ${ea} × ${money(t.extraAnimatorPrice)} = <b>${money(animatorTotal)}</b></div>
+        <div>Horas extra: ${eh} × ${money(t.extraHourPrice)} = <b>${money(extraHourTotal)}</b></div>
+        <div style="margin-top:5px"><b>Total adicionales del tipo de evento: ${money(typeExtrasTotal)}</b></div>
+      </div>`;
+
+    return {t,adults,kids,ew,ek,ea,eh,extraAdultQty,extraChildQty,extraAdultTotal,extraChildTotal,waiterTotal,kitchenTotal,animatorTotal,extraHourTotal,typeExtrasTotal};
+  }
+
+  ['#eventType45','#start45','#extraHours45','#adults45','#children45','#extraWaiters45','#extraKitchen45','#extraAnimators45']
+    .forEach(id=>$45(id)?.addEventListener('input',calculate45));
+  $45('#eventType45')?.addEventListener('change',calculate45);
+  calculate45();
+
+  const oldSubmit=form.onsubmit;
+  form.onsubmit=function(ev){
+    const c=calculate45();
+
+    // Completa campos requeridos del flujo anterior.
+    if(childInput)childInput.value=$45('#eventName45').value||'Evento';
+    if(startInput)startInput.value=$45('#start45').value;
+    if(endInput)endInput.value=$45('#end45').value;
+
+    let guest=form.querySelector('[name="guests"]');
+    if(!guest){
+      guest=document.createElement('input'); guest.type='hidden'; guest.name='guests'; form.appendChild(guest);
+    }
+    guest.value=String(c.adults+c.kids);
+
+    const result=oldSubmit?oldSubmit.call(form,ev):undefined;
+
+    setTimeout(()=>{
+      let target=eid?EV45(eid):(data.events||[])
+        .filter(x=>x.salonId===SID45())
+        .sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')))[0];
+      if(!target)return;
+
+      // Evita personal nombrado en reserva.
+      data.assignments=(data.assignments||[]).filter(a=>a.eventId!==target.id);
+
+      target.eventTypeId=c.t.id;
+      target.eventTypeName=c.t.name;
+      target.eventKind=c.t.kind;
+      target.eventName=$45('#eventName45').value;
+      target.child=target.eventName;
+      target.birthdayDate=$45('#birthday45').value;
+      target.start=$45('#start45').value;
+      target.end=$45('#end45').value;
+      target.durationHours=N45(c.t.durationHours);
+      target.extraHours=c.eh;
+      target.adults=c.adults;
+      target.children=c.kids;
+      target.guests=c.adults+c.kids;
+
+      target.includedWaiters=N45(c.t.includedWaiters);
+      target.includedKitchen=N45(c.t.includedKitchen);
+      target.includedAnimators=N45(c.t.includedAnimators);
+      target.includesTableware=!!c.t.includesTableware;
+      target.includesLinen=!!c.t.includesLinen;
+      target.includesCoffee=!!c.t.includesCoffee;
+
+      target.extraWaiters=c.ew;
+      target.extraKitchen=c.ek;
+      target.extraAnimators=c.ea;
+      target.extraAdultQty=c.extraAdultQty;
+      target.extraChildQty=c.extraChildQty;
+      target.extraAdultTotal=c.extraAdultTotal;
+      target.extraChildTotal=c.extraChildTotal;
+      target.extraWaiterTotal=c.waiterTotal;
+      target.extraKitchenTotal=c.kitchenTotal;
+      target.extraAnimatorTotal=c.animatorTotal;
+      target.extraHourTotal=c.extraHourTotal;
+      target.typeExtrasTotal=c.typeExtrasTotal;
+
+      // Totales: base + adicionales generales + stock + adicionales del tipo.
+      const base=N45(target.basePrice??target.baseTotal);
+      const genericExtras=N45(target.extrasTotal);
+      const stock=N45(target.stockItemsTotal);
+      target.staffClientChargeTotal=c.waiterTotal+c.kitchenTotal+c.animatorTotal;
+      target.total=base+genericExtras+stock+c.typeExtrasTotal;
+      target.paid=N45(target.deposit);
+      target.balance=Math.max(0,target.total-N45(target.paid));
+
+      // Compatibilidad: apaga cargos automáticos viejos V43/V44.
+      target.genericExtraStaffTotal=0;
+      target.autoExtraStaffTotal=0;
+      target.autoExtraWaiterTotal=0;
+      target.autoExtraAnimatorTotal=0;
+
+      save();
+    },500);
+
+    return result;
+  };
+};
+
+// ------------------------------------------------------------
+// DETALLE DE RESERVA
+// ------------------------------------------------------------
+const oldView45=window.openEventV44 || window.openEvent;
+window.openEventV45=function(eid){
+  oldView45(eid);
+  setTimeout(()=>{
+    const e=EV45(eid);
+    const modal=document.querySelector('#modal-body');
+    if(!e||!modal||modal.querySelector('#event-type-detail45'))return;
+
+    // Oculta tarjetas heredadas de personal automático para evitar duplicados.
+    ['#generic-staff-detail44','#auto-staff-card43','#party-base-detail41','#guest-extra-detail42']
+      .forEach(sel=>{const x=modal.querySelector(sel);if(x)x.style.display='none';});
+
+    const card=document.createElement('div');
+    card.id='event-type-detail45';
+    card.className='card';
+    card.style.marginTop='14px';
+    card.innerHTML=`
+      <h3>${esc(e.eventTypeName||'Evento')}</h3>
+      <div><b>${esc(e.eventName||e.child||'')}</b>${e.birthdayDate?` · Cumpleaños ${esc(e.birthdayDate)}`:''}</div>
+      <div style="margin-top:5px">Horario: <b>${esc(e.start||'')} a ${esc(e.end||'')}</b> · Duración base ${N45(e.durationHours)} h${N45(e.extraHours)>0?` + ${N45(e.extraHours)} h extra`:''}</div>
+      <div style="margin-top:5px">Invitados: <b>${N45(e.adults)} adultos</b>${e.eventKind==='children'?` · <b>${N45(e.children)} niños</b>`:''}</div>
+      <div style="margin-top:8px"><b>Incluye:</b> ${N45(e.includedWaiters)} mozos · ${N45(e.includedKitchen)} cocina · ${N45(e.includedAnimators)} animadores
+        ${e.includesTableware?' · Vajilla':''}${e.includesLinen?' · Mantelería':''}${e.includesCoffee?' · Cafetería':''}
+      </div>
+      <hr style="margin:10px 0;border:none;border-top:1px solid #ddd">
+      <div>Adultos adicionales: <b>${N45(e.extraAdultQty)}</b> = ${money(e.extraAdultTotal||0)}</div>
+      ${e.eventKind==='children'?`<div>Niños adicionales: <b>${N45(e.extraChildQty)}</b> = ${money(e.extraChildTotal||0)}</div>`:''}
+      <div>Mozo adicional: <b>${N45(e.extraWaiters)}</b> = ${money(e.extraWaiterTotal||0)}</div>
+      <div>Cocina adicional: <b>${N45(e.extraKitchen)}</b> = ${money(e.extraKitchenTotal||0)}</div>
+      <div>Animador adicional: <b>${N45(e.extraAnimators)}</b> = ${money(e.extraAnimatorTotal||0)}</div>
+      <div>Horas extra: <b>${N45(e.extraHours)}</b> = ${money(e.extraHourTotal||0)}</div>
+    `;
+    modal.appendChild(card);
+  },0);
+};
+
+// ------------------------------------------------------------
+// WRAPPERS FINALES
+// ------------------------------------------------------------
+const previousProfile45=window.renderProfileV43 || window.renderProfileV42 || window.renderProfile;
+window.renderProfileV45=function(){
+  previousProfile45();
+  setTimeout(()=>{
+    addTopNav45();
+    appendTypesConfig45();
+  },0);
+};
+
+window.openEventForm=window.openEventFormV45;
+window.openEventFormV44=window.openEventFormV45;
+window.openEvent=window.openEventV45;
+window.renderProfile=window.renderProfileV45;
+
+// Asegura barra superior en todas las pantallas del salón.
+const previousShell45=window.renderSalonShell;
+if(typeof previousShell45==='function'){
+  window.renderSalonShell=function(){
+    const r=previousShell45.apply(this,arguments);
+    setTimeout(addTopNav45,0);
+    return r;
+  };
+}
+
+// Intercepta profile en la cadena de render actual.
+const previousRenderView45=renderSalonView;
+renderSalonView=function(){
+  if(view==='profile')return renderProfileV45();
+  const r=previousRenderView45();
+  setTimeout(addTopNav45,0);
+  return r;
+};
+
+})();
