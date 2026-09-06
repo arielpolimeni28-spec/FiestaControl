@@ -18888,3 +18888,483 @@ setInterval(injectAdminCommunityButton60,1400);
 setInterval(pollAdminMessages60,5000);
 
 })();
+
+
+// ============================================================
+// V61 - MENSAJES ADMIN GARANTIZADOS + MIS PRODUCTOS UNIFICADO
+// ============================================================
+(function(){
+'use strict';
+
+data.adminCommunityMessages=data.adminCommunityMessages||[];
+data.communityPosts=data.communityPosts||[];
+data.providerProducts=data.providerProducts||[];
+
+const norm61=v=>String(v||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+const esc61=v=>{
+  try{return esc(v)}catch(e){
+    return String(v??'').replace(/[&<>"']/g,ch=>({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[ch]));
+  }
+};
+const money61=v=>{
+  try{return money(v)}catch(e){return '$ '+Number(v||0).toLocaleString('es-AR')}
+};
+const sess61=()=>{
+  try{return session||{}}catch(e){return window.session||{}}
+};
+function role61(){return String(sess61().role||'').toLowerCase();}
+function userKey61(){
+  const s=sess61();
+  return String(s.salonId||s.providerId||s.supplierId||s.marketSupplierId||s.userId||s.id||s.email||'anon');
+}
+function targetAllows61(m){
+  const r=role61();
+  const aud=String(m.audience||m.target||m.recipientType||'all').toLowerCase();
+  if(['all','todos','ambos','community','comunidad'].includes(aud))
+    return ['salon','provider','supplier'].includes(r);
+  if(['salon','salons','salones'].includes(aud)) return r==='salon';
+  if(['provider','providers','supplier','suppliers','proveedores'].includes(aud))
+    return r==='provider'||r==='supplier';
+  return false;
+}
+function adminMsgId61(m){
+  return String(m.id||m.messageId||m.createdAt||'');
+}
+function seenKey61(m){return `fc61_admin_seen_${userKey61()}_${adminMsgId61(m)}`;}
+function isSeen61(m){
+  try{return localStorage.getItem(seenKey61(m))==='1'}catch(e){return false}
+}
+function markSeen61(m){
+  try{localStorage.setItem(seenKey61(m),'1')}catch(e){}
+}
+function fmt61(v){
+  try{return new Date(v).toLocaleString('es-AR')}catch(e){return ''}
+}
+
+// Normaliza anuncios desde dos fuentes para compatibilidad.
+function normalizedAdminMessages61(){
+  const out=[];
+  const seen=new Set();
+
+  const add=m=>{
+    if(!m)return;
+    const isAdmin =
+      m.kind==='adminAnnouncement' ||
+      m.type==='adminAnnouncement' ||
+      m.from==='Administrador' ||
+      m.authorRole==='admin' ||
+      m.isAdminAnnouncement===true;
+
+    if(!isAdmin)return;
+
+    const x={
+      id:m.id||m.messageId||('msg_'+String(m.createdAt||Date.now())),
+      title:m.title||m.subject||'Mensaje del administrador',
+      text:m.text||m.message||m.content||'',
+      audience:m.audience||m.target||m.recipientType||'all',
+      priority:m.priority||'normal',
+      from:'Administrador',
+      active:m.active!==false,
+      createdAt:m.createdAt||new Date().toISOString()
+    };
+    if(!x.active || !targetAllows61(x))return;
+    const k=adminMsgId61(x);
+    if(seen.has(k))return;
+    seen.add(k);out.push(x);
+  };
+
+  (data.adminCommunityMessages||[]).forEach(add);
+  (data.communityPosts||[]).forEach(add);
+
+  return out.sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
+}
+
+// ------------------------------------------------------------
+// ADMIN: GUARDAR EN DOS ESTRUCTURAS PARA ASEGURAR ENTREGA
+// ------------------------------------------------------------
+window.openAdminCommunityMessage61=function(){
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>📢 Mensaje a la comunidad</h2>
+        <p>Se enviará a los destinatarios y quedará guardado en Comunidad.</p>
+      </div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="adminCommunity61">
+      <div class="form-grid">
+        <div class="field span2">
+          <label>Título</label>
+          <input name="title" required>
+        </div>
+        <div class="field span2">
+          <label>Mensaje</label>
+          <textarea name="text" required></textarea>
+        </div>
+        <div class="field">
+          <label>Destinatarios</label>
+          <select name="audience">
+            <option value="all">Salones y proveedores</option>
+            <option value="salons">Solo salones</option>
+            <option value="providers">Solo proveedores</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Prioridad</label>
+          <select name="priority">
+            <option value="normal">Normal</option>
+            <option value="important">Importante</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="primary">Enviar mensaje</button>
+      </div>
+    </form>
+  `);
+
+  document.querySelector('#adminCommunity61').onsubmit=e=>{
+    e.preventDefault();
+    const f=Object.fromEntries(new FormData(e.target));
+    const msgId=id();
+    const createdAt=new Date().toISOString();
+
+    const msg={
+      id:msgId,
+      kind:'adminAnnouncement',
+      type:'adminAnnouncement',
+      isAdminAnnouncement:true,
+      title:String(f.title||'').trim(),
+      text:String(f.text||'').trim(),
+      audience:f.audience||'all',
+      priority:f.priority||'normal',
+      from:'Administrador',
+      authorRole:'admin',
+      active:true,
+      createdAt
+    };
+
+    // Fuente específica.
+    data.adminCommunityMessages.push({...msg});
+
+    // Fuente general de Comunidad, para que también aparezca allí
+    // aunque una pantalla antigua solo lea communityPosts.
+    data.communityPosts.push({
+      ...msg,
+      message:msg.text,
+      content:msg.text,
+      author:'Administrador'
+    });
+
+    save();
+    closeModal();
+    toast('Mensaje enviado a salones/proveedores');
+  };
+};
+
+// Reemplazar botón V60 para que use V61.
+window.openAdminCommunityMessage60=window.openAdminCommunityMessage61;
+
+function repairAdminButton61(){
+  if(!['admin','administrator'].includes(role61()))return;
+
+  const existing=document.querySelector('#admin-community-message60,#admin-community-message61');
+  if(existing){
+    existing.id='admin-community-message61';
+    existing.onclick=()=>openAdminCommunityMessage61();
+    return;
+  }
+
+  const host=document.querySelector('.topbar .toolbar')||
+             document.querySelector('.nav')||
+             document.querySelector('.toolbar')||
+             document.querySelector('header')||
+             document.querySelector('#app');
+  if(!host)return;
+
+  const b=document.createElement('button');
+  b.id='admin-community-message61';
+  b.className='primary';
+  b.innerHTML='📢 Mensaje comunidad';
+  b.onclick=()=>openAdminCommunityMessage61();
+  host.appendChild(b);
+}
+
+// ------------------------------------------------------------
+// RECEPCIÓN: POLLING ROBUSTO DE /api/data
+// ------------------------------------------------------------
+let polling61=false;
+let popup61=false;
+
+function showNextAdmin61(){
+  const r=role61();
+  if(!['salon','provider','supplier'].includes(r))return;
+  if(popup61)return;
+
+  const m=normalizedAdminMessages61().find(x=>!isSeen61(x));
+  if(!m)return;
+
+  popup61=true;
+  markSeen61(m);
+
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>${m.priority==='important'?'⚠️':'📢'} ${esc61(m.title)}</h2>
+        <p>Mensaje del administrador</p>
+      </div>
+      <button class="ghost small" onclick="closeModal();window.finishAdmin61()">✕</button>
+    </div>
+
+    <div class="card" style="padding:16px">
+      <div style="font-size:16px;line-height:1.55;white-space:pre-wrap">${esc61(m.text)}</div>
+      <small class="muted" style="display:block;margin-top:12px">${fmt61(m.createdAt)}</small>
+    </div>
+
+    <div class="form-actions">
+      <button class="primary" onclick="closeModal();window.finishAdmin61()">Entendido</button>
+    </div>
+  `);
+}
+window.finishAdmin61=function(){
+  popup61=false;
+  setTimeout(showNextAdmin61,200);
+};
+
+async function pollAdmin61(){
+  if(polling61)return;
+  if(!['salon','provider','supplier'].includes(role61()))return;
+
+  polling61=true;
+  try{
+    const res=await fetch('/api/data?ts='+Date.now(),{
+      method:'GET',
+      cache:'no-store',
+      headers:{'Cache-Control':'no-cache'}
+    });
+    if(!res.ok)throw new Error('HTTP '+res.status);
+
+    const remoteRaw=await res.json();
+    const remote=(remoteRaw&&remoteRaw.data&&typeof remoteRaw.data==='object')?remoteRaw.data:remoteRaw;
+
+    // Copiamos solo las estructuras de mensajes para no pisar
+    // cambios locales no guardados de otras pantallas.
+    if(Array.isArray(remote?.adminCommunityMessages)){
+      data.adminCommunityMessages=remote.adminCommunityMessages;
+    }
+    if(Array.isArray(remote?.communityPosts)){
+      // Solo sustituimos porque esta es la fuente central del servidor.
+      data.communityPosts=remote.communityPosts;
+    }
+
+    showNextAdmin61();
+    refreshAdminCommunityBlock61();
+  }catch(err){
+    // Si falla una consulta, se vuelve a intentar en el próximo ciclo.
+  }finally{
+    polling61=false;
+  }
+}
+
+// ------------------------------------------------------------
+// MENSAJES ADMIN DENTRO DE COMUNIDAD
+// ------------------------------------------------------------
+function adminBlock61(){
+  const msgs=normalizedAdminMessages61();
+  return `
+    <div class="card" id="admin-community-block61" style="margin-top:14px">
+      <div class="section-title">
+        <div>
+          <h3>📢 Mensajes del administrador</h3>
+          <small class="muted">Mensajes oficiales enviados a la comunidad.</small>
+        </div>
+      </div>
+      ${msgs.length?msgs.map(m=>`
+        <div style="padding:12px 0;border-bottom:1px solid #eee">
+          <b>${m.priority==='important'?'⚠️ ':''}${esc61(m.title)}</b>
+          <div style="margin-top:4px;white-space:pre-wrap">${esc61(m.text)}</div>
+          <small class="muted">${fmt61(m.createdAt)}</small>
+        </div>
+      `).join(''):'<div class="empty">No hay mensajes del administrador.</div>'}
+    </div>
+  `;
+}
+function appendAdminCommunityBlock61(){
+  if(!['salon','provider','supplier'].includes(role61()))return;
+  const content=document.querySelector('#content');
+  if(!content||document.querySelector('#admin-community-block61'))return;
+  const wrap=document.createElement('div');
+  wrap.innerHTML=adminBlock61();
+  content.appendChild(wrap.firstElementChild);
+}
+function refreshAdminCommunityBlock61(){
+  const old=document.querySelector('#admin-community-block61');
+  if(!old)return;
+  const wrap=document.createElement('div');
+  wrap.innerHTML=adminBlock61();
+  old.replaceWith(wrap.firstElementChild);
+}
+
+// ------------------------------------------------------------
+// PROVEEDOR: "MIS PRODUCTOS" = LOS MISMOS PRODUCTOS DE COMUNIDAD
+// ------------------------------------------------------------
+function provider61(){
+  const s=sess61();
+  const vals=[
+    s.providerId,s.supplierId,s.marketSupplierId,s.userId,s.id,
+    s.email,s.userEmail,s.username,s.userName,s.name,s.businessName
+  ].filter(Boolean).map(norm61);
+
+  return (data.marketSuppliers||[]).find(p=>{
+    const keys=[
+      p.id,p.userId,p.providerId,p.supplierId,p.email,
+      p.username,p.userName,p.name,p.businessName,p.fantasyName
+    ].filter(Boolean).map(norm61);
+    return keys.some(k=>vals.includes(k));
+  })||null;
+}
+function belongs61(prod,p){
+  if(!prod||!p)return false;
+  return String(prod.providerId)===String(p.id) ||
+         String(prod.providerUserId)===String(p.userId||p.id) ||
+         (!!prod.providerEmail && !!p.email && norm61(prod.providerEmail)===norm61(p.email));
+}
+function providerProducts61(p){
+  return (data.providerProducts||[])
+    .filter(x=>belongs61(x,p))
+    .sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+}
+
+window.renderMyProducts61=function(){
+  const p=provider61();
+  if(!p)return toast('Proveedor no identificado');
+
+  const products=providerProducts61(p);
+  const content=document.querySelector('#content');
+  if(!content)return;
+
+  content.innerHTML=`
+    <div class="card">
+      <div class="section-title">
+        <div>
+          <h2>📦 Mis productos</h2>
+          <small class="muted">Son los mismos productos que cargaste y que aparecen en Comunidad.</small>
+        </div>
+        <button class="primary" onclick="openProviderProduct56()">+ Agregar producto</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      ${products.length?`
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Producto</th>
+                <th>Categoría</th>
+                <th>Precio</th>
+                <th>Visible a salones</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${products.map(x=>`
+                <tr>
+                  <td>
+                    <div style="display:flex;gap:8px;align-items:center">
+                      ${x.photo?`<img src="${x.photo}" style="width:52px;height:52px;object-fit:cover;border-radius:8px">`:''}
+                      <div>
+                        <b>${esc61(x.name)}</b>
+                        <small style="display:block">${esc61(x.description||'')}</small>
+                      </div>
+                    </div>
+                  </td>
+                  <td>${esc61(x.category||'')}</td>
+                  <td><b>${money61(x.price||0)}</b></td>
+                  <td>${x.visibleToSalons!==false?'✅ Sí':'🚫 No'}</td>
+                  <td>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap">
+                      <button class="secondary small" onclick="openProviderProduct56('${x.id}')">✏️ Editar</button>
+                      <button class="danger small" onclick="deleteProviderProduct59('${x.id}')">🗑️ Borrar</button>
+                    </div>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `:'<div class="empty">Todavía no cargaste productos.</div>'}
+    </div>
+  `;
+};
+
+// Captura el click del menú "Mis productos" aunque el sistema use
+// una función/ruta anterior.
+function repairMyProductsMenu61(){
+  if(!['provider','supplier'].includes(role61()))return;
+
+  const els=[...document.querySelectorAll('a,button,[role="button"],.nav-item,.menu-item,.sidebar-item,li')];
+  els.forEach(el=>{
+    if(norm61(el.textContent)==='mis productos'){
+      if(el.dataset.v61Bound==='1')return;
+      el.dataset.v61Bound='1';
+      el.addEventListener('click',ev=>{
+        ev.preventDefault();
+        ev.stopImmediatePropagation();
+        renderMyProducts61();
+      },true);
+    }
+  });
+}
+
+// Comunidad del proveedor: mantener productos y agregar mensajes admin.
+const oldProviderCommunity61=window.renderProviderCommunity59;
+if(typeof oldProviderCommunity61==='function'){
+  window.renderProviderCommunity59=function(){
+    const r=oldProviderCommunity61.apply(this,arguments);
+    setTimeout(appendAdminCommunityBlock61,50);
+    return r;
+  };
+  window.renderProviderCommunity58=window.renderProviderCommunity59;
+  window.renderProviderCommunity57=window.renderProviderCommunity59;
+  window.renderProviderCommunity56=window.renderProviderCommunity59;
+  window.renderProviderCommunity55=window.renderProviderCommunity59;
+  window.renderProviderCommunity54=window.renderProviderCommunity59;
+  window.renderProviderCommunity53=window.renderProviderCommunity59;
+}
+
+// Comunidad del salón: agregar bloque admin.
+const oldCommunityGeneral61=window.renderCommunity;
+if(typeof oldCommunityGeneral61==='function'){
+  window.renderCommunity=function(){
+    const r=oldCommunityGeneral61.apply(this,arguments);
+    setTimeout(appendAdminCommunityBlock61,50);
+    return r;
+  };
+}
+const oldCommunityV2461=window.renderCommunityV24;
+if(typeof oldCommunityV2461==='function'){
+  window.renderCommunityV24=function(){
+    const r=oldCommunityV2461.apply(this,arguments);
+    setTimeout(appendAdminCommunityBlock61,50);
+    return r;
+  };
+}
+
+// Inicio
+setTimeout(()=>{
+  repairAdminButton61();
+  repairMyProductsMenu61();
+  pollAdmin61();
+  showNextAdmin61();
+},300);
+
+setInterval(repairAdminButton61,1200);
+setInterval(repairMyProductsMenu61,1200);
+setInterval(pollAdmin61,3000);
+
+})();
