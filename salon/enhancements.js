@@ -7388,3 +7388,226 @@ renderSalonView=function(){
 };
 
 })();
+
+
+// ============================================================
+// V27 - STOCK: PAGOS PERSISTENTES + MOVIMIENTOS + SECCIONES CORRECTAS
+// ============================================================
+(function(){
+'use strict';
+
+data.stockPurchases=data.stockPurchases||[];
+data.movements=data.movements||[];
+data.accountingEpochs=data.accountingEpochs||[];
+data.financeResets=data.financeResets||[];
+
+const SID27=()=>session?.salonId;
+const PROD27=idp=>(data.stockProducts||[]).find(p=>p.id===idp&&p.salonId===SID27());
+const BUYS27=()=> (data.stockPurchases||[]).filter(c=>c.salonId===SID27());
+const METHODS27=['Efectivo','Transferencia','Mercado Pago','Tarjeta','Otro'];
+
+function total27(c){
+  return Number(c.total ?? (Number(c.quantity??c.qty??0)*Number(c.unitCost??c.costPrice??0)));
+}
+
+// Cuando empieza una operación REAL después de una puesta a cero,
+// desactiva los bloqueos antiguos que borraban los movimientos nuevos.
+function unlockAccounting27(){
+  const sid=SID27();
+  data.accountingEpochs=(data.accountingEpochs||[]).filter(x=>x.salonId!==sid);
+  (data.financeResets||[]).forEach(r=>{
+    if(r.salonId===sid) r.active=false;
+  });
+}
+
+window.openStockPurchaseV27=function(pid=''){
+  const ps=(data.stockProducts||[]).filter(p=>p.salonId===SID27());
+  if(!ps.length)return toast('Primero cargá un producto');
+
+  showModal(`
+    <div class="modal-title">
+      <div><h2>Registrar compra</h2><p>El costo unitario se toma del producto.</p></div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+    <form id="buy27">
+      <div class="form-grid">
+        <div class="field span2">
+          <label>Producto</label>
+          <select name="productId" id="prod27">${ps.map(p=>`<option value="${p.id}" ${p.id===pid?'selected':''}>${esc(p.name)}</option>`).join('')}</select>
+        </div>
+        <div class="field"><label>Cantidad</label><input name="quantity" id="qty27" type="number" min="1" value="1" required></div>
+        <div class="field"><label>Costo unitario</label><input id="cost27" readonly></div>
+        <div class="field"><label>Fecha</label><input name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required></div>
+        <div class="field"><label>Total compra</label><input id="tot27" readonly></div>
+      </div>
+      <div class="admin-notice"><span>🧾</span><div><b>Se registra pendiente de pago</b><small>Después se paga desde “Últimas compras pendientes”.</small></div></div>
+      <div class="form-actions"><button type="button" class="ghost" onclick="closeModal()">Cancelar</button><button class="primary">Registrar compra</button></div>
+    </form>
+  `);
+
+  const form=$('#buy27'),sel=$('#prod27'),qty=$('#qty27'),cost=$('#cost27'),tot=$('#tot27');
+  function refresh(){
+    const p=PROD27(sel.value),u=Number(p?.costPrice||0),q=Number(qty.value||0);
+    cost.value=money(u);
+    tot.value=money(q*u);
+  }
+  sel.onchange=refresh;qty.oninput=refresh;refresh();
+
+  form.onsubmit=e=>{
+    e.preventDefault();
+    const f=Object.fromEntries(new FormData(form));
+    const p=PROD27(f.productId); if(!p)return;
+    unlockAccounting27();
+
+    const q=Number(f.quantity||0),u=Number(p.costPrice||0);
+    p.stock=Number(p.stock||0)+q;
+
+    data.stockPurchases.push({
+      id:id(),salonId:SID27(),productId:p.id,productName:p.name,
+      quantity:q,unitCost:u,total:q*u,date:f.date,
+      paymentStatus:'Pendiente',deliveryStatus:'Pendiente de entrega',
+      createdAt:new Date().toISOString()
+    });
+
+    save();closeModal();toast('Compra pendiente registrada');renderStockV27();
+  };
+};
+
+window.payStockPurchaseV27=function(cid){
+  const c=BUYS27().find(x=>x.id===cid); if(!c)return toast('Compra no encontrada');
+  const p=PROD27(c.productId),amount=total27(c);
+
+  showModal(`
+    <div class="modal-title">
+      <div><h2>Pagar compra</h2><p>${esc(p?.name||c.productName||'')} · ${money(amount)}</p></div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+    <form id="pay27">
+      <div class="form-grid">
+        <div class="field"><label>Importe</label><input value="${money(amount)}" readonly></div>
+        <div class="field"><label>Medio de pago</label><select name="method">${METHODS27.map(x=>`<option>${x}</option>`).join('')}</select></div>
+        <div class="field span2">
+          <label>Estado al pagar</label>
+          <select name="deliveryStatus">
+            <option value="Pendiente de entrega">Pagada - pendiente de entrega</option>
+            <option value="Entregado">Pagada - entregada</option>
+          </select>
+        </div>
+        <div class="field span2"><label>Referencia / comprobante</label><input name="reference"></div>
+      </div>
+      <div class="form-actions"><button type="button" class="ghost" onclick="closeModal()">Cancelar</button><button class="primary">Confirmar pago</button></div>
+    </form>
+  `);
+
+  $('#pay27').onsubmit=e=>{
+    e.preventDefault();
+    const f=Object.fromEntries(new FormData(e.target));
+    unlockAccounting27();
+
+    c.paymentStatus='Pagado';
+    c.paymentMethod=f.method;
+    c.deliveryStatus=f.deliveryStatus;
+    c.reference=f.reference||'';
+    c.paidAt=new Date().toISOString();
+
+    data.movements=(data.movements||[]).filter(m=>m.stockPurchaseId!==c.id);
+    data.movements.push({
+      id:id(),salonId:SID27(),type:'Gasto',category:'Compra de stock',
+      concept:`Pago compra ${p?.name||c.productName||''}`,
+      amount,method:f.method,status:f.deliveryStatus,
+      stockPurchaseId:c.id,movementDate:new Date().toISOString().slice(0,10),
+      createdAt:new Date().toISOString()
+    });
+
+    save();
+
+    // Segundo guardado para evitar que un wrapper viejo pise el movimiento.
+    setTimeout(()=>{
+      unlockAccounting27();
+      const still=BUYS27().find(x=>x.id===cid);
+      if(still){
+        still.paymentStatus='Pagado';
+        still.paymentMethod=f.method;
+        still.deliveryStatus=f.deliveryStatus;
+        still.reference=f.reference||'';
+        still.paidAt=still.paidAt||new Date().toISOString();
+      }
+      if(!(data.movements||[]).some(m=>m.stockPurchaseId===cid)){
+        data.movements.push({
+          id:id(),salonId:SID27(),type:'Gasto',category:'Compra de stock',
+          concept:`Pago compra ${p?.name||c.productName||''}`,
+          amount,method:f.method,status:f.deliveryStatus,
+          stockPurchaseId:cid,movementDate:new Date().toISOString().slice(0,10),
+          createdAt:new Date().toISOString()
+        });
+      }
+      save();
+      closeModal();
+      toast(f.deliveryStatus==='Entregado'?'Compra pagada y entregada':'Compra pagada, pendiente de entrega');
+      renderStockV27();
+    },250);
+  };
+};
+
+window.renderStockV27=function(){
+  const ps=(data.stockProducts||[]).filter(p=>p.salonId===SID27());
+  const buys=BUYS27();
+  const pending=buys.filter(c=>c.paymentStatus!=='Pagado').sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
+  const paid=buys.filter(c=>c.paymentStatus==='Pagado').sort((a,b)=>String(b.paidAt||'').localeCompare(String(a.paidAt||'')));
+  const payMov=(data.movements||[]).filter(m=>m.salonId===SID27()&&m.category==='Compra de stock'&&m.stockPurchaseId);
+
+  setTitle('Stock','Productos, compras, pagos y entregas');
+  const units=ps.reduce((s,p)=>s+Number(p.stock||0),0);
+  const value=ps.reduce((s,p)=>s+Number(p.stock||0)*Number(p.costPrice||0),0);
+  const low=ps.filter(p=>Number(p.stock||0)<=Number(p.minStock||0)).length;
+
+  $('#content').innerHTML=`
+    <div class="grid stats">
+      <div class="card stat"><small>Productos</small><strong>${ps.length}</strong></div>
+      <div class="card stat"><small>Unidades en stock</small><strong>${units}</strong></div>
+      <div class="card stat"><small>Valor de stock a costo</small><strong>${money(value)}</strong></div>
+      <div class="card stat"><small>Stock bajo</small><strong>${low}</strong></div>
+    </div>
+
+    <div class="toolbar" style="margin-top:16px">
+      <button class="primary" onclick="openStockProductV23()">+ Agregar producto</button>
+      <button class="secondary" onclick="openStockPurchaseV27()">🛒 Registrar compra</button>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <h3>Últimas compras pendientes</h3>
+      ${pending.length?`<div class="table-wrap"><table class="table"><thead><tr><th>Fecha</th><th>Producto</th><th>Cantidad</th><th>Costo unit.</th><th>Total</th><th>Acciones</th></tr></thead><tbody>
+      ${pending.map(c=>{let p=PROD27(c.productId);return`<tr><td>${esc(c.date||'')}</td><td>${esc(p?.name||c.productName||'')}</td><td>${c.quantity}</td><td>${money(c.unitCost)}</td><td>${money(total27(c))}</td><td><button class="secondary small" onclick="editStockPurchaseV26('${c.id}')">Editar compra</button> <button class="danger small" onclick="deleteStockPurchaseV26('${c.id}')">Borrar compra</button> <button class="primary small" onclick="payStockPurchaseV27('${c.id}')">Pagar compra</button></td></tr>`}).join('')}
+      </tbody></table></div>`:'<div class="empty">No hay compras pendientes.</div>'}
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <h3>Compras pagadas</h3>
+      ${paid.length?`<div class="table-wrap"><table class="table"><thead><tr><th>Fecha pago</th><th>Producto</th><th>Total</th><th>Medio</th><th>Entrega</th></tr></thead><tbody>
+      ${paid.map(c=>{let p=PROD27(c.productId);return`<tr><td>${esc((c.paidAt||'').slice(0,10))}</td><td>${esc(p?.name||c.productName||'')}</td><td>${money(total27(c))}</td><td>${esc(c.paymentMethod||'')}</td><td><span class="pill">${c.deliveryStatus==='Entregado'?'Entregada':'Pendiente de entrega'}</span></td></tr>`}).join('')}
+      </tbody></table></div>`:'<div class="empty">No hay compras pagadas.</div>'}
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <h3>Movimientos de pago de compras</h3>
+      ${payMov.length?`<div class="table-wrap"><table class="table"><thead><tr><th>Fecha</th><th>Concepto</th><th>Importe</th><th>Medio</th><th>Estado</th></tr></thead><tbody>
+      ${payMov.slice().reverse().map(m=>`<tr><td>${esc(m.movementDate||'')}</td><td>${esc(m.concept||'')}</td><td>${money(m.amount)}</td><td>${esc(m.method||'')}</td><td>${esc(m.status||'')}</td></tr>`).join('')}
+      </tbody></table></div>`:'<div class="empty">Todavía no hay movimientos de pago.</div>'}
+    </div>
+  `;
+};
+
+// aliases para bloquear formularios/pagos antiguos
+window.openStockPurchaseV26=window.openStockPurchaseV27;
+window.openStockPurchaseV25=window.openStockPurchaseV27;
+window.openStockPurchaseV23=window.openStockPurchaseV27;
+window.payStockPurchaseV26=window.payStockPurchaseV27;
+window.payStockPurchaseV25=window.payStockPurchaseV27;
+
+const previous27=renderSalonView;
+renderSalonView=function(){
+  if(view==='stock')return renderStockV27();
+  return previous27();
+};
+
+})();
