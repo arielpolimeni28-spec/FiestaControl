@@ -7611,3 +7611,322 @@ renderSalonView=function(){
 };
 
 })();
+
+
+// ============================================================
+// V28 - RESERVAS: TOTAL REAL + SEÑA + PERSONAL + ADICIONALES + STOCK
+// ============================================================
+(function(){
+'use strict';
+
+data.assignments=data.assignments||[];
+data.movements=data.movements||[];
+data.stockProducts=data.stockProducts||[];
+data.salonExtras=data.salonExtras||[];
+
+const SID28=()=>session?.salonId;
+const EV28=()=> (data.events||[]).filter(e=>e.salonId===SID28());
+const STAFF28=()=> (data.staff||[]).filter(s=>s.salonId===SID28() && s.staffStatus!=='Suspendido');
+const PROD28=()=> (data.stockProducts||[]).filter(p=>p.salonId===SID28());
+const EXTRA28=()=> (data.salonExtras||[]).filter(x=>x.salonId===SID28());
+
+function event28(eid){return (data.events||[]).find(e=>e.id===eid&&e.salonId===SID28())}
+function assignments28(eid){return (data.assignments||[]).filter(a=>a.eventId===eid)}
+function selectedExtras28(e){return Array.isArray(e?.extras)?e.extras:[]}
+function selectedStock28(e){return Array.isArray(e?.stockItems)?e.stockItems:[]}
+
+function restoreOldStock28(e){
+  if(!e)return;
+  selectedStock28(e).forEach(i=>{
+    const p=(data.stockProducts||[]).find(x=>x.id===i.productId&&x.salonId===SID28());
+    if(p)p.stock=Number(p.stock||0)+Number(i.qty||0);
+  });
+}
+
+function applyNewStock28(items){
+  items.forEach(i=>{
+    const p=(data.stockProducts||[]).find(x=>x.id===i.productId&&x.salonId===SID28());
+    if(p)p.stock=Math.max(0,Number(p.stock||0)-Number(i.qty||0));
+  });
+}
+
+function ensureDepositMovement28(e){
+  const key=`event-deposit:${e.id}`;
+  data.movements=(data.movements||[]).filter(m=>m.sourceKey!==key);
+  if(Number(e.deposit||0)>0){
+    data.movements.push({
+      id:id(),salonId:SID28(),sourceKey:key,type:'Ingreso',category:'Seña',
+      concept:`Seña reserva ${e.child||e.client||''}`,
+      amount:Number(e.deposit||0),eventId:e.id,
+      movementDate:e.date||new Date().toISOString().slice(0,10),
+      method:e.depositMethod||'No especificado',
+      createdAt:new Date().toISOString()
+    });
+  }
+}
+
+window.openEventFormV28=function(eid=''){
+  const e=eid?event28(eid):null;
+  const staff=STAFF28(), extras=EXTRA28(), products=PROD28();
+  const oldAss=new Set(assignments28(eid).map(a=>a.staffId));
+  const oldExtras=selectedExtras28(e);
+  const oldStock=selectedStock28(e);
+
+  showModal(`
+    <div class="modal-title">
+      <div><h2>${e?'Editar reserva':'Nueva reserva'}</h2><p>La reserva se calcula completa antes de guardar.</p></div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="ev28">
+      <div class="form-grid">
+        <div class="field"><label>Nombre del cumpleañero/a</label><input name="child" required value="${esc(e?.child||'')}"></div>
+        <div class="field"><label>Edad que cumple</label><input name="age" type="number" min="0" value="${Number(e?.age||0)}"></div>
+        <div class="field"><label>Responsable del evento</label><input name="client" required value="${esc(e?.client||'')}"></div>
+        <div class="field"><label>Email del cliente</label><input name="email" type="email" required value="${esc(e?.email||'')}"></div>
+        <div class="field"><label>Fecha</label><input name="date" type="date" required value="${esc(e?.date||todayKey())}"></div>
+        <div class="field"><label>Estado</label><select name="status">${['Consulta','Pendiente','Señada','Confirmada','Finalizada','Cancelada'].map(x=>`<option ${e?.status===x?'selected':''}>${x}</option>`).join('')}</select></div>
+        <div class="field"><label>Horario desde</label><input name="start" type="time" required value="${esc(e?.start||'')}"></div>
+        <div class="field"><label>Horario hasta</label><input name="end" type="time" required value="${esc(e?.end||'')}"></div>
+        <div class="field"><label>Cantidad de invitados</label><input name="guests" type="number" min="0" value="${Number(e?.guests||0)}"></div>
+        <div class="field"><label>Precio de la fiesta</label><input name="basePrice" id="base28" type="number" min="0" value="${Number(e?.basePrice??e?.total??0)}" required></div>
+        <div class="field"><label>Valor de la seña</label><input name="deposit" id="dep28" type="number" min="0" value="${Number(e?.deposit??e?.paid??0)}"></div>
+        <div class="field"><label>Medio de la seña</label><select name="depositMethod">${['Efectivo','Transferencia','Mercado Pago','Tarjeta','Otro'].map(x=>`<option ${e?.depositMethod===x?'selected':''}>${x}</option>`).join('')}</select></div>
+      </div>
+
+      <div id="same28" class="card" style="margin-top:12px"></div>
+
+      <div class="card" style="margin-top:12px">
+        <div class="section-title"><div><h3>Personal asignado</h3><small class="muted">No suma al precio del cliente; queda asociado a la fiesta.</small></div></div>
+        ${staff.length?`<div class="form-grid">${staff.map(s=>`<label class="check-card"><input type="checkbox" name="staffIds" value="${s.id}" ${oldAss.has(s.id)?'checked':''}><span><b>${esc(s.name)}</b><small>${esc(s.role||'')}</small></span></label>`).join('')}</div>`:'<div class="empty">No hay personal activo cargado.</div>'}
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <div class="section-title"><div><h3>Adicionales</h3><small class="muted">Se suman al total de la reserva.</small></div></div>
+        ${extras.length?`<div class="form-grid">${extras.map(x=>{let chk=oldExtras.some(z=>z.extraId===x.id||z.id===x.id);return`<label class="check-card"><input type="checkbox" class="extra28" value="${x.id}" data-price="${Number(x.price||x.amount||0)}" ${chk?'checked':''}><span><b>${esc(x.name||x.description||'Adicional')}</b><small>${money(x.price||x.amount||0)}</small></span></label>`}).join('')}</div>`:'<div class="empty">No hay adicionales configurados.</div>'}
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <div class="section-title"><div><h3>Productos de stock para esta fiesta</h3><small class="muted">Se descuenta del stock y se suma al total.</small></div></div>
+        ${products.length?products.map(p=>{let old=oldStock.find(x=>x.productId===p.id);let available=Number(p.stock||0)+Number(old?.qty||0);return`
+          <div class="form-grid stockrow28" data-id="${p.id}" data-price="${Number(p.salePrice||0)}" data-available="${available}" style="align-items:end;margin-bottom:8px">
+            <div class="field span2"><label>${esc(p.name)}</label><small>Disponible: ${available} · Venta ${money(p.salePrice||0)}</small></div>
+            <div class="field"><label>Cantidad para la fiesta</label><input class="stockqty28" type="number" min="0" max="${available}" value="${Number(old?.qty||0)}"></div>
+          </div>`}).join(''):'<div class="empty">No hay productos con stock configurados.</div>'}
+      </div>
+
+      <div class="grid stats" style="margin-top:14px">
+        <div class="card stat"><small>Precio base</small><strong id="sumBase28">$ 0</strong></div>
+        <div class="card stat"><small>Adicionales</small><strong id="sumExtra28">$ 0</strong></div>
+        <div class="card stat"><small>Productos stock</small><strong id="sumStock28">$ 0</strong></div>
+        <div class="card stat"><small>Total reserva</small><strong id="sumTotal28">$ 0</strong></div>
+        <div class="card stat"><small>Seña</small><strong id="sumDep28">$ 0</strong></div>
+        <div class="card stat"><small>Saldo pendiente</small><strong id="sumBal28">$ 0</strong></div>
+      </div>
+
+      <div class="field" style="margin-top:12px"><label>Observaciones</label><textarea name="notes">${esc(e?.notes||'')}</textarea></div>
+
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="primary">Guardar fiesta</button>
+      </div>
+    </form>
+  `);
+
+  const form=$('#ev28'), same=$('#same28');
+
+  function sameDay(){
+    const arr=EV28().filter(x=>x.id!==eid&&x.date===form.date.value&&x.status!=='Cancelada').sort((a,b)=>String(a.start).localeCompare(String(b.start)));
+    same.innerHTML=`<b>Fiestas ya creadas ese día</b>${arr.length?arr.map(x=>`<div>${esc(x.start)}–${esc(x.end)} · ${esc(x.child||x.client)}</div>`).join(''):'<small>Día libre.</small>'}`;
+  }
+
+  function calc(){
+    const base=Number($('#base28').value||0);
+    let extra=0;$$('.extra28').forEach(x=>{if(x.checked)extra+=Number(x.dataset.price||0)});
+    let stock=0;$$('.stockrow28').forEach(r=>{stock+=Number(r.querySelector('.stockqty28').value||0)*Number(r.dataset.price||0)});
+    const total=base+extra+stock;
+    const dep=Math.min(Number($('#dep28').value||0),total);
+    const bal=Math.max(0,total-dep);
+    $('#sumBase28').textContent=money(base);
+    $('#sumExtra28').textContent=money(extra);
+    $('#sumStock28').textContent=money(stock);
+    $('#sumTotal28').textContent=money(total);
+    $('#sumDep28').textContent=money(dep);
+    $('#sumBal28').textContent=money(bal);
+  }
+
+  form.date.onchange=sameDay;
+  $('#base28').oninput=calc;$('#dep28').oninput=calc;
+  $$('.extra28').forEach(x=>x.onchange=calc);
+  $$('.stockqty28').forEach(x=>x.oninput=calc);
+  sameDay();calc();
+
+  form.onsubmit=ev=>{
+    ev.preventDefault();
+    const f=Object.fromEntries(new FormData(form));
+    if(f.end<=f.start)return toast('El horario de finalización debe ser posterior');
+
+    const conflict=EV28().find(x=>x.id!==eid&&x.date===f.date&&x.status!=='Cancelada'&&f.start<x.end&&f.end>x.start);
+    if(conflict)return toast(`Se superpone con ${conflict.start} a ${conflict.end}`);
+
+    const extrasSel=$$('.extra28').filter(x=>x.checked).map(x=>{
+      const ex=extras.find(z=>z.id===x.value);
+      return {extraId:x.value,name:ex?.name||ex?.description||'Adicional',price:Number(x.dataset.price||0)};
+    });
+
+    const stockSel=$$('.stockrow28').map(r=>{
+      const q=Number(r.querySelector('.stockqty28').value||0);
+      return q>0?{productId:r.dataset.id,name:PROD28().find(p=>p.id===r.dataset.id)?.name||'',qty:q,unitPrice:Number(r.dataset.price||0)}:null;
+    }).filter(Boolean);
+
+    for(const i of stockSel){
+      const row=$(`.stockrow28[data-id="${i.productId}"]`);
+      if(i.qty>Number(row.dataset.available||0))return toast(`Stock insuficiente de ${i.name}`);
+    }
+
+    const base=Number(f.basePrice||0);
+    const extrasTotal=extrasSel.reduce((s,x)=>s+x.price,0);
+    const stockTotal=stockSel.reduce((s,x)=>s+x.qty*x.unitPrice,0);
+    const total=base+extrasTotal+stockTotal;
+    const deposit=Math.min(Number(f.deposit||0),total);
+
+    if(e)restoreOldStock28(e);
+    applyNewStock28(stockSel);
+
+    const obj=e||{id:id(),salonId:SID28(),createdAt:new Date().toISOString(),rsvps:[]};
+    Object.assign(obj,{
+      child:f.child,age:Number(f.age||0),client:f.client,email:f.email,date:f.date,
+      status:f.status==='Señada'?'Confirmada':f.status,start:f.start,end:f.end,
+      guests:Number(f.guests||0),basePrice:base,total,deposit,paid:deposit,
+      depositMethod:f.depositMethod,extras:extrasSel,extrasTotal,
+      stockItems:stockSel,stockItemsTotal:stockTotal,notes:f.notes||'',
+      updatedAt:new Date().toISOString()
+    });
+
+    if(!e)data.events.push(obj);
+
+    data.assignments=(data.assignments||[]).filter(a=>a.eventId!==obj.id);
+    const staffIds=new FormData(form).getAll('staffIds');
+    staffIds.forEach(staffId=>{
+      const s=STAFF28().find(x=>x.id===staffId);
+      data.assignments.push({id:id(),salonId:SID28(),eventId:obj.id,staffId,staffName:s?.name||'',createdAt:new Date().toISOString()});
+    });
+
+    ensureDepositMovement28(obj);
+
+    save();
+    closeModal();
+    toast('Reserva guardada con todos sus importes');
+    view='events';
+    renderSalonShell();
+  };
+};
+
+window.renderEventsV28=function(){
+  setTitle('Fiestas','Reservas, importes y saldos');
+  const arr=EV28().slice().sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+  $('#content').innerHTML=arr.length?`
+    <div class="table-wrap"><table class="table">
+      <thead><tr><th>Fecha</th><th>Cumpleañero</th><th>Responsable</th><th>Estado</th><th>Total</th><th>Seña/Cobrado</th><th>Saldo</th><th>Personal</th><th></th></tr></thead>
+      <tbody>${arr.map(e=>`<tr>
+        <td>${esc(e.date||'')}</td><td><b>${esc(e.child||'')}</b></td><td>${esc(e.client||'')}</td>
+        <td><span class="pill">${esc(e.status||'')}</span></td>
+        <td>${money(e.total||0)}</td><td>${money(e.paid||e.deposit||0)}</td><td>${money(Math.max(0,Number(e.total||0)-Number(e.paid||e.deposit||0)))}</td>
+        <td>${assignments28(e.id).length}</td>
+        <td><button class="secondary small" onclick="openEventV28('${e.id}')">Abrir</button></td>
+      </tr>`).join('')}</tbody>
+    </table></div>`:'<div class="empty">No hay fiestas cargadas.</div>';
+};
+
+window.openEventV28=function(eid){
+  const e=event28(eid);if(!e)return;
+  const ass=assignments28(eid), ex=selectedExtras28(e), st=selectedStock28(e);
+  const paid=Number(e.paid||e.deposit||0), bal=Math.max(0,Number(e.total||0)-paid);
+
+  showModal(`
+    <div class="modal-title">
+      <div><h2>${esc(e.child||'Fiesta')} · ${esc(e.date||'')}</h2><p>${esc(e.client||'')} · ${esc(e.start||'')} a ${esc(e.end||'')}</p></div>
+      <button class="ghost small" onclick="closeModal()">✕ Cerrar</button>
+    </div>
+
+    <div class="grid stats">
+      <div class="card stat"><small>Contratado</small><strong>${money(e.total||0)}</strong></div>
+      <div class="card stat"><small>Cobrado / seña</small><strong>${money(paid)}</strong></div>
+      <div class="card stat"><small>Pendiente</small><strong>${money(bal)}</strong></div>
+      <div class="card stat"><small>Confirmados</small><strong>${confirmedCount(e)}</strong></div>
+    </div>
+
+    <div class="toolbar" style="margin-top:12px">
+      <button class="primary" onclick="openPayment('${e.id}')">+ Registrar cobro</button>
+      <button class="secondary" onclick="openEventFormV28('${e.id}')">Editar reserva</button>
+      <button class="secondary" onclick="openPrintReservationV13?.('${e.id}')">🖨 Imprimir resumen</button>
+      <button class="danger" onclick="confirmDeleteEvent('${e.id}')">🗑 Borrar fiesta</button>
+    </div>
+
+    <div class="grid two" style="margin-top:14px">
+      <div class="card"><h3>Detalle económico</h3>
+        <div>Precio base <b>${money(e.basePrice||0)}</b></div>
+        <div>Adicionales <b>${money(e.extrasTotal||0)}</b></div>
+        <div>Productos de stock <b>${money(e.stockItemsTotal||0)}</b></div>
+        <hr><div>Total reserva <b>${money(e.total||0)}</b></div>
+        <div>Seña / cobrado <b>${money(paid)}</b></div>
+        <div>Saldo <b>${money(bal)}</b></div>
+      </div>
+      <div class="card"><h3>Personal asignado</h3>${ass.length?ass.map(a=>`<div>👤 ${esc(a.staffName||STAFF28().find(s=>s.id===a.staffId)?.name||'Personal')}</div>`).join(''):'<div class="empty">Sin personal asignado.</div>'}</div>
+      <div class="card"><h3>Adicionales</h3>${ex.length?ex.map(x=>`<div>${esc(x.name||'Adicional')} <b>${money(x.price||0)}</b></div>`).join(''):'<div class="empty">Sin adicionales.</div>'}</div>
+      <div class="card"><h3>Productos de stock</h3>${st.length?st.map(x=>`<div>${esc(x.name||'Producto')} · ${Number(x.qty||0)} × ${money(x.unitPrice||0)} = <b>${money(Number(x.qty||0)*Number(x.unitPrice||0))}</b></div>`).join(''):'<div class="empty">Sin productos de stock.</div>'}</div>
+    </div>
+
+    <div class="card" style="margin-top:14px"><h3>Observaciones</h3><p>${esc(e.notes||'Sin observaciones')}</p></div>
+  `);
+};
+
+// Override definitivo de cobro para actualizar paid y saldo correctamente.
+window.openPayment=function(eid){
+  const e=event28(eid);if(!e)return;
+  const balance=Math.max(0,Number(e.total||0)-Number(e.paid||0));
+  showModal(`
+    <div class="modal-title"><div><h2>Registrar cobro</h2><p>Saldo actual ${money(balance)}</p></div><button class="ghost small" onclick="closeModal()">✕</button></div>
+    <form id="payev28">
+      <div class="field"><label>Importe</label><input name="amount" type="number" min="1" max="${balance}" value="${balance}" required></div>
+      <div class="field"><label>Medio de pago</label><select name="method">${['Efectivo','Transferencia','Mercado Pago','Tarjeta','Otro'].map(x=>`<option>${x}</option>`).join('')}</select></div>
+      <div class="form-actions"><button type="button" class="ghost" onclick="closeModal()">Cancelar</button><button class="primary">Registrar cobro</button></div>
+    </form>
+  `);
+  $('#payev28').onsubmit=ev=>{
+    ev.preventDefault();
+    const f=Object.fromEntries(new FormData(ev.target));
+    const amount=Math.min(Number(f.amount||0),Math.max(0,Number(e.total||0)-Number(e.paid||0)));
+    e.paid=Number(e.paid||0)+amount;
+    data.movements.push({
+      id:id(),salonId:SID28(),type:'Ingreso',category:'Cobro de reserva',
+      concept:`Cobro ${e.child||e.client||''}`,amount,method:f.method,eventId:e.id,
+      movementDate:new Date().toISOString().slice(0,10),createdAt:new Date().toISOString()
+    });
+    save();closeModal();toast('Cobro registrado');openEventV28(e.id);
+  };
+};
+
+// Aliases y router final: evita que vuelvan formularios viejos.
+window.openEventForm=window.openEventFormV28;
+window.openEvent=window.openEventV28;
+
+const prevView28=renderSalonView;
+renderSalonView=function(){
+  if(view==='events')return renderEventsV28();
+  return prevView28();
+};
+
+const prevShell28=renderSalonShell;
+renderSalonShell=function(){
+  const r=prevShell28();
+  setTimeout(()=>{
+    $$('button').forEach(b=>{
+      const t=(b.textContent||'').toLowerCase();
+      if(t.includes('nueva fiesta')||t.includes('nueva reserva'))b.onclick=()=>openEventFormV28();
+    });
+  },0);
+  return r;
+};
+
+})();
