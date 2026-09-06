@@ -14117,3 +14117,363 @@ setTimeout(repairPrintButtons49,300);
 setInterval(repairPrintButtons49,1500);
 
 })();
+
+
+// ============================================================
+// V50 - CUENTAS CLARAS + IMPRESIÓN SIN "NO SE ENCONTRÓ RESERVA"
+// ============================================================
+(function(){
+'use strict';
+
+function n50(v){ return Number(v||0); }
+function esc50(v){
+  return String(v??'').replace(/[&<>"']/g,ch=>({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[ch]));
+}
+function money50(v){
+  try{
+    return new Intl.NumberFormat('es-AR',{
+      style:'currency',currency:'ARS',maximumFractionDigits:0
+    }).format(n50(v));
+  }catch(e){
+    return '$ '+n50(v).toLocaleString('es-AR');
+  }
+}
+function norm50(v){
+  return String(v||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+}
+
+// IMPORTANTE: la app usa variables globales léxicas (data/session),
+// no necesariamente window.data / window.session.
+function data50(){
+  try{
+    if(typeof data!=='undefined' && data) return data;
+  }catch(e){}
+  return window.data||{};
+}
+function session50(){
+  try{
+    if(typeof session!=='undefined' && session) return session;
+  }catch(e){}
+  return window.session||{};
+}
+function event50(eid){
+  const d=data50();
+  const list=Array.isArray(d.events)?d.events:[];
+  // Primero busca solo por ID. El botón ya proviene de una fiesta visible.
+  return list.find(e=>String(e.id)===String(eid)) || null;
+}
+function salon50(e){
+  const d=data50();
+  const salons=Array.isArray(d.salons)?d.salons:[];
+  const sid=e?.salonId || session50()?.salonId;
+  try{
+    if(typeof salon==='function'){
+      const s=salon();
+      if(s)return s;
+    }
+  }catch(err){}
+  return salons.find(s=>String(s.id)===String(sid)) || {};
+}
+function isPayment50(m){
+  const t=norm50(m?.type), c=norm50(m?.category), q=norm50(m?.concept);
+  return t==='ingreso' || t==='cobro' ||
+         c.includes('cobro') || c.includes('sena') || c.includes('reserva') ||
+         q.includes('pago') || q.includes('sena');
+}
+function isDeposit50(m){
+  const c=norm50(m?.category), q=norm50(m?.concept), sk=String(m?.sourceKey||'');
+  return c.includes('sena') || q.includes('sena') ||
+         sk.includes(':deposit:') || sk.startsWith('v47:deposit:');
+}
+
+// Devuelve pagos cuya suma coincide EXACTAMENTE con e.paid.
+function payments50(e){
+  const d=data50();
+  const all=(Array.isArray(d.movements)?d.movements:[])
+    .filter(m=>String(m.eventId)===String(e.id) && isPayment50(m));
+
+  const target=n50(e.paid);
+  if(target<=0)return [];
+
+  const out=[];
+  let sum=0;
+  const dep=Math.min(n50(e.deposit),target);
+
+  if(dep>0){
+    const realDep=all.find(isDeposit50);
+    out.push(realDep ? {...realDep,amount:dep} : {
+      id:'display-deposit-'+e.id,
+      eventId:e.id,
+      type:'Ingreso',
+      category:'Seña',
+      concept:'Seña de reserva',
+      method:e.depositMethod||'',
+      movementDate:e.depositDate||'',
+      amount:dep
+    });
+    sum+=dep;
+  }
+
+  // No vuelve a tomar otra seña.
+  const rest=all
+    .filter(m=>!isDeposit50(m))
+    .sort((a,b)=>String(a.createdAt||a.movementDate||'').localeCompare(String(b.createdAt||b.movementDate||'')));
+
+  const seenIds=new Set();
+  for(const m of rest){
+    if(sum>=target)break;
+    const unique=String(m.sourceKey||m.id||[
+      n50(m.amount),norm50(m.method),m.movementDate||'',norm50(m.reference),norm50(m.concept)
+    ].join('|'));
+    if(seenIds.has(unique))continue;
+    seenIds.add(unique);
+
+    const amount=Math.min(n50(m.amount),target-sum);
+    if(amount<=0)continue;
+    out.push({...m,amount});
+    sum+=amount;
+  }
+
+  return out;
+}
+window.payments50=payments50;
+
+// ============================================================
+// IMPRESIÓN CORREGIDA
+// ============================================================
+function openPrint50(title,html,autoPrint=true){
+  const w=window.open('','_blank','width=1000,height=800');
+  if(!w){
+    if(typeof toast==='function') toast('El navegador bloqueó la ventana. Habilitá ventanas emergentes.');
+    else alert('El navegador bloqueó la ventana de impresión.');
+    return;
+  }
+
+  w.document.open();
+  w.document.write(`<!doctype html><html lang="es"><head><meta charset="utf-8">
+  <title>${esc50(title)}</title>
+  <style>
+    *{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;color:#111;margin:0;background:#fff}
+    .actions{max-width:900px;margin:0 auto;padding:12px 0;display:flex;gap:8px}
+    .actions button{padding:10px 14px;border:1px solid #bbb;background:#fff;border-radius:8px;cursor:pointer}
+    .page{max-width:900px;margin:0 auto;padding:28px}
+    .head{display:flex;justify-content:space-between;gap:20px;border-bottom:2px solid #111;padding-bottom:14px;margin-bottom:18px}
+    .head h1{margin:0;font-size:24px}.right{text-align:right}.muted{font-size:12px;color:#666}
+    h2{font-size:17px;margin:20px 0 8px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 28px}
+    .row{display:flex;justify-content:space-between;gap:20px;padding:7px 0;border-bottom:1px solid #ddd}
+    .total{font-weight:bold;font-size:18px;border-top:2px solid #111;margin-top:8px}
+    table{width:100%;border-collapse:collapse}th,td{padding:8px;border-bottom:1px solid #ddd;text-align:left;font-size:13px}
+    .sign{margin-top:50px;display:grid;grid-template-columns:1fr 1fr;gap:60px}.line{border-top:1px solid #111;text-align:center;padding-top:6px;font-size:12px}
+    @media print{.actions{display:none}.page{padding:0}@page{size:A4;margin:14mm}}
+  </style></head><body>
+  <div class="actions"><button onclick="window.print()">🖨 Imprimir / Guardar PDF</button><button onclick="window.close()">Cerrar</button></div>
+  <div class="page">${html}</div></body></html>`);
+  w.document.close();
+
+  if(autoPrint)setTimeout(()=>{try{w.focus();w.print();}catch(e){}},450);
+}
+
+window.printReservationStatus50=function(eid,autoPrint=true){
+  try{
+    const e=event50(eid);
+    if(!e){
+      console.error('V50 reserva no encontrada',eid,data50()?.events);
+      if(typeof toast==='function')toast('No se encontró la reserva seleccionada');
+      else alert('No se encontró la reserva seleccionada');
+      return;
+    }
+
+    const s=salon50(e);
+    const pays=payments50(e);
+    const total=n50(e.total);
+    const paid=n50(e.paid);
+    const deposit=Math.min(n50(e.deposit),paid);
+    const otherPaid=Math.max(0,paid-deposit);
+    const balance=Math.max(0,total-paid);
+
+    const services=[];
+    if(e.includesTableware)services.push('Vajilla');
+    if(e.includesLinen)services.push('Mantelería');
+    if(e.includesCoffee)services.push('Cafetería');
+
+    const html=`
+      <div class="head">
+        <div>
+          <h1>${esc50(s.name||'FiestaControl')}</h1>
+          <div class="muted">${esc50(s.address||'')}</div>
+          <div class="muted">${esc50(s.phone||'')}${s.email?' · '+esc50(s.email):''}</div>
+        </div>
+        <div class="right">
+          <b>ESTADO DE RESERVA</b>
+          <div class="muted">Emitido ${new Date().toLocaleString('es-AR')}</div>
+        </div>
+      </div>
+
+      <h2>Datos del evento</h2>
+      <div class="grid">
+        <div><b>Tipo:</b> ${esc50(e.eventTypeName||'Evento')}</div>
+        <div><b>Fecha:</b> ${esc50(e.date||'')}</div>
+        <div><b>Nombre:</b> ${esc50(e.eventName||e.child||'')}</div>
+        <div><b>Fecha de cumpleaños:</b> ${esc50(e.birthdayDate||'—')}</div>
+        <div><b>Horario:</b> ${esc50(e.start||'')} a ${esc50(e.end||'')}</div>
+        <div><b>Duración:</b> ${n50(e.durationHours)} h${n50(e.extraHours)>0?' + '+n50(e.extraHours)+' h extra':''}</div>
+        <div><b>Adultos:</b> ${n50(e.adults)}</div>
+        <div><b>Niños:</b> ${n50(e.children)}</div>
+        <div><b>Responsable:</b> ${esc50(e.client||'')}</div>
+        <div><b>Estado:</b> ${esc50(e.status||'')}</div>
+      </div>
+
+      <h2>Incluido</h2>
+      <div class="row"><span>Personal base</span><b>${n50(e.includedWaiters)} mozo(s) · ${n50(e.includedKitchen)} cocina · ${n50(e.includedAnimators)} animador(es)</b></div>
+      <div class="row"><span>Servicios</span><b>${services.length?services.join(' · '):'—'}</b></div>
+
+      <h2>Estado económico</h2>
+      <div class="row"><span>Total de la fiesta</span><b>${money50(total)}</b></div>
+      <div class="row"><span>Seña (incluida en el total pagado)</span><b>${money50(deposit)}</b></div>
+      <div class="row"><span>Otros pagos posteriores</span><b>${money50(otherPaid)}</b></div>
+      <div class="row total"><span>Total pagado</span><b>${money50(paid)}</b></div>
+      <div class="row total"><span>Saldo pendiente</span><b>${money50(balance)}</b></div>
+
+      <h2>Pagos registrados</h2>
+      ${pays.length?`
+        <table><thead><tr><th>Fecha</th><th>Concepto</th><th>Medio</th><th>Importe</th></tr></thead><tbody>
+        ${pays.map(m=>`<tr><td>${esc50(m.movementDate||'')}</td><td>${esc50(m.concept||'Pago')}</td><td>${esc50(m.method||'')}</td><td>${money50(m.amount)}</td></tr>`).join('')}
+        </tbody></table>
+        <div style="text-align:right;margin-top:10px"><b>Suma de pagos registrados: ${money50(pays.reduce((a,m)=>a+n50(m.amount),0))}</b></div>
+      `:'<div class="muted">No hay pagos registrados.</div>'}
+
+      <div class="sign"><div class="line">Firma del salón</div><div class="line">Firma del cliente</div></div>
+    `;
+
+    openPrint50(`Estado reserva - ${e.eventName||e.child||'Evento'}`,html,autoPrint);
+  }catch(err){
+    console.error('V50 imprimir estado',err);
+    alert('No se pudo imprimir la reserva: '+err.message);
+  }
+};
+
+// Todos los nombres antiguos apuntan a V50.
+window.printReservationStatus=window.printReservationStatus50;
+window.printReservationStatus46=window.printReservationStatus50;
+window.printReservationStatus48=window.printReservationStatus50;
+window.printReservationStatus49=window.printReservationStatus50;
+
+// ============================================================
+// ACLARA LAS CUENTAS EN EL DETALLE DE FIESTA
+// ============================================================
+function repairEconomicCard50(eid){
+  const e=event50(eid);
+  const modal=document.querySelector('#modal-body');
+  if(!e||!modal)return;
+
+  const paid=n50(e.paid);
+  const dep=Math.min(n50(e.deposit),paid);
+  const other=Math.max(0,paid-dep);
+  const balance=Math.max(0,n50(e.total)-paid);
+
+  // Busca la tarjeta "Composición del total" y reemplaza solo su bloque económico.
+  const cards=[...modal.querySelectorAll('.card')];
+  const card=cards.find(c=>String(c.textContent||'').includes('Composición del total'));
+  if(card){
+    const divs=[...card.querySelectorAll(':scope > div')];
+    divs.forEach(d=>{
+      const t=String(d.textContent||'').trim();
+      if(t.startsWith('Seña ') || t.startsWith('Total pagado ') || t.startsWith('Saldo restante ') ||
+         t.startsWith('Seña (incluida') || t.startsWith('Otros pagos posteriores')){
+        d.remove();
+      }
+    });
+
+    const block=document.createElement('div');
+    block.id='economic-v50';
+    block.style.marginTop='8px';
+    block.innerHTML=`
+      <div>Seña <small class="muted">(incluida en total pagado)</small> <b>${money50(dep)}</b></div>
+      <div>Otros pagos posteriores <b>${money50(other)}</b></div>
+      <div>Total pagado <b>${money50(paid)}</b></div>
+      <div>Saldo restante <b>${money50(balance)}</b></div>
+    `;
+    card.appendChild(block);
+  }
+
+  // Reemplaza tabla antigua de movimientos por pagos consistentes + gastos.
+  const movementCard=cards.find(c=>String(c.textContent||'').includes('Movimientos de esta fiesta'));
+  if(movementCard){
+    const d=data50();
+    const pays=payments50(e);
+    const expenses=(d.movements||[]).filter(m=>
+      String(m.eventId)===String(e.id) && norm50(m.type)==='gasto'
+    );
+    const rows=[...pays,...expenses];
+
+    movementCard.innerHTML=`
+      <h3>Movimientos de esta fiesta</h3>
+      ${rows.length?`
+        <div class="table-wrap"><table class="table">
+          <thead><tr><th>Fecha</th><th>Tipo</th><th>Concepto</th><th>Importe</th><th>Medio</th></tr></thead>
+          <tbody>${rows.map(m=>`
+            <tr>
+              <td>${esc50(m.movementDate||'')}</td>
+              <td>${esc50(m.type||'')}</td>
+              <td>${esc50(m.concept||'')}</td>
+              <td>${money50(m.amount)}</td>
+              <td>${esc50(m.method||'')}</td>
+            </tr>`).join('')}</tbody>
+        </table></div>
+        <div style="margin-top:10px;text-align:right">
+          <b>Pagos aplicados: ${money50(paid)}</b>
+        </div>
+      `:'<div class="empty">Sin movimientos.</div>'}
+    `;
+  }
+}
+
+// Wrapper final de Fiesta.
+const oldOpen50=window.openEventV48 || window.openEvent;
+window.openEventV50=function(eid){
+  oldOpen50(eid);
+  setTimeout(()=>{
+    repairEconomicCard50(eid);
+
+    const modal=document.querySelector('#modal-body');
+    if(!modal)return;
+
+    // Repara TODOS los botones de imprimir dentro de la fiesta.
+    modal.querySelectorAll('button').forEach(btn=>{
+      if(norm50(btn.textContent).includes('imprimir estado')){
+        btn.onclick=(ev)=>{
+          ev?.preventDefault?.();
+          window.printReservationStatus50(eid,true);
+        };
+        btn.setAttribute('onclick',`printReservationStatus50('${String(eid).replace(/'/g,"\\'")}',true)`);
+      }
+    });
+  },150);
+};
+window.openEvent=window.openEventV50;
+
+// ============================================================
+// REPARA BOTONES EN INICIO / RESERVAS / MOVIMIENTOS
+// ============================================================
+function repairButtons50(){
+  document.querySelectorAll('button').forEach(btn=>{
+    if(!norm50(btn.textContent).includes('imprimir estado'))return;
+
+    const raw=btn.getAttribute('onclick')||'';
+    const matches=[...raw.matchAll(/['"]([^'"]+)['"]/g)];
+    const eid=matches.length?matches[0][1]:null;
+    if(!eid)return;
+
+    btn.onclick=(ev)=>{
+      ev?.preventDefault?.();
+      window.printReservationStatus50(eid,true);
+    };
+    btn.setAttribute('onclick',`printReservationStatus50('${eid.replace(/'/g,"\\'")}',true)`);
+  });
+}
+setTimeout(repairButtons50,200);
+setInterval(repairButtons50,1200);
+
+})();
