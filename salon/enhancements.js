@@ -9310,3 +9310,313 @@ const obs32=new MutationObserver(()=>renameFinanceNav32());
 obs32.observe(document.documentElement,{childList:true,subtree:true});
 
 })();
+
+
+// ============================================================
+// V33 - INICIO SIMPLE + DETALLE POR FIESTA + FINANZAS TOTALES
+// ============================================================
+(function(){
+'use strict';
+
+data.movements=data.movements||[];
+data.assignments=data.assignments||[];
+
+const SID33=()=>session?.salonId;
+const EV33=()=> (data.events||[]).filter(e=>e.salonId===SID33() && e.status!=='Cancelada');
+const MOV33=()=> (data.movements||[]).filter(m=>m.salonId===SID33());
+const ASS33=eid=> (data.assignments||[]).filter(a=>a.eventId===eid);
+
+function n33(v){ return Number(v||0); }
+
+function figures33(e){
+  const base=n33(e.basePrice ?? e.baseTotal ?? 0);
+  const extras=n33(e.extrasTotal);
+  const stock=n33(e.stockItemsTotal);
+  const extraStaff=n33(e.staffClientChargeTotal);
+
+  // Regla: moza/personal normal NO suma al cliente.
+  // Solo personal adicional cobrado suma al total.
+  const total=base+extras+stock+extraStaff;
+
+  const paid=n33(e.paid ?? e.deposit ?? 0);
+  const deposit=n33(e.deposit||0);
+  const balance=Math.max(0,total-paid);
+
+  const staffExpense=n33(
+    e.staffExpenseTotal ??
+    ASS33(e.id).reduce((s,a)=>s+n33(a.amount),0)
+  );
+
+  return {base,extras,stock,extraStaff,total,paid,deposit,balance,staffExpense};
+}
+
+// INICIO: SOLO LISTA DE FIESTAS
+window.renderDashboardV33=function(){
+  const events=EV33().slice().sort((a,b)=>{
+    const da=String(a.date||'')+String(a.start||'');
+    const db=String(b.date||'')+String(b.start||'');
+    return da.localeCompare(db);
+  });
+
+  setTitle('Inicio','Fiestas creadas');
+
+  $('#content').innerHTML=events.length ? `
+    <div class="card">
+      <div class="section-title">
+        <div>
+          <h3>Fiestas</h3>
+          <small class="muted">Seleccioná una fiesta para ver pagos, movimientos y todo su detalle.</small>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Fecha</th>
+              <th>Horario</th>
+              <th>Cumpleañero/a</th>
+              <th>Responsable</th>
+              <th>Estado</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${events.map(e=>`
+              <tr>
+                <td>${esc(e.date||'')}</td>
+                <td>${esc(e.start||'')} - ${esc(e.end||'')}</td>
+                <td><b>${esc(e.child||'')}</b></td>
+                <td>${esc(e.client||'')}</td>
+                <td><span class="pill">${esc(e.status||'')}</span></td>
+                <td><button class="primary small" onclick="openEventV33('${e.id}')">Ver fiesta</button></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  ` : `<div class="empty">No hay fiestas creadas.</div>`;
+};
+
+// DETALLE DE UNA FIESTA
+window.openEventV33=function(eid){
+  const e=(data.events||[]).find(x=>x.id===eid&&x.salonId===SID33());
+  if(!e)return;
+
+  const f=figures33(e);
+  const ass=ASS33(eid);
+  const extras=Array.isArray(e.extras)?e.extras:[];
+  const stock=Array.isArray(e.stockItems)?e.stockItems:[];
+  const mov=MOV33().filter(m=>m.eventId===eid);
+
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>${esc(e.child||'Fiesta')} · ${esc(e.date||'')}</h2>
+        <p>${esc(e.client||'')} · ${esc(e.start||'')} a ${esc(e.end||'')}</p>
+      </div>
+      <button class="ghost small" onclick="closeModal()">✕ Cerrar</button>
+    </div>
+
+    <div class="grid stats">
+      <div class="card stat">
+        <small>Total de la fiesta</small>
+        <strong>${money(f.total)}</strong>
+      </div>
+
+      <div class="card stat">
+        <small>Seña</small>
+        <strong>${money(f.deposit)}</strong>
+      </div>
+
+      <div class="card stat">
+        <small>Total pagado</small>
+        <strong>${money(f.paid)}</strong>
+      </div>
+
+      <div class="card stat">
+        <small>Saldo pendiente</small>
+        <strong>${money(f.balance)}</strong>
+      </div>
+    </div>
+
+    <div class="toolbar" style="margin-top:12px">
+      ${f.balance>0?`<button class="primary" onclick="openPaymentV30('${e.id}')">+ Registrar pago</button>`:''}
+      <button class="secondary" onclick="openEventFormV30('${e.id}')">Editar reserva</button>
+      <button class="danger" onclick="confirmDeleteEvent('${e.id}')">🗑 Borrar fiesta</button>
+    </div>
+
+    <div class="grid two" style="margin-top:14px">
+      <div class="card">
+        <h3>Composición del total</h3>
+        <div>Valor base de la fiesta <b>${money(f.base)}</b></div>
+        <div>Adicionales <b>${money(f.extras)}</b></div>
+        <div>Productos de stock <b>${money(f.stock)}</b></div>
+        <div>Moza/personal adicional cobrado <b>${money(f.extraStaff)}</b></div>
+        <hr>
+        <div>Total fiesta <b>${money(f.total)}</b></div>
+        <div>Seña <b>${money(f.deposit)}</b></div>
+        <div>Total pagado <b>${money(f.paid)}</b></div>
+        <div>Saldo restante <b>${money(f.balance)}</b></div>
+      </div>
+
+      <div class="card">
+        <h3>Personal asignado</h3>
+        <small class="muted">El personal normal no suma al total del cliente. Es gasto del salón.</small>
+        ${ass.length?ass.map(a=>`
+          <div style="margin-top:8px">
+            👤 ${esc(a.staffName||'Personal')}
+            · costo salón <b>${money(a.amount||0)}</b>
+            ${a.chargeToClient?` · adicional cobrado al cliente <b>${money(a.clientCharge||0)}</b>`:''}
+          </div>
+        `).join(''):'<div class="empty">Sin personal asignado.</div>'}
+      </div>
+
+      <div class="card">
+        <h3>Adicionales</h3>
+        ${extras.length?extras.map(x=>`
+          <div>${esc(x.name||'Adicional')} <b>${money(x.price||0)}</b></div>
+        `).join(''):'<div class="empty">Sin adicionales.</div>'}
+      </div>
+
+      <div class="card">
+        <h3>Productos de stock</h3>
+        ${stock.length?stock.map(x=>`
+          <div>${esc(x.name||'Producto')} · ${n33(x.qty)} × ${money(x.unitPrice||0)}
+          = <b>${money(n33(x.qty)*n33(x.unitPrice))}</b></div>
+        `).join(''):'<div class="empty">Sin productos.</div>'}
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h3>Movimientos de esta fiesta</h3>
+      ${mov.length?`
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th>Fecha</th><th>Tipo</th><th>Concepto</th><th>Importe</th><th>Medio</th></tr></thead>
+          <tbody>
+            ${mov.slice().reverse().map(m=>`
+              <tr>
+                <td>${esc(m.movementDate||String(m.createdAt||'').slice(0,10))}</td>
+                <td>${esc(m.type||'')}</td>
+                <td>${esc(m.concept||'')}</td>
+                <td>${money(m.amount||0)}</td>
+                <td>${esc(m.method||'')}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>`:'<div class="empty">Sin movimientos.</div>'}
+    </div>
+  `);
+};
+
+// FINANZAS: TOTALES DE TODAS LAS FIESTAS
+window.renderFinanceV33=function(){
+  const events=EV33();
+  const figures=events.map(e=>({e,f:figures33(e)}));
+
+  const totalBase=figures.reduce((s,x)=>s+x.f.base,0);
+  const totalExtras=figures.reduce((s,x)=>s+x.f.extras,0);
+  const totalStock=figures.reduce((s,x)=>s+x.f.stock,0);
+  const totalExtraStaff=figures.reduce((s,x)=>s+x.f.extraStaff,0);
+  const totalContracted=figures.reduce((s,x)=>s+x.f.total,0);
+  const totalPaid=figures.reduce((s,x)=>s+x.f.paid,0);
+  const totalPending=figures.reduce((s,x)=>s+x.f.balance,0);
+
+  const mov=MOV33();
+  const totalExpenses=mov
+    .filter(m=>m.type==='Gasto')
+    .reduce((s,m)=>s+n33(m.amount),0);
+
+  const totalIncome=mov
+    .filter(m=>m.type==='Ingreso'||m.type==='Cobro')
+    .reduce((s,m)=>s+n33(m.amount),0);
+
+  setTitle('Finanzas','Totales de todas las fiestas');
+
+  $('#content').innerHTML=`
+    <div class="grid stats">
+      <div class="card stat"><small>Valor base de fiestas</small><strong>${money(totalBase)}</strong></div>
+      <div class="card stat"><small>Adicionales</small><strong>${money(totalExtras)}</strong></div>
+      <div class="card stat"><small>Productos de stock</small><strong>${money(totalStock)}</strong></div>
+      <div class="card stat"><small>Moza/personal adicional cobrado</small><strong>${money(totalExtraStaff)}</strong></div>
+      <div class="card stat"><small>Total contratado</small><strong>${money(totalContracted)}</strong></div>
+      <div class="card stat"><small>Total ingresado</small><strong>${money(totalPaid)}</strong></div>
+      <div class="card stat"><small>Total pendiente de cobrar</small><strong>${money(totalPending)}</strong></div>
+      <div class="card stat"><small>Total egresos</small><strong>${money(totalExpenses)}</strong></div>
+      <div class="card stat"><small>Resultado de caja</small><strong>${money(totalIncome-totalExpenses)}</strong></div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="section-title">
+        <div>
+          <h3>Resumen por fiesta</h3>
+          <small class="muted">Totales de todas las reservas.</small>
+        </div>
+      </div>
+
+      ${figures.length?`
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Fiesta</th>
+              <th>Fecha</th>
+              <th>Total</th>
+              <th>Pagado</th>
+              <th>Pendiente</th>
+              <th>Gasto personal</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${figures.map(x=>`
+              <tr>
+                <td><b>${esc(x.e.child||x.e.client||'Fiesta')}</b></td>
+                <td>${esc(x.e.date||'')}</td>
+                <td>${money(x.f.total)}</td>
+                <td>${money(x.f.paid)}</td>
+                <td>${money(x.f.balance)}</td>
+                <td>${money(x.f.staffExpense)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>`:'<div class="empty">No hay fiestas.</div>'}
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <h3>Movimientos generales</h3>
+      ${mov.length?`
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th>Fecha</th><th>Tipo</th><th>Concepto</th><th>Importe</th><th>Medio</th></tr></thead>
+          <tbody>
+            ${mov.slice().reverse().map(m=>`
+              <tr>
+                <td>${esc(m.movementDate||String(m.createdAt||'').slice(0,10))}</td>
+                <td>${esc(m.type||'')}</td>
+                <td>${esc(m.concept||'')}</td>
+                <td>${money(m.amount||0)}</td>
+                <td>${esc(m.method||'')}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>`:'<div class="empty">Sin movimientos contables.</div>'}
+    </div>
+  `;
+};
+
+// Rutas finales
+window.openEvent=window.openEventV33;
+
+const route33=renderSalonView;
+renderSalonView=function(){
+  if(view==='dashboard')return renderDashboardV33();
+  if(view==='finance')return renderFinanceV33();
+  return route33();
+};
+
+})();
