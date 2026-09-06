@@ -13494,3 +13494,349 @@ renderSalonView=function(){
 };
 
 })();
+
+
+// ============================================================
+// V48 - MOVIMIENTOS CONSISTENTES + IMPRIMIR ESTADO EN 3 LUGARES
+// Inicio / Reservas / Fiesta
+// ============================================================
+(function(){
+'use strict';
+
+const SID48=()=>session?.salonId;
+const EV48=()=> (data.events||[]).filter(e=>e.salonId===SID48() && e.status!=='Cancelada');
+const E48=id=>(data.events||[]).find(e=>e.id===id&&e.salonId===SID48());
+const N48=v=>Number(v||0);
+const norm48=v=>String(v||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+
+function isPayment48(m){
+  if(!m)return false;
+  const t=norm48(m.type), c=norm48(m.category), q=norm48(m.concept);
+  return t==='ingreso' || t==='cobro' ||
+         c.includes('cobro') || c.includes('sena') || c.includes('reserva') ||
+         q.includes('pago') || q.includes('sena');
+}
+function isDeposit48(m){
+  if(!m)return false;
+  const c=norm48(m.category), q=norm48(m.concept), sk=String(m.sourceKey||'');
+  return c.includes('sena') || q.includes('sena') ||
+         sk.includes(':deposit:') || sk.startsWith('v47:deposit:');
+}
+
+// Devuelve únicamente pagos aplicados a la reserva, respetando e.paid.
+// Evita que movimientos heredados duplicados inflen la vista.
+function visiblePayments48(e){
+  if(!e)return [];
+  const all=(data.movements||[])
+    .filter(m=>m.salonId===SID48() && m.eventId===e.id && isPayment48(m));
+
+  const target=N48(e.paid);
+  if(target<=0)return [];
+
+  const out=[];
+  let sum=0;
+  const deposit=N48(e.deposit);
+
+  // Una sola seña visible.
+  if(deposit>0){
+    const dep=all.find(isDeposit48);
+    out.push(dep || {
+      id:'display-deposit-'+e.id,
+      salonId:SID48(),eventId:e.id,
+      type:'Ingreso',category:'Seña',
+      concept:`Seña de reserva ${e.eventName||e.child||''}`,
+      amount:deposit,
+      method:e.depositMethod||'',
+      movementDate:e.depositDate||''
+    });
+    sum+=deposit;
+  }
+
+  // Prioriza pagos nuevos V47 y luego cobros que NO sean otra seña.
+  const manual=all
+    .filter(m=>!isDeposit48(m))
+    .sort((a,b)=>{
+      const av=String(a.sourceKey||'').startsWith('v47:payment:')?0:1;
+      const bv=String(b.sourceKey||'').startsWith('v47:payment:')?0:1;
+      if(av!==bv)return av-bv;
+      return String(a.createdAt||a.movementDate||'').localeCompare(String(b.createdAt||b.movementDate||''));
+    });
+
+  const seen=new Set();
+  for(const m of manual){
+    if(sum>=target)break;
+    const key=[
+      N48(m.amount),
+      norm48(m.method),
+      String(m.movementDate||''),
+      norm48(m.reference||''),
+      norm48(m.concept||'')
+    ].join('|');
+    if(seen.has(key))continue;
+    seen.add(key);
+
+    const remaining=target-sum;
+    const amount=Math.min(N48(m.amount),remaining);
+    if(amount<=0)continue;
+    out.push({...m,amount});
+    sum+=amount;
+  }
+
+  return out;
+}
+window.visiblePayments48=visiblePayments48;
+
+// ------------------------------------------------------------
+// INICIO: agrega Imprimir estado en cada fiesta.
+// ------------------------------------------------------------
+window.renderDashboardV48=function(){
+  const events=EV48().slice().sort((a,b)=>{
+    const da=String(a.date||'')+String(a.start||'');
+    const db=String(b.date||'')+String(b.start||'');
+    return da.localeCompare(db);
+  });
+
+  setTitle('Inicio','Fiestas creadas');
+
+  $('#content').innerHTML=events.length ? `
+    <div class="card">
+      <div class="section-title">
+        <div>
+          <h3>Fiestas</h3>
+          <small class="muted">Acceso directo a movimientos, impresión y edición.</small>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th>Fecha</th><th>Horario</th><th>Nombre</th><th>Responsable</th><th>Estado</th><th>Acciones</th></tr></thead>
+          <tbody>
+            ${events.map(e=>`
+              <tr>
+                <td>${esc(e.date||'')}</td>
+                <td>${esc(e.start||'')} - ${esc(e.end||'')}</td>
+                <td><b>${esc(e.eventName||e.child||'')}</b></td>
+                <td>${esc(e.client||'')}</td>
+                <td><span class="pill">${esc(e.status||'')}</span></td>
+                <td style="display:flex;gap:6px;flex-wrap:wrap">
+                  <button class="primary small" onclick="openMovementsV48('${e.id}')">💰 Movimientos</button>
+                  <button class="secondary small" onclick="printReservationStatus46('${e.id}',true)">🖨 Imprimir estado</button>
+                  <button class="secondary small" onclick="openEventFormV45('${e.id}')">Editar</button>
+                </td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>` : `<div class="empty">No hay fiestas creadas.</div>`;
+};
+
+// ------------------------------------------------------------
+// RESERVAS / FIESTAS: agrega Imprimir estado.
+// ------------------------------------------------------------
+window.renderEventsV48=function(){
+  const a=EV48().slice().sort((x,y)=>String(x.date||'').localeCompare(String(y.date||'')));
+  setTitle('Fiestas','Reservas, pagos y saldos');
+
+  $('#content').innerHTML=a.length?`
+    <div class="table-wrap"><table class="table">
+      <thead><tr><th>Fecha</th><th>Evento</th><th>Cliente</th><th>Estado</th><th>Total</th><th>Pagado</th><th>Saldo</th><th>Acciones</th></tr></thead>
+      <tbody>${a.map(e=>`
+        <tr>
+          <td>${esc(e.date||'')}</td>
+          <td><b>${esc(e.eventName||e.child||'')}</b><small style="display:block">${esc(e.eventTypeName||'')}</small></td>
+          <td>${esc(e.client||'')}</td>
+          <td><span class="pill">${esc(e.status||'')}</span></td>
+          <td><b>${money(e.total||0)}</b></td>
+          <td>${money(e.paid||0)}</td>
+          <td>${money(Math.max(0,N48(e.total)-N48(e.paid)))}</td>
+          <td style="display:flex;gap:6px;flex-wrap:wrap">
+            <button class="primary small" onclick="openEvent('${e.id}')">Abrir fiesta</button>
+            <button class="secondary small" onclick="printReservationStatus46('${e.id}',true)">🖨 Imprimir estado</button>
+          </td>
+        </tr>`).join('')}
+      </tbody>
+    </table></div>`:'<div class="empty">No hay fiestas.</div>';
+};
+
+// ------------------------------------------------------------
+// MOVIMIENTOS: pagos visibles = exactamente lo aplicado en e.paid.
+// Los gastos siguen mostrando todos los egresos reales.
+// ------------------------------------------------------------
+window.openMovementsV48=function(eid){
+  const e=E48(eid); if(!e)return;
+
+  const all=(data.movements||[]).filter(m=>m.salonId===SID48()&&m.eventId===eid);
+  const payments=visiblePayments48(e);
+  const expenses=all.filter(m=>norm48(m.type)==='gasto');
+  const other=all.filter(m=>!isPayment48(m)&&norm48(m.type)!=='gasto');
+
+  const shown=[...payments,...expenses,...other].sort((a,b)=>
+    String(a.movementDate||a.createdAt||'').localeCompare(String(b.movementDate||b.createdAt||''))
+  );
+
+  const paid=N48(e.paid);
+  const total=N48(e.total);
+  const balance=Math.max(0,total-paid);
+  const egresos=expenses.reduce((s,m)=>s+N48(m.amount),0);
+
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>Movimientos · ${esc(e.eventName||e.child||'Fiesta')}</h2>
+        <p>${esc(e.date||'')} · ${esc(e.start||'')} a ${esc(e.end||'')} · ${esc(e.client||'')}</p>
+      </div>
+      <button class="ghost small" onclick="closeModal()">✕ Cerrar</button>
+    </div>
+
+    <div class="grid stats">
+      <div class="card stat"><small>Total de la fiesta</small><strong>${money(total)}</strong></div>
+      <div class="card stat"><small>Total pagado</small><strong>${money(paid)}</strong></div>
+      <div class="card stat"><small>Saldo pendiente</small><strong>${money(balance)}</strong></div>
+      <div class="card stat"><small>Gastos del salón</small><strong>${money(egresos)}</strong></div>
+    </div>
+
+    <div class="toolbar" style="margin-top:12px">
+      ${balance>0?`<button class="primary" onclick="openPayment('${e.id}')">+ Registrar pago</button>`:''}
+      <button class="secondary" onclick="printReservationStatus46('${e.id}',true)">🖨 Imprimir estado</button>
+      <button class="secondary" onclick="openEventFormV45('${e.id}')">Editar reserva</button>
+      <button class="ghost" onclick="openEvent('${e.id}')">Ver fiesta</button>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <div class="section-title">
+        <div>
+          <h3>Movimientos de esta reserva</h3>
+          <small class="muted">Los pagos mostrados coinciden con el total pagado aplicado a la fiesta.</small>
+        </div>
+      </div>
+
+      ${shown.length?`
+        <div class="table-wrap"><table class="table">
+          <thead><tr><th>Fecha</th><th>Tipo</th><th>Categoría</th><th>Concepto</th><th>Importe</th><th>Medio</th></tr></thead>
+          <tbody>${shown.map(m=>`
+            <tr>
+              <td>${esc(m.movementDate||'')}</td>
+              <td>${esc(m.type||'')}</td>
+              <td>${esc(m.category||'')}</td>
+              <td>${esc(m.concept||'')}</td>
+              <td>${money(m.amount||0)}</td>
+              <td>${esc(m.method||'')}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table></div>
+        <div style="margin-top:10px;text-align:right"><b>Pagos aplicados a la reserva: ${money(paid)}</b></div>
+      `:'<div class="empty">Sin movimientos.</div>'}
+    </div>
+  `);
+};
+window.openMovementsV34=window.openMovementsV48;
+
+// ------------------------------------------------------------
+// FIESTA: garantiza botón Imprimir estado en el detalle.
+// ------------------------------------------------------------
+const oldOpenEvent48=window.openEventV47 || window.openEvent;
+window.openEventV48=function(eid){
+  oldOpenEvent48(eid);
+  setTimeout(()=>{
+    const modal=document.querySelector('#modal-body');
+    if(!modal)return;
+
+    let toolbar=modal.querySelector('.toolbar');
+    if(!toolbar){
+      toolbar=document.createElement('div');
+      toolbar.className='toolbar';
+      toolbar.style.marginTop='12px';
+      const title=modal.querySelector('.modal-title');
+      if(title)title.insertAdjacentElement('afterend',toolbar);
+    }
+
+    if(!modal.querySelector('#print-status48')){
+      const b=document.createElement('button');
+      b.id='print-status48';
+      b.className='secondary';
+      b.innerHTML='🖨 Imprimir estado';
+      b.onclick=()=>printReservationStatus46(eid,true);
+      toolbar.appendChild(b);
+    }
+  },100);
+};
+window.openEvent=window.openEventV48;
+
+// ------------------------------------------------------------
+// Impresión: lista de pagos consistente con e.paid.
+// ------------------------------------------------------------
+window.paymentMovements46=function(eid){
+  const e=E48(eid);
+  return e?visiblePayments48(e):[];
+};
+
+// Reemplaza impresión de estado para usar ledger visual correcto.
+window.printReservationStatus48=function(eid,autoPrint=false){
+  const e=E48(eid); if(!e)return;
+  const s=salonInfo46();
+  const pays=visiblePayments48(e);
+  const paid=N48(e.paid);
+  const total=N48(e.total);
+  const balance=Math.max(0,total-paid);
+
+  const included=[
+    e.includesTableware?'Vajilla':'',
+    e.includesLinen?'Mantelería':'',
+    e.includesCoffee?'Cafetería':''
+  ].filter(Boolean);
+
+  const body=`
+    <div class="head">
+      <div>
+        <h1>${esc46(s.name)}</h1>
+        <div class="muted">${esc46(s.address)}</div>
+        <div class="muted">${esc46(s.phone)} ${s.email?'· '+esc46(s.email):''}</div>
+      </div>
+      <div class="right"><b>ESTADO DE RESERVA</b><div class="muted">Emitido ${new Date().toLocaleString('es-AR')}</div></div>
+    </div>
+
+    <h2>Datos del evento</h2>
+    <div class="grid">
+      <div><b>Tipo:</b> ${esc46(e.eventTypeName||'Evento')}</div>
+      <div><b>Fecha:</b> ${esc46(e.date||'')}</div>
+      <div><b>Nombre:</b> ${esc46(e.eventName||e.child||'')}</div>
+      <div><b>Fecha de cumpleaños:</b> ${esc46(e.birthdayDate||'—')}</div>
+      <div><b>Horario:</b> ${esc46(e.start||'')} a ${esc46(e.end||'')}</div>
+      <div><b>Duración:</b> ${N48(e.durationHours)} h${N48(e.extraHours)>0?' + '+N48(e.extraHours)+' h extra':''}</div>
+      <div><b>Adultos:</b> ${N48(e.adults)}</div>
+      <div><b>Niños:</b> ${N48(e.children)}</div>
+      <div><b>Responsable:</b> ${esc46(e.client||'')}</div>
+      <div><b>Estado:</b> ${esc46(e.status||'')}</div>
+    </div>
+
+    <h2>Incluido</h2>
+    <div class="row"><span>Personal base</span><b>${N48(e.includedWaiters)} mozo(s) · ${N48(e.includedKitchen)} cocina · ${N48(e.includedAnimators)} animador(es)</b></div>
+    <div class="row"><span>Servicios</span><b>${included.length?included.join(' · '):'—'}</b></div>
+
+    <h2>Estado económico</h2>
+    <div class="row"><span>Total de la fiesta</span><b>${money46(total)}</b></div>
+    <div class="row"><span>Total pagado</span><b>${money46(paid)}</b></div>
+    <div class="row total"><span>Saldo pendiente</span><b>${money46(balance)}</b></div>
+
+    <h2>Pagos registrados</h2>
+    ${pays.length?`<table><thead><tr><th>Fecha</th><th>Concepto</th><th>Medio</th><th>Importe</th></tr></thead><tbody>
+      ${pays.map(m=>`<tr><td>${esc46(m.movementDate||'')}</td><td>${esc46(m.concept||'Pago')}</td><td>${esc46(m.method||'')}</td><td>${money46(m.amount)}</td></tr>`).join('')}
+    </tbody></table>`:'<div class="muted">No hay pagos registrados.</div>'}
+
+    <div style="margin-top:10px;text-align:right"><b>Total pagos mostrados: ${money46(paid)}</b></div>
+    <div class="sign"><div class="line">Firma del salón</div><div class="line">Firma del cliente</div></div>
+  `;
+  openPrintable46(`Estado reserva - ${e.eventName||e.child||'Evento'}`,body,autoPrint);
+};
+window.printReservationStatus46=window.printReservationStatus48;
+
+// ------------------------------------------------------------
+// Rutas finales
+// ------------------------------------------------------------
+const route48=renderSalonView;
+renderSalonView=function(){
+  if(view==='dashboard')return renderDashboardV48();
+  if(view==='events')return renderEventsV48();
+  return route48();
+};
+
+})();
