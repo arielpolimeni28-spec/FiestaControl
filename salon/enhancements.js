@@ -19525,3 +19525,222 @@ setTimeout(bindProviderMenu62,250);
 setInterval(bindProviderMenu62,1200);
 
 })();
+
+
+// ============================================================
+// V63 - MIS PRODUCTOS: RECUPERAR CATÁLOGO ANTERIOR + CARGAR MÁS
+// ============================================================
+(function(){
+'use strict';
+
+data.providerProducts=data.providerProducts||[];
+
+const norm63=v=>String(v||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+const esc63=v=>{
+  try{return esc(v)}catch(e){
+    return String(v??'').replace(/[&<>"']/g,ch=>({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[ch]));
+  }
+};
+const money63=v=>{
+  try{return money(v)}catch(e){return '$ '+Number(v||0).toLocaleString('es-AR')}
+};
+const sess63=()=>{
+  try{return session||{}}catch(e){return window.session||{}}
+};
+
+function provider63(){
+  const s=sess63();
+  const vals=[
+    s.providerId,s.supplierId,s.marketSupplierId,s.userId,s.id,
+    s.email,s.userEmail,s.username,s.userName,s.name,s.businessName
+  ].filter(Boolean).map(norm63);
+
+  return (data.marketSuppliers||[]).find(p=>{
+    const keys=[
+      p.id,p.userId,p.providerId,p.supplierId,p.email,
+      p.username,p.userName,p.name,p.businessName,p.fantasyName
+    ].filter(Boolean).map(norm63);
+    return keys.some(k=>vals.includes(k));
+  })||null;
+}
+
+function providerNames63(p){
+  return [
+    p?.fantasyName,p?.businessName,p?.name,p?.providerName,
+    p?.username,p?.userName,p?.email
+  ].filter(Boolean).map(norm63);
+}
+
+function belongs63(prod,p){
+  if(!prod||!p)return false;
+  const names=providerNames63(p);
+  return String(prod.providerId)===String(p.id) ||
+         String(prod.providerUserId)===String(p.userId||p.id) ||
+         (!!prod.providerEmail && !!p.email && norm63(prod.providerEmail)===norm63(p.email)) ||
+         (!!prod.providerName && names.includes(norm63(prod.providerName)));
+}
+
+// Migra productos que antes se veían en Comunidad al proveedor actual.
+// Esto evita perder Coca Cola / Seven Up u otros productos ya cargados.
+function migrateLegacyCommunityProducts63(){
+  const p=provider63();
+  if(!p)return false;
+
+  let changed=false;
+  const names=providerNames63(p);
+
+  (data.providerProducts||[]).forEach(prod=>{
+    const canRelink =
+      belongs63(prod,p) ||
+      (
+        !prod.providerId &&
+        (
+          !prod.providerName ||
+          names.includes(norm63(prod.providerName))
+        )
+      );
+
+    if(canRelink){
+      if(String(prod.providerId)!==String(p.id)){
+        prod.providerId=p.id;
+        changed=true;
+      }
+      if(String(prod.providerUserId||'')!==String(p.userId||p.id)){
+        prod.providerUserId=p.userId||p.id;
+        changed=true;
+      }
+      if(p.email && prod.providerEmail!==p.email){
+        prod.providerEmail=p.email;
+        changed=true;
+      }
+      const pname=p.fantasyName||p.businessName||p.name||'Proveedor';
+      if(prod.providerName!==pname){
+        prod.providerName=pname;
+        changed=true;
+      }
+      // Productos viejos quedan visibles salvo que el proveedor los haya ocultado explícitamente.
+      if(typeof prod.visibleToSalons==='undefined'){
+        prod.visibleToSalons=true;
+        changed=true;
+      }
+      if(typeof prod.active==='undefined'){
+        prod.active=true;
+        changed=true;
+      }
+    }
+  });
+
+  if(changed)save();
+  return changed;
+}
+
+function products63(p){
+  return (data.providerProducts||[])
+    .filter(x=>belongs63(x,p))
+    .sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+}
+
+// ------------------------------------------------------------
+// MIS PRODUCTOS
+// ------------------------------------------------------------
+window.renderMyProducts63=function(){
+  const p=provider63();
+  if(!p)return toast('Proveedor no identificado');
+
+  migrateLegacyCommunityProducts63();
+
+  const products=products63(p);
+  const content=document.querySelector('#content');
+  if(!content)return;
+
+  content.innerHTML=`
+    <div class="card">
+      <div class="section-title">
+        <div>
+          <h2>📦 Mis productos</h2>
+          <small class="muted">Acá están los productos que antes figuraban en Comunidad y todos los que agregues de ahora en adelante.</small>
+        </div>
+        <button class="primary" onclick="openProviderProduct56()">+ Agregar producto</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      ${products.length?`
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Producto</th>
+                <th>Categoría</th>
+                <th>Precio</th>
+                <th>Visible</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${products.map(x=>`
+                <tr>
+                  <td>
+                    <div style="display:flex;gap:10px;align-items:center">
+                      ${x.photo?`<img src="${x.photo}" style="width:56px;height:56px;object-fit:cover;border-radius:8px">`:''}
+                      <div>
+                        <b>${esc63(x.name)}</b>
+                        <small style="display:block">${esc63(x.description||'')}</small>
+                      </div>
+                    </div>
+                  </td>
+                  <td>${esc63(x.category||'')}</td>
+                  <td><b>${money63(x.price||0)}</b></td>
+                  <td>${x.visibleToSalons!==false?'✅ Sí':'🚫 No'}</td>
+                  <td>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap">
+                      <button class="secondary small" onclick="openProviderProduct56('${x.id}')">✏️ Editar</button>
+                      <button class="danger small" onclick="deleteProviderProduct59('${x.id}')">🗑️ Borrar</button>
+                    </div>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `:'<div class="empty">Todavía no hay productos cargados. Usá “Agregar producto”.</div>'}
+    </div>
+  `;
+};
+
+// Alias para que cualquier menú viejo abra esta versión.
+window.renderMyProducts62=window.renderMyProducts63;
+window.renderMyProducts61=window.renderMyProducts63;
+
+// ------------------------------------------------------------
+// MENÚ PROVEEDOR
+// ------------------------------------------------------------
+function bindMyProducts63(){
+  const role=String(sess63().role||'').toLowerCase();
+  if(!['provider','supplier'].includes(role))return;
+
+  [...document.querySelectorAll('a,button,[role="button"],.nav-item,.menu-item,.sidebar-item,li')]
+    .forEach(el=>{
+      if(norm63(el.textContent)==='mis productos'){
+        if(el.dataset.v63Bound==='1')return;
+        el.dataset.v63Bound='1';
+        el.addEventListener('click',ev=>{
+          ev.preventDefault();
+          ev.stopImmediatePropagation();
+          renderMyProducts63();
+        },true);
+      }
+    });
+}
+
+// Al iniciar, intenta recuperar inmediatamente los productos antiguos.
+setTimeout(()=>{
+  migrateLegacyCommunityProducts63();
+  bindMyProducts63();
+},300);
+
+setInterval(bindMyProducts63,1200);
+
+})();
