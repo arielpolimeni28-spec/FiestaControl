@@ -11532,3 +11532,213 @@ renderSalonView=function(){
 };
 
 })();
+
+
+// ============================================================
+// V42 - FIESTA BÁSICA: COSTO ADULTO EXTRA + COSTO NENE EXTRA
+// ============================================================
+(function(){
+'use strict';
+
+const SID42=()=>session?.salonId;
+const SALON42=()=>salon();
+
+function ensureCfg42(){
+  const s=SALON42();
+  if(!s)return;
+  s.basicPartyConfig=s.basicPartyConfig||{};
+  if(s.basicPartyConfig.extraAdultPrice==null) s.basicPartyConfig.extraAdultPrice=0;
+  if(s.basicPartyConfig.extraChildPrice==null) s.basicPartyConfig.extraChildPrice=0;
+}
+
+ensureCfg42();
+
+// ----------------------------------------------------------
+// MI SALÓN - agrega precios por adulto extra y nene extra
+// ----------------------------------------------------------
+const oldProfile42=window.renderProfileV41 || window.renderProfile;
+
+window.renderProfileV42=function(){
+  oldProfile42();
+  ensureCfg42();
+
+  const cfg=SALON42().basicPartyConfig;
+  const form=document.querySelector('#basic41');
+  if(!form || document.querySelector('#extra-prices42'))return;
+
+  const box=document.createElement('div');
+  box.id='extra-prices42';
+  box.className='form-grid';
+  box.style.marginTop='12px';
+  box.innerHTML=`
+    <div class="field">
+      <label>Costo por adulto extra</label>
+      <input name="extraAdultPrice" type="number" min="0" value="${Number(cfg.extraAdultPrice||0)}">
+      <small class="muted">Se suma al total por cada adulto que supere la base configurada.</small>
+    </div>
+
+    <div class="field">
+      <label>Costo por nene extra</label>
+      <input name="extraChildPrice" type="number" min="0" value="${Number(cfg.extraChildPrice||0)}">
+      <small class="muted">Se suma al total por cada chico que supere la base configurada.</small>
+    </div>
+  `;
+
+  const actions=form.querySelector('.form-actions');
+  form.insertBefore(box, actions);
+
+  const oldSubmit=form.onsubmit;
+  form.onsubmit=function(e){
+    const fd=new FormData(form);
+    cfg.extraAdultPrice=Number(fd.get('extraAdultPrice')||0);
+    cfg.extraChildPrice=Number(fd.get('extraChildPrice')||0);
+    return oldSubmit ? oldSubmit.call(form,e) : undefined;
+  };
+};
+
+// ----------------------------------------------------------
+// RESERVA - calcula adultos/chicos extra y suma automáticamente
+// ----------------------------------------------------------
+const oldEventForm42=window.openEventFormV41 || window.openEventForm;
+
+window.openEventFormV42=function(eid=''){
+  ensureCfg42();
+  oldEventForm42(eid);
+
+  const form=document.querySelector('#ev30');
+  if(!form)return;
+
+  const cfg=SALON42().basicPartyConfig;
+  const adults=document.querySelector('#adults41');
+  const children=document.querySelector('#children41');
+
+  const summary=document.querySelector('#party-suggestion41');
+  if(summary && !document.querySelector('#extra-costs42')){
+    const d=document.createElement('div');
+    d.id='extra-costs42';
+    d.style.marginTop='8px';
+    summary.appendChild(d);
+  }
+
+  // Agrega tarjetas de discriminación si existen resúmenes V30.
+  const totalGrid=document.querySelector('#totalSum30')?.closest('.grid');
+  if(totalGrid && !document.querySelector('#adultExtraSum42')){
+    const a=document.createElement('div');
+    a.className='card stat';
+    a.innerHTML=`<small>Adultos extra</small><strong id="adultExtraSum42">$ 0</strong>`;
+    totalGrid.insertBefore(a, document.querySelector('#totalSum30')?.closest('.card'));
+
+    const c=document.createElement('div');
+    c.className='card stat';
+    c.innerHTML=`<small>Nenes extra</small><strong id="childExtraSum42">$ 0</strong>`;
+    totalGrid.insertBefore(c, document.querySelector('#totalSum30')?.closest('.card'));
+  }
+
+  function calcExtras42(){
+    const a=Number(adults?.value||0);
+    const c=Number(children?.value||0);
+
+    const adultExtraQty=Math.max(0,a-Number(cfg.baseAdults||0));
+    const childExtraQty=Math.max(0,c-Number(cfg.baseChildren||0));
+
+    const adultExtraTotal=adultExtraQty*Number(cfg.extraAdultPrice||0);
+    const childExtraTotal=childExtraQty*Number(cfg.extraChildPrice||0);
+
+    const d=document.querySelector('#extra-costs42');
+    if(d){
+      d.innerHTML=`
+        <div>Adultos extra: <b>${adultExtraQty}</b> × ${money(cfg.extraAdultPrice||0)} = <b>${money(adultExtraTotal)}</b></div>
+        <div>Nenes extra: <b>${childExtraQty}</b> × ${money(cfg.extraChildPrice||0)} = <b>${money(childExtraTotal)}</b></div>
+      `;
+    }
+
+    const ae=document.querySelector('#adultExtraSum42');
+    const ce=document.querySelector('#childExtraSum42');
+    if(ae)ae.textContent=money(adultExtraTotal);
+    if(ce)ce.textContent=money(childExtraTotal);
+
+    return {adultExtraQty,childExtraQty,adultExtraTotal,childExtraTotal};
+  }
+
+  adults?.addEventListener('input',calcExtras42);
+  children?.addEventListener('input',calcExtras42);
+  calcExtras42();
+
+  // Intercepta guardado para incorporar extras por invitados.
+  const oldSubmit=form.onsubmit;
+  form.onsubmit=function(ev){
+    const vals=calcExtras42();
+
+    // Antes de que guarde V30, incrementa visualmente el precio base
+    // con un hidden temporal separado para no alterar el precio base configurado.
+    const result=oldSubmit ? oldSubmit.call(form,ev) : undefined;
+
+    setTimeout(()=>{
+      let e=eid ? (data.events||[]).find(x=>x.id===eid) : (data.events||[])
+        .filter(x=>x.salonId===SID42())
+        .sort((x,y)=>String(y.createdAt||'').localeCompare(String(x.createdAt||'')))[0];
+
+      if(!e)return;
+
+      e.extraAdultQty=vals.adultExtraQty;
+      e.extraChildQty=vals.childExtraQty;
+      e.extraAdultPrice=Number(cfg.extraAdultPrice||0);
+      e.extraChildPrice=Number(cfg.extraChildPrice||0);
+      e.extraAdultsTotal=vals.adultExtraTotal;
+      e.extraChildrenTotal=vals.childExtraTotal;
+
+      // Recalcula total real de la reserva.
+      const base=Number(e.basePrice||0);
+      const extras=Number(e.extrasTotal||0);
+      const stock=Number(e.stockItemsTotal||0);
+      const staffExtra=Number(e.staffClientChargeTotal||0);
+
+      e.total=base+extras+stock+staffExtra+vals.adultExtraTotal+vals.childExtraTotal;
+      e.balance=Math.max(0,Number(e.total||0)-Number(e.paid||0));
+
+      save();
+    },300);
+
+    return result;
+  };
+};
+
+// ----------------------------------------------------------
+// DETALLE DE FIESTA: discriminación de adultos/chicos extra
+// ----------------------------------------------------------
+const oldOpen42=window.openEventV41 || window.openEvent;
+
+window.openEventV42=function(eid){
+  oldOpen42(eid);
+
+  setTimeout(()=>{
+    const e=(data.events||[]).find(x=>x.id===eid&&x.salonId===SID42());
+    const modal=document.querySelector('#modal-body');
+    if(!e || !modal || modal.querySelector('#guest-extra-detail42'))return;
+
+    const card=document.createElement('div');
+    card.id='guest-extra-detail42';
+    card.className='card';
+    card.style.marginTop='14px';
+    card.innerHTML=`
+      <h3>Invitados extra</h3>
+      <div>Adultos extra: <b>${Number(e.extraAdultQty||0)}</b> × ${money(e.extraAdultPrice||0)} = <b>${money(e.extraAdultsTotal||0)}</b></div>
+      <div style="margin-top:6px">Nenes extra: <b>${Number(e.extraChildQty||0)}</b> × ${money(e.extraChildPrice||0)} = <b>${money(e.extraChildrenTotal||0)}</b></div>
+    `;
+    modal.appendChild(card);
+  },0);
+};
+
+// aliases finales
+window.renderProfile=window.renderProfileV42;
+window.openEventForm=window.openEventFormV42;
+window.openEventFormV41=window.openEventFormV42;
+window.openEvent=window.openEventV42;
+
+const route42=renderSalonView;
+renderSalonView=function(){
+  if(view==='profile')return renderProfileV42();
+  return route42();
+};
+
+})();
