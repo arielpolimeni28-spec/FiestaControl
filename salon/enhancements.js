@@ -11993,3 +11993,309 @@ renderSalonView=function(){
 };
 
 })();
+
+
+// ============================================================
+// V44 - RESERVA SIN NOMBRES DE PERSONAL
+// Solo adicionales genéricos: Mozo / Animador + cantidad.
+// Costos tomados desde Mi salón > Fiesta básica.
+// ============================================================
+(function(){
+'use strict';
+
+const SID44=()=>session?.salonId;
+const SALON44=()=>salon();
+
+function cfg44(){
+  const s=SALON44();
+  if(!s)return {};
+  s.basicPartyConfig=s.basicPartyConfig||{};
+  return s.basicPartyConfig;
+}
+
+function n44(v){ return Number(v||0); }
+
+const oldForm44=window.openEventFormV43 || window.openEventForm;
+
+window.openEventFormV44=function(eid=''){
+  oldForm44(eid);
+
+  const form=document.querySelector('#ev30');
+  if(!form)return;
+
+  const e=eid ? (data.events||[]).find(x=>x.id===eid&&x.salonId===SID44()) : null;
+  const cfg=cfg44();
+
+  // --------------------------------------------------------
+  // Oculta completamente el listado de empleados con nombres.
+  // --------------------------------------------------------
+  const staffRows=[...document.querySelectorAll('.staffrow30')];
+  const staffCard=staffRows[0]?.closest('.card');
+  if(staffCard)staffCard.style.display='none';
+
+  // Desmarca personal nombrado para que la reserva no lo use.
+  staffRows.forEach(r=>{
+    const sel=r.querySelector('.staffsel30');
+    const charge=r.querySelector('.staffcharge30');
+    if(sel)sel.checked=false;
+    if(charge)charge.checked=false;
+  });
+
+  // Oculta tarjetas automáticas anteriores V43.
+  const waiterStat=document.querySelector('#waiterAutoSum43')?.closest('.card');
+  const animatorStat=document.querySelector('#animatorAutoSum43')?.closest('.card');
+  if(waiterStat)waiterStat.style.display='none';
+  if(animatorStat)animatorStat.style.display='none';
+
+  const oldAutoDetail=document.querySelector('#auto-staff-detail43');
+  if(oldAutoDetail)oldAutoDetail.style.display='none';
+
+  // --------------------------------------------------------
+  // Nueva tarjeta simple de personal adicional.
+  // --------------------------------------------------------
+  const stockCard=[...form.querySelectorAll('.card')].find(c=>c.textContent.includes('Productos de stock'));
+  if(stockCard && !document.querySelector('#generic-staff44')){
+    const card=document.createElement('div');
+    card.id='generic-staff44';
+    card.className='card';
+    card.style.marginTop='12px';
+
+    const oldWaiters=n44(e?.genericExtraWaiters ?? e?.autoExtraWaiters);
+    const oldAnimators=n44(e?.genericExtraAnimators ?? e?.autoExtraAnimators);
+
+    card.innerHTML=`
+      <div class="section-title">
+        <div>
+          <h3>Personal adicional</h3>
+          <small class="muted">No se muestran nombres. Solo indicá si necesitás personal extra y la cantidad.</small>
+        </div>
+      </div>
+
+      <div class="admin-notice" style="margin-bottom:12px">
+        <span>✅</span>
+        <div>
+          <b>La fiesta base ya incluye 1 mozo + 1 cocinero/ayudante + 2 animadores</b>
+          <small>Los adicionales se cobran según los valores configurados en Mi salón.</small>
+        </div>
+      </div>
+
+      <div class="form-grid">
+        <label class="check-card">
+          <input type="checkbox" id="extraWaiterCheck44" ${oldWaiters>0?'checked':''}>
+          <span>
+            <b>Mozo adicional</b>
+            <small>${money(cfg.extraWaiterPrice||0)} cada uno</small>
+          </span>
+        </label>
+
+        <div class="field" id="extraWaiterQtyWrap44" style="${oldWaiters>0?'':'display:none'}">
+          <label>Cantidad de mozos adicionales</label>
+          <input id="extraWaiterQty44" type="number" min="1" value="${Math.max(1,oldWaiters||1)}">
+        </div>
+
+        <label class="check-card">
+          <input type="checkbox" id="extraAnimatorCheck44" ${oldAnimators>0?'checked':''}>
+          <span>
+            <b>Animador adicional</b>
+            <small>${money(cfg.extraAnimatorPrice||0)} cada uno</small>
+          </span>
+        </label>
+
+        <div class="field" id="extraAnimatorQtyWrap44" style="${oldAnimators>0?'':'display:none'}">
+          <label>Cantidad de animadores adicionales</label>
+          <input id="extraAnimatorQty44" type="number" min="1" value="${Math.max(1,oldAnimators||1)}">
+        </div>
+      </div>
+
+      <div id="genericStaffTotal44" class="admin-notice" style="margin-top:10px"></div>
+    `;
+    stockCard.parentNode.insertBefore(card,stockCard);
+  }
+
+  const waiterCheck=document.querySelector('#extraWaiterCheck44');
+  const waiterQty=document.querySelector('#extraWaiterQty44');
+  const waiterWrap=document.querySelector('#extraWaiterQtyWrap44');
+  const animatorCheck=document.querySelector('#extraAnimatorCheck44');
+  const animatorQty=document.querySelector('#extraAnimatorQty44');
+  const animatorWrap=document.querySelector('#extraAnimatorQtyWrap44');
+
+  function values44(){
+    const w=waiterCheck?.checked ? Math.max(1,n44(waiterQty?.value)) : 0;
+    const a=animatorCheck?.checked ? Math.max(1,n44(animatorQty?.value)) : 0;
+    const wt=w*n44(cfg.extraWaiterPrice);
+    const at=a*n44(cfg.extraAnimatorPrice);
+    return {w,a,wt,at,total:wt+at};
+  }
+
+  function recalc44(){
+    waiterWrap.style.display=waiterCheck.checked?'':'none';
+    animatorWrap.style.display=animatorCheck.checked?'':'none';
+
+    const v=values44();
+
+    const info=document.querySelector('#genericStaffTotal44');
+    if(info){
+      info.innerHTML=`
+        <span>💰</span>
+        <div>
+          <div>Mozo adicional: <b>${v.w}</b> × ${money(cfg.extraWaiterPrice||0)} = <b>${money(v.wt)}</b></div>
+          <div>Animador adicional: <b>${v.a}</b> × ${money(cfg.extraAnimatorPrice||0)} = <b>${money(v.at)}</b></div>
+          <div style="margin-top:4px"><b>Total personal adicional: ${money(v.total)}</b></div>
+        </div>`;
+    }
+
+    // Recalcula el total visible sin depender de nombres de empleados.
+    const base=n44(document.querySelector('#base30')?.value);
+
+    let extras=0;
+    document.querySelectorAll('.extra30').forEach(x=>{
+      if(x.checked)extras+=n44(x.dataset.price);
+    });
+
+    let stock=0;
+    document.querySelectorAll('.stockrow30').forEach(r=>{
+      stock+=n44(r.querySelector('.stockqty30')?.value)*n44(r.dataset.price);
+    });
+
+    const adults=n44(document.querySelector('#adults41')?.value);
+    const children=n44(document.querySelector('#children41')?.value);
+
+    const adultExtraQty=Math.max(0,adults-n44(cfg.baseAdults));
+    const childExtraQty=Math.max(0,children-n44(cfg.baseChildren));
+    const adultExtraTotal=adultExtraQty*n44(cfg.extraAdultPrice);
+    const childExtraTotal=childExtraQty*n44(cfg.extraChildPrice);
+
+    const total=base+extras+stock+adultExtraTotal+childExtraTotal+v.total;
+    const dep=Math.min(n44(document.querySelector('#dep30')?.value),total);
+
+    const staffCharge=document.querySelector('#staffChargeSum30');
+    const totalEl=document.querySelector('#totalSum30');
+    const bal=document.querySelector('#balSum30');
+    const staffExpense=document.querySelector('#staffExpenseSum30');
+
+    if(staffCharge)staffCharge.textContent=money(v.total);
+    if(totalEl)totalEl.textContent=money(total);
+    if(bal)bal.textContent=money(Math.max(0,total-dep));
+    if(staffExpense)staffExpense.textContent=money(0);
+
+    return {
+      ...v,
+      adultExtraQty,childExtraQty,adultExtraTotal,childExtraTotal,total,deposit:dep
+    };
+  }
+
+  waiterCheck?.addEventListener('change',recalc44);
+  animatorCheck?.addEventListener('change',recalc44);
+  waiterQty?.addEventListener('input',recalc44);
+  animatorQty?.addEventListener('input',recalc44);
+  document.querySelector('#adults41')?.addEventListener('input',recalc44);
+  document.querySelector('#children41')?.addEventListener('input',recalc44);
+  document.querySelector('#base30')?.addEventListener('input',recalc44);
+  document.querySelector('#dep30')?.addEventListener('input',recalc44);
+  document.querySelectorAll('.extra30').forEach(x=>x.addEventListener('change',recalc44));
+  document.querySelectorAll('.stockqty30').forEach(x=>x.addEventListener('input',recalc44));
+
+  recalc44();
+
+  // --------------------------------------------------------
+  // Guarda los adicionales genéricos y anula la lógica de
+  // personal automático por invitados de V43.
+  // --------------------------------------------------------
+  const oldSubmit=form.onsubmit;
+  form.onsubmit=function(ev){
+    const v=recalc44();
+    const result=oldSubmit ? oldSubmit.call(form,ev) : undefined;
+
+    setTimeout(()=>{
+      let target=eid ? (data.events||[]).find(x=>x.id===eid) :
+        (data.events||[])
+          .filter(x=>x.salonId===SID44())
+          .sort((x,y)=>String(y.createdAt||'').localeCompare(String(x.createdAt||'')))[0];
+
+      if(!target)return;
+
+      // No se usa personal con nombre en el armado de reserva.
+      data.assignments=(data.assignments||[]).filter(a=>a.eventId!==target.id);
+
+      target.genericExtraWaiters=v.w;
+      target.genericExtraAnimators=v.a;
+      target.genericExtraWaiterPrice=n44(cfg.extraWaiterPrice);
+      target.genericExtraAnimatorPrice=n44(cfg.extraAnimatorPrice);
+      target.genericExtraWaiterTotal=v.wt;
+      target.genericExtraAnimatorTotal=v.at;
+      target.genericExtraStaffTotal=v.total;
+
+      // Compatibilidad con pantallas anteriores.
+      target.autoExtraWaiters=v.w;
+      target.autoExtraAnimators=v.a;
+      target.autoExtraWaiterPrice=n44(cfg.extraWaiterPrice);
+      target.autoExtraAnimatorPrice=n44(cfg.extraAnimatorPrice);
+      target.autoExtraWaiterTotal=v.wt;
+      target.autoExtraAnimatorTotal=v.at;
+      target.autoExtraStaffTotal=v.total;
+
+      target.staffClientChargeTotal=v.total;
+      target.staffExpenseTotal=0;
+
+      target.extraAdultQty=v.adultExtraQty;
+      target.extraChildQty=v.childExtraQty;
+      target.extraAdultsTotal=v.adultExtraTotal;
+      target.extraChildrenTotal=v.childExtraTotal;
+
+      target.total=v.total;
+      target.deposit=v.deposit;
+      target.paid=v.deposit;
+      target.balance=Math.max(0,v.total-v.deposit);
+
+      save();
+    },450);
+
+    return result;
+  };
+};
+
+// ----------------------------------------------------------
+// Detalle de fiesta: mostrar genérico, sin nombres.
+// ----------------------------------------------------------
+const oldOpen44=window.openEventV43 || window.openEvent;
+
+window.openEventV44=function(eid){
+  oldOpen44(eid);
+
+  setTimeout(()=>{
+    const e=(data.events||[]).find(x=>x.id===eid&&x.salonId===SID44());
+    const modal=document.querySelector('#modal-body');
+    if(!e || !modal)return;
+
+    // Oculta cualquier bloque que haya quedado mostrando personal por nombre.
+    [...modal.querySelectorAll('.card')].forEach(c=>{
+      const txt=String(c.textContent||'').toLowerCase();
+      if(txt.includes('personal asignado') || txt.includes('personal an')) {
+        c.style.display='none';
+      }
+    });
+
+    const old=document.querySelector('#auto-staff-card43');
+    if(old)old.style.display='none';
+
+    if(!modal.querySelector('#generic-staff-detail44')){
+      const card=document.createElement('div');
+      card.id='generic-staff-detail44';
+      card.className='card';
+      card.style.marginTop='14px';
+      card.innerHTML=`
+        <h3>Personal adicional</h3>
+        <div>Mozo adicional: <b>${n44(e.genericExtraWaiters||0)}</b> × ${money(e.genericExtraWaiterPrice||0)} = <b>${money(e.genericExtraWaiterTotal||0)}</b></div>
+        <div style="margin-top:6px">Animador adicional: <b>${n44(e.genericExtraAnimators||0)}</b> × ${money(e.genericExtraAnimatorPrice||0)} = <b>${money(e.genericExtraAnimatorTotal||0)}</b></div>
+        <div style="margin-top:8px"><b>Total adicionales de personal: ${money(e.genericExtraStaffTotal||0)}</b></div>
+      `;
+      modal.appendChild(card);
+    }
+  },0);
+};
+
+window.openEventForm=window.openEventFormV44;
+window.openEventFormV43=window.openEventFormV44;
+window.openEvent=window.openEventV44;
+
+})();
