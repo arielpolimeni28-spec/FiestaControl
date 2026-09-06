@@ -6235,3 +6235,286 @@
   }, 300);
 
 })();
+
+
+// ============================================================
+// V23 - STOCK REHECHO: EDITAR / BORRAR PRODUCTO / BORRAR COMPRA
+// ============================================================
+(function () {
+  'use strict';
+
+  data.stockProducts = data.stockProducts || [];
+  data.stockPurchases = data.stockPurchases || [];
+  data.movements = data.movements || [];
+  data.auditLog = data.auditLog || [];
+
+  function sid(){ return session?.salonId; }
+  function products(){ return (data.stockProducts || []).filter(p => p.salonId === sid()); }
+  function purchases(){ return (data.stockPurchases || []).filter(c => c.salonId === sid()); }
+  function prod(idp){ return (data.stockProducts || []).find(p => p.id === idp && p.salonId === sid()); }
+
+  window.renderStockV23 = function(){
+    setTitle('Stock','Productos, cantidades, compras y costos');
+
+    const ps = products();
+    const buys = purchases().slice().sort((a,b)=>
+      String(b.createdAt || b.date || '').localeCompare(String(a.createdAt || a.date || ''))
+    );
+
+    const totalUnits = ps.reduce((s,p)=>s+Number(p.stock||0),0);
+    const stockValue = ps.reduce((s,p)=>s+(Number(p.stock||0)*Number(p.costPrice||0)),0);
+    const low = ps.filter(p=>Number(p.stock||0)<=Number(p.minStock||0)).length;
+
+    $('#content').innerHTML = `
+      <div class="grid stats">
+        <div class="card stat"><small>Productos</small><strong>${ps.length}</strong></div>
+        <div class="card stat"><small>Unidades en stock</small><strong>${totalUnits}</strong></div>
+        <div class="card stat"><small>Valor de stock a costo</small><strong>${money(stockValue)}</strong></div>
+        <div class="card stat"><small>Stock bajo</small><strong class="${low?'bad':''}">${low}</strong></div>
+      </div>
+
+      <div class="toolbar" style="margin-top:16px">
+        <button class="primary" onclick="openStockProductV23()">+ Agregar producto</button>
+        <button class="secondary" onclick="openStockPurchaseV23()">🛒 Compra</button>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="section-title">
+          <div>
+            <h3>Productos</h3>
+            <small class="muted">Bebidas, aguas, gaseosas y otros productos del salón.</small>
+          </div>
+        </div>
+
+        ${ps.length ? `
+          <div class="table-wrap">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Producto</th>
+                  <th>Stock</th>
+                  <th>Mínimo</th>
+                  <th>Costo</th>
+                  <th>Venta</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${ps.map(p=>`
+                  <tr>
+                    <td><b>${esc(p.name||'')}</b><small style="display:block">${esc(p.description||p.category||'')}</small></td>
+                    <td class="${Number(p.stock||0)<=Number(p.minStock||0)?'bad':''}">${Number(p.stock||0)}</td>
+                    <td>${Number(p.minStock||0)}</td>
+                    <td>${money(p.costPrice||0)}</td>
+                    <td>${money(p.salePrice||0)}</td>
+                    <td>
+                      <button class="secondary small" onclick="openStockProductV23('${esc(p.id)}')">✏️ Editar</button>
+                      <button class="secondary small" onclick="openStockPurchaseV23('${esc(p.id)}')">Comprar</button>
+                      <button class="danger small" onclick="deleteStockProductV23('${esc(p.id)}')">🗑 Borrar producto</button>
+                    </td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        ` : `<div class="empty">Todavía no hay productos cargados.</div>`}
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="section-title">
+          <div>
+            <h3>Últimas compras</h3>
+            <small class="muted">Cada compra aumenta automáticamente el stock.</small>
+          </div>
+        </div>
+
+        ${buys.length ? `
+          <div class="table-wrap">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Fecha</th>
+                  <th>Producto</th>
+                  <th>Cantidad</th>
+                  <th>Costo unitario</th>
+                  <th>Total</th>
+                  <th>Medio</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${buys.map(c=>{
+                  const p=prod(c.productId);
+                  const qty=Number(c.quantity ?? c.qty ?? 0);
+                  const unit=Number(c.unitCost ?? c.costPrice ?? c.cost ?? 0);
+                  const total=Number(c.total ?? (qty*unit));
+                  return `
+                    <tr>
+                      <td>${esc(c.date || c.createdAt?.slice(0,10) || '-')}</td>
+                      <td><b>${esc(p?.name || c.productName || 'Producto')}</b></td>
+                      <td>${qty}</td>
+                      <td>${money(unit)}</td>
+                      <td>${money(total)}</td>
+                      <td>${esc(c.method || c.paymentMethod || '-')}</td>
+                      <td><button class="danger small" onclick="deleteStockPurchaseV23('${esc(c.id)}')">🗑 Borrar compra</button></td>
+                    </tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        ` : `<div class="empty">Todavía no hay compras registradas.</div>`}
+      </div>
+    `;
+  };
+
+  window.openStockProductV23 = function(pid=''){
+    const p = pid ? prod(pid) : null;
+    showModal(`
+      <div class="modal-title">
+        <div><h2>${p?'Editar producto':'Agregar producto'}</h2><p>Stock del salón</p></div>
+        <button class="ghost small" onclick="closeModal()">✕</button>
+      </div>
+      <form id="v23-product-form">
+        <div class="form-grid">
+          <div class="field span2"><label>Producto</label><input name="name" required value="${esc(p?.name||'')}"></div>
+          <div class="field span2"><label>Descripción</label><input name="description" value="${esc(p?.description||'')}"></div>
+          <div class="field"><label>Categoría</label><input name="category" value="${esc(p?.category||'')}"></div>
+          <div class="field"><label>Stock actual</label><input name="stock" type="number" min="0" value="${Number(p?.stock||0)}"></div>
+          <div class="field"><label>Stock mínimo</label><input name="minStock" type="number" min="0" value="${Number(p?.minStock||0)}"></div>
+          <div class="field"><label>Costo</label><input name="costPrice" type="number" min="0" value="${Number(p?.costPrice||0)}"></div>
+          <div class="field"><label>Venta</label><input name="salePrice" type="number" min="0" value="${Number(p?.salePrice||0)}"></div>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+          <button class="primary">${p?'Guardar cambios':'Crear producto'}</button>
+        </div>
+      </form>
+    `);
+    $('#v23-product-form').onsubmit = ev=>{
+      ev.preventDefault();
+      const f=Object.fromEntries(new FormData(ev.target));
+      if(p){
+        Object.assign(p,{
+          name:f.name, description:f.description||'', category:f.category||'',
+          stock:Number(f.stock||0), minStock:Number(f.minStock||0),
+          costPrice:Number(f.costPrice||0), salePrice:Number(f.salePrice||0),
+          updatedAt:new Date().toISOString()
+        });
+      }else{
+        data.stockProducts.push({
+          id:id(), salonId:sid(), name:f.name, description:f.description||'',
+          category:f.category||'', stock:Number(f.stock||0),
+          minStock:Number(f.minStock||0), costPrice:Number(f.costPrice||0),
+          salePrice:Number(f.salePrice||0), createdAt:new Date().toISOString()
+        });
+      }
+      save(); closeModal(); toast(p?'Producto actualizado':'Producto creado'); renderStockV23();
+    };
+  };
+
+  window.openStockPurchaseV23 = function(pid=''){
+    const ps=products();
+    if(!ps.length) return toast('Primero cargá un producto');
+
+    showModal(`
+      <div class="modal-title">
+        <div><h2>Registrar compra</h2><p>La cantidad comprada se suma al stock.</p></div>
+        <button class="ghost small" onclick="closeModal()">✕</button>
+      </div>
+      <form id="v23-purchase-form">
+        <div class="form-grid">
+          <div class="field span2">
+            <label>Producto</label>
+            <select name="productId" required>${ps.map(p=>`<option value="${esc(p.id)}" ${p.id===pid?'selected':''}>${esc(p.name)}</option>`).join('')}</select>
+          </div>
+          <div class="field"><label>Cantidad</label><input name="quantity" type="number" min="1" required></div>
+          <div class="field"><label>Costo unitario</label><input name="unitCost" type="number" min="0" required></div>
+          <div class="field"><label>Fecha</label><input name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required></div>
+          <div class="field">
+            <label>Medio de pago</label>
+            <select name="method"><option>Efectivo</option><option>Transferencia</option><option>Mercado Pago</option><option>Tarjeta</option><option>Otro</option></select>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+          <button class="primary">Registrar compra</button>
+        </div>
+      </form>
+    `);
+
+    $('#v23-purchase-form').onsubmit=ev=>{
+      ev.preventDefault();
+      const f=Object.fromEntries(new FormData(ev.target));
+      const p=prod(f.productId);
+      if(!p) return toast('Producto no encontrado');
+      const qty=Number(f.quantity||0), unit=Number(f.unitCost||0), total=qty*unit;
+      const cid=id();
+      p.stock=Number(p.stock||0)+qty;
+      p.costPrice=unit || Number(p.costPrice||0);
+
+      data.stockPurchases.push({
+        id:cid, salonId:sid(), productId:p.id, productName:p.name,
+        quantity:qty, unitCost:unit, total, date:f.date, method:f.method,
+        createdAt:new Date().toISOString()
+      });
+
+      data.movements.push({
+        id:id(), salonId:sid(), stockPurchaseId:cid,
+        sourceKey:`stock-purchase:${cid}`, type:'Gasto', category:'Compra de stock',
+        concept:`Compra ${p.name}`, amount:total, movementDate:f.date,
+        method:f.method, createdAt:new Date().toISOString()
+      });
+
+      save(); closeModal(); toast('Compra registrada'); renderStockV23();
+    };
+  };
+
+  window.deleteStockProductV23 = function(pid){
+    const p=prod(pid); if(!p) return toast('Producto no encontrado');
+    showModal(`
+      <div class="modal-title"><div><h2>Borrar producto</h2><p>${esc(p.name)}</p></div><button class="ghost small" onclick="closeModal()">✕</button></div>
+      <form id="v23-del-prod">
+        <div class="field"><label>Contraseña administrativa</label><input name="password" type="password" required></div>
+        <div class="field"><label>Motivo</label><textarea name="reason" required></textarea></div>
+        <div class="form-actions"><button type="button" class="ghost" onclick="closeModal()">Cancelar</button><button class="danger">Borrar producto</button></div>
+      </form>`);
+    $('#v23-del-prod').onsubmit=ev=>{
+      ev.preventDefault(); const f=Object.fromEntries(new FormData(ev.target));
+      if(String(f.password||'')!==String(salon()?.password||'')) return toast('Contraseña incorrecta');
+      data.stockProducts=(data.stockProducts||[]).filter(x=>x.id!==pid);
+      data.auditLog.push({id:id(),salonId:sid(),action:'BORRAR PRODUCTO STOCK',productName:p.name,reason:f.reason,createdAt:new Date().toISOString()});
+      save(); closeModal(); toast('Producto eliminado'); renderStockV23();
+    };
+  };
+
+  window.deleteStockPurchaseV23 = function(cid){
+    const c=(data.stockPurchases||[]).find(x=>x.id===cid && x.salonId===sid());
+    if(!c) return toast('Compra no encontrada');
+    const p=prod(c.productId);
+    showModal(`
+      <div class="modal-title"><div><h2>Borrar compra</h2><p>${esc(p?.name||c.productName||'Compra')}</p></div><button class="ghost small" onclick="closeModal()">✕</button></div>
+      <form id="v23-del-buy">
+        <div class="field"><label>Contraseña administrativa</label><input name="password" type="password" required></div>
+        <div class="field"><label>Motivo</label><textarea name="reason" required></textarea></div>
+        <div class="form-actions"><button type="button" class="ghost" onclick="closeModal()">Cancelar</button><button class="danger">Borrar compra</button></div>
+      </form>`);
+    $('#v23-del-buy').onsubmit=ev=>{
+      ev.preventDefault(); const f=Object.fromEntries(new FormData(ev.target));
+      if(String(f.password||'')!==String(salon()?.password||'')) return toast('Contraseña incorrecta');
+      const qty=Number(c.quantity ?? c.qty ?? 0);
+      if(p) p.stock=Math.max(0,Number(p.stock||0)-qty);
+      data.stockPurchases=(data.stockPurchases||[]).filter(x=>x.id!==cid);
+      data.movements=(data.movements||[]).filter(m=>m.stockPurchaseId!==cid && m.sourceKey!==`stock-purchase:${cid}`);
+      data.auditLog.push({id:id(),salonId:sid(),action:'BORRAR COMPRA STOCK',productName:p?.name||c.productName||'',quantity:qty,reason:f.reason,createdAt:new Date().toISOString()});
+      save(); closeModal(); toast('Compra eliminada'); renderStockV23();
+    };
+  };
+
+  // Override final: Stock usa SIEMPRE esta vista, sin depender de wrappers anteriores.
+  const prevSalonViewV23 = renderSalonView;
+  renderSalonView = function(){
+    if(view==='stock') return renderStockV23();
+    return prevSalonViewV23();
+  };
+
+})();
