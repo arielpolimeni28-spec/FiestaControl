@@ -13233,3 +13233,264 @@ window.openPaymentV30=function(eid){
 window.openPayment=window.openPaymentV30;
 
 })();
+
+
+// ============================================================
+// V47 - CORRECCIÓN CONTABLE: PAGOS SIN DUPLICADOS
+// ============================================================
+(function(){
+'use strict';
+
+const SID47=()=>session?.salonId;
+const EVT47=eid=>(data.events||[]).find(e=>e.id===eid&&e.salonId===SID47());
+const N47=v=>Number(v||0);
+
+function norm47(v){
+  return String(v||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+}
+function isDepositLike47(m){
+  const cat=norm47(m.category);
+  const con=norm47(m.concept);
+  const sk=String(m.sourceKey||'');
+  return cat.includes('sena') || con.includes('sena') ||
+         sk.includes(':deposit:') || sk.startsWith('v30:deposit:');
+}
+function isPayment47(m){
+  if(!m || m.salonId!==SID47())return false;
+  const t=norm47(m.type);
+  const c=norm47(m.category);
+  return t==='ingreso' && (
+    c.includes('cobro') ||
+    c.includes('sena') ||
+    c.includes('reserva') ||
+    String(m.sourceKey||'').startsWith('v47:payment:')
+  );
+}
+
+// Deja una sola seña por reserva y recalcula e.paid desde movimientos reales.
+function normalizeEventPayments47(e){
+  if(!e)return;
+
+  data.movements=data.movements||[];
+
+  const deposit=N47(e.deposit);
+  const eventMovs=data.movements.filter(m=>m.eventId===e.id && m.salonId===SID47());
+
+  // 1) Borra todas las representaciones viejas/duplicadas de seña.
+  data.movements=data.movements.filter(m=>{
+    if(m.eventId!==e.id || m.salonId!==SID47())return true;
+    return !isDepositLike47(m);
+  });
+
+  // 2) Crea UNA única seña canónica si corresponde.
+  if(deposit>0){
+    data.movements.push({
+      id:id(),
+      salonId:SID47(),
+      eventId:e.id,
+      sourceKey:`v47:deposit:${e.id}`,
+      type:'Ingreso',
+      category:'Seña',
+      concept:`Seña de reserva ${e.eventName||e.child||e.client||''}`,
+      amount:deposit,
+      method:e.depositMethod||'No especificado',
+      movementDate:e.depositDate||e.createdAt?.slice?.(0,10)||new Date().toISOString().slice(0,10),
+      createdAt:new Date().toISOString()
+    });
+  }
+
+  // 3) Quita duplicados exactos de cobros manuales.
+  const seen=new Set();
+  data.movements=data.movements.filter(m=>{
+    if(m.eventId!==e.id || m.salonId!==SID47() || !isPayment47(m) || isDepositLike47(m))return true;
+
+    // Los nuevos pagos V47 son únicos por sourceKey.
+    if(String(m.sourceKey||'').startsWith('v47:payment:')){
+      const key=String(m.sourceKey);
+      if(seen.has(key))return false;
+      seen.add(key);
+      return true;
+    }
+
+    // Para movimientos heredados, evita la misma operación repetida.
+    const key=[
+      N47(m.amount),
+      norm47(m.method),
+      String(m.movementDate||''),
+      norm47(m.reference||''),
+      norm47(m.concept||'')
+    ].join('|');
+
+    if(seen.has(key))return false;
+    seen.add(key);
+    return true;
+  });
+
+  // 4) paid = seña + cobros posteriores. Nunca se suma dos veces.
+  const manualPaid=data.movements
+    .filter(m=>m.eventId===e.id && m.salonId===SID47() && isPayment47(m) && !isDepositLike47(m))
+    .reduce((s,m)=>s+N47(m.amount),0);
+
+  e.paid=deposit+manualPaid;
+  e.balance=Math.max(0,N47(e.total)-e.paid);
+}
+
+window.normalizeAllPayments47=function(){
+  (data.events||[]).filter(e=>e.salonId===SID47()).forEach(normalizeEventPayments47);
+};
+
+// Normaliza al cargar la versión.
+try{
+  normalizeAllPayments47();
+  save();
+}catch(err){
+  console.warn('V47 normalize',err);
+}
+
+// ------------------------------------------------------------
+// NUEVO COBRO: una sola escritura, botón bloqueado al enviar.
+// ------------------------------------------------------------
+window.openPaymentV47=function(eid){
+  const e=EVT47(eid); if(!e)return;
+
+  normalizeEventPayments47(e);
+
+  const balance=Math.max(0,N47(e.total)-N47(e.paid));
+  if(balance<=0)return toast('La fiesta ya está totalmente cobrada');
+
+  showModal(`
+    <div class="modal-title">
+      <div><h2>Registrar cobro</h2><p>${esc46(e.eventName||e.child||'Evento')} · Saldo ${money46(balance)}</p></div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+    <form id="pay47">
+      <div class="form-grid">
+        <div class="field"><label>Importe</label><input name="amount" type="number" min="1" max="${balance}" value="${balance}" required></div>
+        <div class="field"><label>Medio de pago</label>
+          <select name="method"><option>Efectivo</option><option>Transferencia</option><option>Mercado Pago</option><option>Tarjeta</option><option>Otro</option></select>
+        </div>
+        <div class="field"><label>Fecha</label><input name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required></div>
+        <div class="field"><label>Referencia / comprobante</label><input name="reference" placeholder="Opcional"></div>
+        <div class="field span2"><label>Concepto</label><input name="concept" value="Pago de reserva"></div>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button id="savePay47" class="primary">Registrar cobro</button>
+      </div>
+    </form>
+  `);
+
+  let submitting=false;
+
+  document.querySelector('#pay47').onsubmit=ev=>{
+    ev.preventDefault();
+    if(submitting)return;
+    submitting=true;
+
+    const btn=document.querySelector('#savePay47');
+    if(btn){btn.disabled=true;btn.textContent='Registrando...';}
+
+    const f=Object.fromEntries(new FormData(ev.target));
+    const currentBalance=Math.max(0,N47(e.total)-N47(e.paid));
+    const amount=Math.min(N47(f.amount),currentBalance);
+
+    if(amount<=0){
+      submitting=false;
+      if(btn){btn.disabled=false;btn.textContent='Registrar cobro';}
+      return toast('Ingresá un importe válido');
+    }
+
+    const movementId=id();
+    const movement={
+      id:movementId,
+      salonId:SID47(),
+      eventId:e.id,
+      sourceKey:`v47:payment:${movementId}`,
+      type:'Ingreso',
+      category:'Cobro de reserva',
+      concept:String(f.concept||'Pago de reserva'),
+      amount,
+      method:f.method,
+      reference:f.reference||'',
+      movementDate:f.date,
+      createdAt:new Date().toISOString()
+    };
+
+    data.movements=data.movements||[];
+    data.movements.push(movement);
+
+    // Recalcula a partir de la contabilidad real: NO incrementa e.paid a mano.
+    normalizeEventPayments47(e);
+    save();
+
+    showModal(`
+      <div class="modal-title">
+        <div><h2>✅ Pago registrado</h2><p>${esc46(e.eventName||e.child||'Evento')}</p></div>
+        <button class="ghost small" onclick="closeModal()">✕</button>
+      </div>
+      <div class="grid stats">
+        <div class="card stat"><small>Pago recibido</small><strong>${money46(amount)}</strong></div>
+        <div class="card stat"><small>Total abonado</small><strong>${money46(e.paid)}</strong></div>
+        <div class="card stat"><small>Saldo pendiente</small><strong>${money46(e.balance)}</strong></div>
+      </div>
+      <div class="form-actions" style="margin-top:16px">
+        <button class="secondary" onclick="printReceipt46('${e.id}','${movementId}',true)">🖨 Imprimir recibo</button>
+        <button class="primary" onclick="printReceipt46('${e.id}','${movementId}',true)">📄 Generar PDF</button>
+        <button class="ghost" onclick="openEvent('${e.id}')">Ver fiesta</button>
+      </div>
+    `);
+  };
+};
+window.openPayment=window.openPaymentV47;
+
+// ------------------------------------------------------------
+// IMPRESIÓN: usa contabilidad ya normalizada.
+// ------------------------------------------------------------
+const oldPrintStatus47=window.printReservationStatus46;
+window.printReservationStatus46=function(eid,autoPrint=false){
+  const e=EVT47(eid);
+  if(e){
+    normalizeEventPayments47(e);
+    save();
+  }
+  return oldPrintStatus47(eid,autoPrint);
+};
+
+const oldReceipt47=window.printReceipt46;
+window.printReceipt46=function(eid,movementId,autoPrint=false){
+  const e=EVT47(eid);
+  if(e){
+    normalizeEventPayments47(e);
+    save();
+  }
+  return oldReceipt47(eid,movementId,autoPrint);
+};
+
+// ------------------------------------------------------------
+// FINANZAS / DETALLE: normaliza antes de renderizar.
+// ------------------------------------------------------------
+const oldFinance47=window.renderFinanceV38 || window.renderFinanceV36 || window.renderFinanceV35 || window.renderFinance;
+window.renderFinanceV47=function(){
+  normalizeAllPayments47();
+  save();
+  return oldFinance47();
+};
+
+const oldOpen47=window.openEventV46 || window.openEvent;
+window.openEventV47=function(eid){
+  const e=EVT47(eid);
+  if(e){
+    normalizeEventPayments47(e);
+    save();
+  }
+  return oldOpen47(eid);
+};
+window.openEvent=window.openEventV47;
+
+const oldView47=renderSalonView;
+renderSalonView=function(){
+  if(view==='finance')return renderFinanceV47();
+  return oldView47();
+};
+
+})();
