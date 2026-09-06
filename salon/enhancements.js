@@ -9968,3 +9968,330 @@ renderSalonView=function(){
 };
 
 })();
+
+
+// ============================================================
+// V36 - BORRAR FIESTA EN CASCADA + INGRESO/EGRESO MANUAL
+//       + NO DUPLICAR MOZA/ADICIONAL EN RESERVAS
+// ============================================================
+(function(){
+'use strict';
+
+data.movements=data.movements||[];
+data.assignments=data.assignments||[];
+data.orders=data.orders||[];
+data.cards=data.cards||[];
+data.auditLog=data.auditLog||[];
+
+const SID36=()=>session?.salonId;
+
+function event36(eid){
+  return (data.events||[]).find(e=>e.id===eid && e.salonId===SID36());
+}
+
+function restoreEventStock36(e){
+  (e?.stockItems||[]).forEach(i=>{
+    const p=(data.stockProducts||[]).find(x=>x.id===i.productId && x.salonId===SID36());
+    if(p)p.stock=Number(p.stock||0)+Number(i.qty||0);
+  });
+}
+
+// ----------------------------------------------------------
+// BORRAR FIESTA: borra TODOS los movimientos asociados
+// ----------------------------------------------------------
+window.confirmDeleteEvent=function(eid){
+  const e=event36(eid);
+  if(!e)return toast('Fiesta no encontrada');
+
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>🗑 Borrar fiesta</h2>
+        <p>${esc(e.child||e.client||'Fiesta')} · ${esc(e.date||'')}</p>
+      </div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="delete-event36">
+      <div class="field">
+        <label>Contraseña administrativa</label>
+        <input name="password" type="password" required>
+      </div>
+
+      <div class="field">
+        <label>Motivo</label>
+        <textarea name="reason" required placeholder="Ej: reserva cancelada / carga de prueba"></textarea>
+      </div>
+
+      <div class="admin-notice attention">
+        <span>⚠️</span>
+        <div>
+          <b>Se eliminará toda la información contable de esta fiesta.</b>
+          <small>Se borran pagos, señas, ingresos, gastos, personal asignado y movimientos vinculados.</small>
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="danger">Borrar fiesta y movimientos</button>
+      </div>
+    </form>
+  `);
+
+  $('#delete-event36').onsubmit=ev=>{
+    ev.preventDefault();
+    const f=Object.fromEntries(new FormData(ev.target));
+    const s=salon();
+
+    if(String(f.password||'')!==String(s?.password||'')){
+      return toast('Contraseña incorrecta');
+    }
+
+    const sid=SID36();
+
+    // Restaura stock usado por la fiesta.
+    restoreEventStock36(e);
+
+    // Borra TODO movimiento contable ligado al evento.
+    data.movements=(data.movements||[]).filter(m=>m.eventId!==eid);
+
+    // Borra personal asignado a la fiesta.
+    data.assignments=(data.assignments||[]).filter(a=>a.eventId!==eid);
+
+    // Borra pedidos vinculados específicamente a esa fiesta.
+    const orderIds=(data.orders||[])
+      .filter(o=>o.eventId===eid)
+      .map(o=>o.id);
+
+    data.orders=(data.orders||[]).filter(o=>o.eventId!==eid);
+
+    // Borra pagos de proveedor relacionados a pedidos de esa fiesta.
+    if(Array.isArray(data.providerPayments)){
+      data.providerPayments=data.providerPayments.filter(p=>!orderIds.includes(p.orderId));
+    }
+
+    // Borra tarjetas que dependan de esa fiesta.
+    data.cards=(data.cards||[]).filter(c=>c.eventId!==eid);
+
+    // Finalmente borra la fiesta.
+    data.events=(data.events||[]).filter(x=>x.id!==eid);
+
+    data.auditLog.push({
+      id:id(),
+      salonId:sid,
+      action:'BORRAR FIESTA EN CASCADA',
+      eventId:eid,
+      eventName:e.child||e.client||'',
+      reason:String(f.reason||'').trim(),
+      createdAt:new Date().toISOString()
+    });
+
+    save();
+    closeModal();
+    toast('Fiesta y todos sus movimientos fueron eliminados');
+
+    view='dashboard';
+    renderSalonShell();
+  };
+};
+
+// ----------------------------------------------------------
+// FINANZAS: INGRESO O EGRESO MANUAL
+// ----------------------------------------------------------
+window.openManualMoneyV36=function(type='Ingreso'){
+  const isExpense=type==='Gasto';
+
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>${isExpense?'Registrar egreso':'Ingresar dinero'}</h2>
+        <p>${isExpense?'Salida manual de dinero del salón':'Entrada manual de dinero al salón'}</p>
+      </div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="money36">
+      <div class="form-grid">
+        <div class="field">
+          <label>Tipo</label>
+          <select name="type">
+            <option value="Ingreso" ${!isExpense?'selected':''}>Ingreso</option>
+            <option value="Gasto" ${isExpense?'selected':''}>Egreso</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Motivo</label>
+          <select name="category">
+            <option>Monto inicial</option>
+            <option>Aporte del salón</option>
+            <option>Compra general</option>
+            <option>Servicio</option>
+            <option>Otro ingreso</option>
+            <option>Otro egreso</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Importe</label>
+          <input name="amount" type="number" min="1" required>
+        </div>
+
+        <div class="field">
+          <label>Medio</label>
+          <select name="method">
+            <option>Efectivo</option>
+            <option>Transferencia</option>
+            <option>Mercado Pago</option>
+            <option>Tarjeta</option>
+            <option>Otro</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Fecha</label>
+          <input name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required>
+        </div>
+
+        <div class="field span2">
+          <label>Detalle / observación</label>
+          <input name="detail" placeholder="Detalle del movimiento">
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="${isExpense?'danger':'primary'}">Registrar movimiento</button>
+      </div>
+    </form>
+  `);
+
+  $('#money36').onsubmit=e=>{
+    e.preventDefault();
+    const f=Object.fromEntries(new FormData(e.target));
+    const amount=Number(f.amount||0);
+    if(amount<=0)return toast('Ingresá un importe válido');
+
+    data.movements.push({
+      id:id(),
+      salonId:SID36(),
+      type:f.type,
+      category:f.category||'Movimiento manual',
+      concept:f.detail ? `${f.category} · ${f.detail}` : f.category,
+      amount,
+      method:f.method||'',
+      movementDate:f.date,
+      manualMovement:true,
+      createdAt:new Date().toISOString()
+    });
+
+    save();
+    closeModal();
+    toast(f.type==='Gasto'?'Egreso registrado':'Ingreso registrado');
+    renderFinanceV36();
+  };
+};
+
+window.renderFinanceV36=function(){
+  // Usa el render de finanzas de V33 si existe.
+  if(typeof renderFinanceV33==='function'){
+    renderFinanceV33();
+  }else if(typeof renderFinanceV35==='function'){
+    renderFinanceV35();
+  }else{
+    renderFinance();
+  }
+
+  const content=$('#content');
+  if(!content)return;
+
+  let toolbar=content.querySelector('.toolbar');
+  if(!toolbar){
+    toolbar=document.createElement('div');
+    toolbar.className='toolbar';
+    toolbar.style.marginBottom='16px';
+    content.prepend(toolbar);
+  }
+
+  // Elimina botón viejo de ingreso manual para no duplicar.
+  const old=toolbar.querySelector('#manual-income-btn35');
+  if(old)old.remove();
+
+  if(!toolbar.querySelector('#income36')){
+    const income=document.createElement('button');
+    income.id='income36';
+    income.className='primary';
+    income.textContent='+ Ingresar dinero';
+    income.onclick=()=>openManualMoneyV36('Ingreso');
+    toolbar.prepend(income);
+  }
+
+  if(!toolbar.querySelector('#expense36')){
+    const expense=document.createElement('button');
+    expense.id='expense36';
+    expense.className='danger';
+    expense.textContent='- Registrar egreso';
+    expense.onclick=()=>openManualMoneyV36('Gasto');
+    toolbar.appendChild(expense);
+  }
+};
+
+// ----------------------------------------------------------
+// RESERVAS: EVITA DUPLICAR MOZA COMO EXTRA + PERSONAL ADICIONAL
+// ----------------------------------------------------------
+function normalizeExtraName36(v){
+  return String(v||'')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+}
+
+// Toma V30 como base y, al guardar, elimina duplicados de "moza"
+// cuando ya fue cargada como personal adicional cobrado.
+const previousEventForm36=window.openEventFormV30 || window.openEventForm;
+
+window.openEventFormV36=function(eid=''){
+  previousEventForm36(eid);
+
+  const form=document.querySelector('#ev30');
+  if(!form)return;
+
+  const oldSubmit=form.onsubmit;
+
+  form.onsubmit=function(ev){
+    // Antes del guardado, si existe una moza marcada como personal adicional,
+    // desmarca extras cuyo nombre sea "moza" o equivalente para no cobrar dos veces.
+    const staffAdditional=[...document.querySelectorAll('.staffrow30')]
+      .some(r=>{
+        const selected=r.querySelector('.staffsel30')?.checked;
+        const charged=r.querySelector('.staffcharge30')?.checked;
+        const staffId=r.dataset.id;
+        const s=(data.staff||[]).find(x=>x.id===staffId);
+        return selected && charged && normalizeExtraName36(s?.role).includes('moza');
+      });
+
+    if(staffAdditional){
+      document.querySelectorAll('.extra30').forEach(chk=>{
+        const ex=(data.salonExtras||[]).find(x=>x.id===chk.value);
+        const name=normalizeExtraName36(ex?.name||ex?.description);
+        if(name.includes('moza')){
+          chk.checked=false;
+        }
+      });
+    }
+
+    return oldSubmit ? oldSubmit.call(form,ev) : undefined;
+  };
+};
+
+// aliases finales
+window.openEventForm=window.openEventFormV36;
+window.openEventFormV30=window.openEventFormV36;
+
+const route36=renderSalonView;
+renderSalonView=function(){
+  if(view==='finance')return renderFinanceV36();
+  return route36();
+};
+
+})();
