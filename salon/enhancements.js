@@ -16345,3 +16345,641 @@ renderSalonView=function(){
 };
 
 })();
+
+
+// ============================================================
+// V55 - PERFIL PROVEEDOR + CATÁLOGO COMPLETO + PEDIDOS POR DESTINO
+// ============================================================
+(function(){
+'use strict';
+
+data.providerProducts=data.providerProducts||[];
+data.marketSuppliers=data.marketSuppliers||[];
+data.stockPurchases=data.stockPurchases||[];
+
+const N55=v=>Number(v||0);
+const norm55=v=>String(v||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+const esc55=v=>{
+  try{return esc(v)}catch(e){
+    return String(v??'').replace(/[&<>"']/g,ch=>({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[ch]));
+  }
+};
+const money55=v=>{
+  try{return money(v)}catch(e){return '$ '+N55(v).toLocaleString('es-AR')}
+};
+const SID55=()=>{
+  try{return session?.salonId}catch(e){return window.session?.salonId}
+};
+const sess55=()=>{
+  try{return session||{}}catch(e){return window.session||{}}
+};
+
+function providerDisplay55(p){
+  return String(
+    p?.fantasyName ||
+    p?.businessName ||
+    p?.providerName ||
+    p?.name ||
+    p?.username ||
+    p?.userName ||
+    p?.email ||
+    'Proveedor'
+  ).trim();
+}
+function providerKeys55(p){
+  if(!p)return [];
+  return [
+    p.id,p.userId,p.providerId,p.supplierId,
+    p.username,p.userName,p.email,
+    p.name,p.businessName,p.fantasyName,p.providerName
+  ].filter(Boolean).map(norm55);
+}
+function sessionKeys55(){
+  const s=sess55();
+  return [
+    s.id,s.userId,s.providerId,s.supplierId,s.marketSupplierId,
+    s.username,s.userName,s.email,s.userEmail,
+    s.name,s.businessName,s.providerName
+  ].filter(Boolean).map(norm55);
+}
+function providerAccount55(){
+  const list=(data.marketSuppliers||[]).filter(p=>p.status!=='Suspendido'&&p.active!==false);
+  const sk=sessionKeys55();
+  return list.find(p=>providerKeys55(p).some(k=>sk.includes(k))) || null;
+}
+function productBelongs55(prod,p){
+  if(!prod||!p)return false;
+  const pk=providerKeys55(p);
+  return [
+    prod.providerId,prod.providerUserId,prod.userId,prod.providerEmail,prod.providerName
+  ].filter(Boolean).map(norm55).some(v=>pk.includes(v));
+}
+function productsForProvider55(p){
+  return (data.providerProducts||[])
+    .filter(x=>x.active!==false&&productBelongs55(x,p))
+    .sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+}
+function communityProviders55(){
+  return (data.marketSuppliers||[])
+    .filter(p=>p.status!=='Suspendido'&&p.active!==false)
+    .map(p=>({raw:p,id:p.id,display:providerDisplay55(p),products:productsForProvider55(p)}));
+}
+function ownProviders55(){
+  return (data.suppliers||[]).filter(x=>x.salonId===SID55());
+}
+function stockProducts55(){
+  return (data.stockProducts||[]).filter(x=>x.salonId===SID55());
+}
+function events55(){
+  return (data.events||[]).filter(x=>x.salonId===SID55()&&x.status!=='Cancelada')
+    .sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
+}
+function fileToDataUrl55(file,cb){
+  if(!file){cb('');return;}
+  const r=new FileReader();
+  r.onload=()=>cb(String(r.result||''));
+  r.onerror=()=>cb('');
+  r.readAsDataURL(file);
+}
+
+// ------------------------------------------------------------
+// PROVEEDOR: EDITAR PERFIL
+// ------------------------------------------------------------
+window.openProviderProfile55=function(){
+  const p=providerAccount55();
+  if(!p)return toast('No se pudo identificar el proveedor');
+
+  showModal(`
+    <div class="modal-title">
+      <div><h2>Editar perfil del proveedor</h2><p>Datos visibles para los salones.</p></div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="providerProfile55">
+      <div class="form-grid">
+        <div class="field span2">
+          <label>Nombre de fantasía</label>
+          <input name="fantasyName" required value="${esc55(p.fantasyName||p.businessName||p.name||'')}">
+        </div>
+        <div class="field span2">
+          <label>Dirección</label>
+          <input name="address" value="${esc55(p.address||'')}">
+        </div>
+        <div class="field">
+          <label>Teléfono / WhatsApp</label>
+          <input name="phone" value="${esc55(p.phone||p.whatsapp||'')}">
+        </div>
+        <div class="field">
+          <label>Email</label>
+          <input name="email" type="email" value="${esc55(p.email||'')}">
+        </div>
+        <div class="field span2">
+          <label>Logo del proveedor</label>
+          <input name="logoFile" type="file" accept="image/*">
+          ${p.logo?`<img src="${p.logo}" alt="Logo" style="margin-top:8px;max-width:150px;max-height:90px;object-fit:contain;border-radius:10px">`:''}
+        </div>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="primary">Guardar perfil</button>
+      </div>
+    </form>
+  `);
+
+  $('#providerProfile55').onsubmit=e=>{
+    e.preventDefault();
+    const fd=new FormData(e.target);
+    const file=e.target.querySelector('[name="logoFile"]')?.files?.[0];
+
+    const finish=logo=>{
+      p.fantasyName=String(fd.get('fantasyName')||'').trim();
+      p.businessName=p.fantasyName;
+      p.address=String(fd.get('address')||'').trim();
+      p.phone=String(fd.get('phone')||'').trim();
+      p.whatsapp=p.phone;
+      p.email=String(fd.get('email')||'').trim();
+      if(logo)p.logo=logo;
+
+      // Actualiza nombre visible en catálogo ya cargado.
+      (data.providerProducts||[]).forEach(prod=>{
+        if(productBelongs55(prod,p))prod.providerName=providerDisplay55(p);
+      });
+
+      save();closeModal();renderProviderCommunity55();toast('Perfil actualizado');
+    };
+
+    if(file)fileToDataUrl55(file,finish); else finish('');
+  };
+};
+
+// ------------------------------------------------------------
+// PROVEEDOR: PRODUCTOS COMPLETOS
+// ------------------------------------------------------------
+window.openProviderProduct55=function(productId=''){
+  const p=providerAccount55();
+  if(!p)return toast('Proveedor no identificado');
+
+  const old=productId?(data.providerProducts||[]).find(x=>x.id===productId&&productBelongs55(x,p)):null;
+
+  showModal(`
+    <div class="modal-title">
+      <div><h2>${old?'Editar':'Agregar'} producto</h2><p>Este producto será visible para los salones.</p></div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="providerProduct55">
+      <div class="form-grid">
+        <div class="field span2"><label>Producto</label><input name="name" required value="${esc55(old?.name||'')}"></div>
+        <div class="field"><label>Categoría</label><input name="category" required value="${esc55(old?.category||'')}"></div>
+        <div class="field"><label>Costo / precio publicado</label><input name="price" type="number" min="0" required value="${N55(old?.price)}"></div>
+        <div class="field"><label>Unidad</label><input name="unit" value="${esc55(old?.unit||'unidad')}" placeholder="unidad, caja, kg..."></div>
+        <div class="field span2"><label>Descripción</label><textarea name="description" required>${esc55(old?.description||'')}</textarea></div>
+        <div class="field span2">
+          <label>Foto del producto</label>
+          <input name="photoFile" type="file" accept="image/*">
+          ${old?.photo?`<img src="${old.photo}" alt="Producto" style="margin-top:8px;max-width:180px;max-height:130px;object-fit:cover;border-radius:12px">`:''}
+        </div>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="primary">Guardar producto</button>
+      </div>
+    </form>
+  `);
+
+  $('#providerProduct55').onsubmit=e=>{
+    e.preventDefault();
+    const fd=new FormData(e.target);
+    const file=e.target.querySelector('[name="photoFile"]')?.files?.[0];
+
+    const finish=photo=>{
+      const obj={
+        ...(old||{}),
+        id:old?.id||id(),
+        providerId:p.id,
+        providerUserId:p.userId||p.id,
+        providerEmail:p.email||'',
+        providerName:providerDisplay55(p),
+        name:String(fd.get('name')||'').trim(),
+        category:String(fd.get('category')||'').trim(),
+        description:String(fd.get('description')||'').trim(),
+        price:N55(fd.get('price')),
+        unit:String(fd.get('unit')||'unidad').trim(),
+        active:true
+      };
+      if(photo)obj.photo=photo;
+
+      if(old){
+        const ix=data.providerProducts.findIndex(x=>x.id===old.id);
+        if(ix>=0)data.providerProducts[ix]=obj;
+      }else data.providerProducts.push(obj);
+
+      save();closeModal();renderProviderCommunity55();toast('Producto guardado');
+    };
+
+    if(file)fileToDataUrl55(file,finish); else finish('');
+  };
+};
+
+window.renderProviderCommunity55=function(){
+  const p=providerAccount55();
+  if(!p)return toast('No se pudo identificar el proveedor');
+
+  const products=productsForProvider55(p);
+  const offers=(data.providerOffers||[])
+    .filter(x=>String(x.providerId)===String(p.id))
+    .sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
+
+  $('#content').innerHTML=`
+    <div class="card">
+      <div class="section-title">
+        <div style="display:flex;align-items:center;gap:12px">
+          ${p.logo?`<img src="${p.logo}" style="width:58px;height:58px;object-fit:contain;border-radius:12px">`:''}
+          <div>
+            <h2>${esc55(providerDisplay55(p))}</h2>
+            <small class="muted">${esc55(p.address||'')} ${p.phone?'· '+esc55(p.phone):''}</small>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="secondary" onclick="openProviderProfile55()">✏️ Editar perfil</button>
+          <button class="primary" onclick="openProviderOffer53()">+ Publicar oferta</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <div class="section-title">
+        <div><h3>Mis productos</h3><small class="muted">Catálogo visible para los salones.</small></div>
+        <button class="secondary" onclick="openProviderProduct55()">+ Agregar producto</button>
+      </div>
+
+      ${products.length?`
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px">
+          ${products.map(x=>`
+            <div class="card" style="margin:0">
+              ${x.photo?`<img src="${x.photo}" alt="${esc55(x.name)}" style="width:100%;height:150px;object-fit:cover;border-radius:12px">`:''}
+              <h3 style="margin-top:10px">${esc55(x.name)}</h3>
+              <small class="pill">${esc55(x.category||'Sin categoría')}</small>
+              <div style="margin-top:8px">${esc55(x.description||'')}</div>
+              <div style="margin-top:8px"><b>${money55(x.price)}</b> / ${esc55(x.unit||'unidad')}</div>
+              <div style="margin-top:10px"><button class="secondary small" onclick="openProviderProduct55('${x.id}')">Editar</button></div>
+            </div>`).join('')}
+        </div>
+      `:'<div class="empty">Todavía no cargaste productos.</div>'}
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h3>Ofertas publicadas</h3>
+      ${offers.length?offers.map(o=>`
+        <div style="padding:10px 0;border-bottom:1px solid #eee">
+          <b>${esc55(o.title)}</b>
+          <div>${esc55(o.message)}</div>
+        </div>`).join(''):'<div class="empty">Sin ofertas publicadas.</div>'}
+    </div>
+  `;
+};
+
+// Compatibilidad con versiones anteriores
+window.renderProviderCommunity54=window.renderProviderCommunity55;
+window.renderProviderCommunity53=window.renderProviderCommunity55;
+window.openProviderProduct54=window.openProviderProduct55;
+window.openProviderProduct53=window.openProviderProduct55;
+
+// ------------------------------------------------------------
+// SALÓN: VER PROVEEDORES DE COMUNIDAD CON FANTASÍA + CATÁLOGO
+// ------------------------------------------------------------
+function providerCard55(c){
+  return `
+    <div class="card" style="margin:0">
+      <div style="display:flex;align-items:center;gap:10px">
+        ${c.raw.logo?`<img src="${c.raw.logo}" style="width:54px;height:54px;object-fit:contain;border-radius:10px">`:''}
+        <div>
+          <h3 style="margin:0">${esc55(c.display)}</h3>
+          <small>${esc55(c.raw.address||'')}</small>
+        </div>
+      </div>
+
+      <div style="margin-top:10px;display:grid;gap:8px">
+        ${c.products.length?c.products.map(p=>`
+          <div style="display:grid;grid-template-columns:58px 1fr auto;gap:10px;align-items:center;padding:8px;border:1px solid #eee;border-radius:10px">
+            ${p.photo?`<img src="${p.photo}" style="width:58px;height:58px;object-fit:cover;border-radius:8px">`:'<div style="width:58px;height:58px;background:#f3f3f6;border-radius:8px"></div>'}
+            <div>
+              <b>${esc55(p.name)}</b>
+              <small style="display:block">${esc55(p.category||'')}</small>
+              <small style="display:block">${esc55(p.description||'')}</small>
+            </div>
+            <div><b>${money55(p.price)}</b><small style="display:block">/${esc55(p.unit||'unidad')}</small></div>
+          </div>`).join(''):'<div class="empty">Sin productos cargados.</div>'}
+      </div>
+
+      <button class="primary small" style="margin-top:10px" onclick="openStockPurchase55('community:${c.id}')">Comprar a este proveedor</button>
+    </div>
+  `;
+}
+
+window.renderSuppliersV55=function(){
+  const own=ownProviders55();
+  const community=communityProviders55();
+  const purchases=(data.stockPurchases||[])
+    .filter(x=>x.salonId===SID55())
+    .sort((a,b)=>String(b.createdAt||b.date||'').localeCompare(String(a.createdAt||a.date||'')));
+
+  setTitle('Proveedores','Proveedores propios, comunidad y pedidos');
+
+  $('#content').innerHTML=`
+    <div class="card">
+      <div class="section-title">
+        <div>
+          <h3>🚚 Proveedores</h3>
+          <small class="muted">Podés comprar para Stock o asociar el pedido a una fiesta.</small>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="secondary" onclick="openManualSupplier51()">+ Agregar proveedor manual</button>
+          <button class="primary" onclick="openStockPurchase55()">+ Nueva compra / pedido</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h3>Proveedores de la comunidad</h3>
+      <small class="muted">Se muestra el nombre de fantasía, logo, dirección, productos y precios cargados por cada proveedor.</small>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;margin-top:12px">
+        ${community.length?community.map(providerCard55).join(''):'<div class="empty">No hay proveedores de la comunidad.</div>'}
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h3>Mis proveedores manuales</h3>
+      ${own.length?own.map(s=>`
+        <div style="padding:10px 0;border-bottom:1px solid #eee">
+          <b>${esc55(s.name||s.businessName||'Proveedor')}</b>
+          <small style="display:block">${esc55(s.phone||'')} ${s.email?'· '+esc55(s.email):''}</small>
+        </div>`).join(''):'<div class="empty">Sin proveedores manuales.</div>'}
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h3>Pedidos / compras registrados</h3>
+      ${purchases.length?`
+        <div class="table-wrap"><table class="table">
+          <thead><tr><th>Fecha</th><th>Destino</th><th>Proveedor</th><th>Producto</th><th>Cantidad</th><th>Total</th><th>Pago</th><th>Entrega</th></tr></thead>
+          <tbody>${purchases.map(p=>`
+            <tr>
+              <td>${esc55(p.date||'')}</td>
+              <td>${p.targetType==='event'?`Fiesta: ${esc55(p.eventName||'')}`:'Stock'}</td>
+              <td>${esc55(p.supplierName||'')}</td>
+              <td>${esc55(p.productName||'')}</td>
+              <td>${N55(p.qty)}</td>
+              <td>${money55(p.total||0)}</td>
+              <td>${esc55(p.paymentStatus||'Pendiente')}</td>
+              <td>${esc55(p.deliveryStatus||'Pendiente de entrega')}</td>
+            </tr>`).join('')}</tbody>
+        </table></div>`:'<div class="empty">Todavía no hay pedidos.</div>'}
+    </div>
+  `;
+};
+
+// ------------------------------------------------------------
+// SALÓN: NUEVA COMPRA / PEDIDO PARA STOCK O FIESTA
+// ------------------------------------------------------------
+window.openStockPurchase55=function(preselect=''){
+  const own=ownProviders55();
+  const community=communityProviders55();
+  const events=events55();
+
+  const providerOptions=`
+    <option value="">Seleccionar proveedor</option>
+    ${own.length?`
+      <optgroup label="Mis proveedores manuales">
+        ${own.map(s=>`<option value="own:${s.id}" ${preselect===`own:${s.id}`?'selected':''}>${esc55(s.name||s.businessName||'Proveedor')}</option>`).join('')}
+      </optgroup>`:''}
+    ${community.length?`
+      <optgroup label="Proveedores de la comunidad">
+        ${community.map(c=>`<option value="community:${c.id}" ${preselect===`community:${c.id}`?'selected':''}>${esc55(c.display)}</option>`).join('')}
+      </optgroup>`:''}
+  `;
+
+  showModal(`
+    <div class="modal-title">
+      <div><h2>Nueva compra / pedido</h2><p>Elegí si el pedido es para Stock o para una fiesta.</p></div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="purchase55">
+      <div class="form-grid">
+        <div class="field">
+          <label>Destino del pedido</label>
+          <select id="targetType55" name="targetType">
+            <option value="stock">Para Stock</option>
+            <option value="event">Para una fiesta</option>
+          </select>
+        </div>
+
+        <div class="field" id="eventWrap55" style="display:none">
+          <label>Fiesta</label>
+          <select id="event55" name="eventId">
+            <option value="">Seleccionar fiesta</option>
+            ${events.map(e=>`<option value="${e.id}">${esc55(e.date||'')} · ${esc55(e.eventName||e.child||'Evento')}</option>`).join('')}
+          </select>
+        </div>
+
+        <div class="field span2">
+          <label>Proveedor</label>
+          <select id="supplier55" name="supplier" required>${providerOptions}</select>
+        </div>
+
+        <div class="field span2">
+          <label>Producto</label>
+          <select id="product55" name="product" required>
+            <option value="">Primero seleccioná un proveedor</option>
+          </select>
+          <small id="productHelp55" class="muted"></small>
+        </div>
+
+        <div class="field"><label>Cantidad</label><input id="qty55" name="qty" type="number" min="1" value="1" required></div>
+        <div class="field"><label>Precio unitario</label><input id="cost55" name="unitCost" type="number" min="0" required></div>
+        <div class="field"><label>Total</label><input id="total55" readonly></div>
+        <div class="field"><label>Fecha</label><input name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required></div>
+
+        <div class="field">
+          <label>Estado de pago</label>
+          <select name="paymentStatus"><option>Pendiente</option><option>Pagado</option></select>
+        </div>
+        <div class="field">
+          <label>Entrega</label>
+          <select name="deliveryStatus"><option>Pendiente de entrega</option><option>Entregado</option></select>
+        </div>
+      </div>
+
+      <div class="form-actions"><button class="primary">Registrar pedido</button></div>
+    </form>
+  `);
+
+  const targetEl=$('#targetType55'), eventWrap=$('#eventWrap55'), eventEl=$('#event55');
+  const supplierEl=$('#supplier55'), productEl=$('#product55'), qtyEl=$('#qty55');
+  const costEl=$('#cost55'), totalEl=$('#total55'), helpEl=$('#productHelp55');
+
+  function selectedCommunity55(id){
+    return community.find(x=>String(x.id)===String(id));
+  }
+  function updateTarget55(){
+    eventWrap.style.display=targetEl.value==='event'?'':'none';
+    eventEl.required=targetEl.value==='event';
+  }
+  function loadProducts55(){
+    const [source,pid]=String(supplierEl.value||'').split(':');
+
+    if(!pid){
+      productEl.innerHTML='<option value="">Primero seleccioná un proveedor</option>';
+      costEl.value=''; costEl.readOnly=false; helpEl.textContent=''; totalEl.value=money55(0);
+      return;
+    }
+
+    if(source==='community'){
+      const c=selectedCommunity55(pid);
+      const products=c?.products||[];
+      productEl.innerHTML='<option value="">Seleccionar producto de '+esc55(c?.display||'proveedor')+'</option>'+
+        products.map(p=>`
+          <option value="community:${p.id}">
+            ${esc55(p.name)} · ${money55(p.price)} / ${esc55(p.unit||'unidad')}
+          </option>`).join('');
+      helpEl.textContent=products.length
+        ? `Catálogo de ${c.display}. El precio lo definió el proveedor.`
+        : `${c?.display||'Este proveedor'} todavía no cargó productos.`;
+      costEl.readOnly=true; costEl.value='';
+    }else{
+      const products=stockProducts55();
+      productEl.innerHTML='<option value="">Seleccionar producto de Stock</option>'+
+        products.map(p=>`<option value="stock:${p.id}">${esc55(p.name)}</option>`).join('');
+      helpEl.textContent='Proveedor manual: elegí un producto del Stock del salón.';
+      costEl.readOnly=false; costEl.value='';
+    }
+    totalEl.value=money55(0);
+  }
+  function loadPrice55(){
+    const [source,pid]=String(supplierEl.value||'').split(':');
+    const [,productId]=String(productEl.value||'').split(':');
+    if(source==='community'){
+      const c=selectedCommunity55(pid);
+      const p=(c?.products||[]).find(x=>String(x.id)===String(productId));
+      costEl.value=p?N55(p.price):'';
+    }else{
+      const p=stockProducts55().find(x=>String(x.id)===String(productId));
+      if(p)costEl.value=N55(p.costPrice);
+    }
+    totalEl.value=money55(N55(qtyEl.value)*N55(costEl.value));
+  }
+
+  targetEl.onchange=updateTarget55;
+  supplierEl.onchange=loadProducts55;
+  productEl.onchange=loadPrice55;
+  qtyEl.oninput=loadPrice55;
+  costEl.oninput=loadPrice55;
+  updateTarget55();
+
+  if(preselect){
+    supplierEl.value=preselect;
+    loadProducts55();
+  }
+
+  $('#purchase55').onsubmit=e=>{
+    e.preventDefault();
+    const f=Object.fromEntries(new FormData(e.target));
+    const [source,supplierId]=String(f.supplier||'').split(':');
+    const [,productId]=String(f.product||'').split(':');
+
+    let sup=null,prod=null,supplierName='Proveedor';
+    if(source==='community'){
+      const c=selectedCommunity55(supplierId);
+      if(c){
+        sup=c.raw;supplierName=c.display;
+        prod=c.products.find(x=>String(x.id)===String(productId));
+      }
+    }else{
+      sup=own.find(x=>String(x.id)===String(supplierId));
+      supplierName=sup?.name||sup?.businessName||'Proveedor';
+      prod=stockProducts55().find(x=>String(x.id)===String(productId));
+    }
+
+    if(!sup)return toast('Proveedor no encontrado');
+    if(!prod)return toast('Producto no encontrado');
+    if(f.targetType==='event'&&!f.eventId)return toast('Seleccioná la fiesta');
+
+    const event=f.targetType==='event'?events.find(x=>String(x.id)===String(f.eventId)):null;
+    const qty=N55(f.qty);
+    const unitCost=source==='community'?N55(prod.price):N55(f.unitCost);
+    const total=qty*unitCost;
+
+    const purchase={
+      id:id(),salonId:SID55(),
+      targetType:f.targetType,
+      eventId:event?.id||'',
+      eventName:event?.eventName||event?.child||'',
+      supplierId,supplierSource:source,supplierName,
+      productId:prod.id,productName:prod.name,
+      productCategory:prod.category||'',
+      productDescription:prod.description||'',
+      productPhoto:prod.photo||'',
+      qty,unitCost,total,
+      date:f.date,
+      paymentStatus:f.paymentStatus,
+      deliveryStatus:f.deliveryStatus,
+      createdAt:new Date().toISOString()
+    };
+    data.stockPurchases.push(purchase);
+
+    // Solo suma a stock si el destino es Stock y está entregado.
+    if(f.targetType==='stock'&&f.deliveryStatus==='Entregado'){
+      let stock=stockProducts55().find(x=>norm55(x.name)===norm55(prod.name));
+      if(!stock){
+        stock={
+          id:id(),salonId:SID55(),
+          name:prod.name,
+          category:prod.category||'Compra a proveedor',
+          stock:0,minStock:0,costPrice:unitCost,salePrice:0
+        };
+        data.stockProducts.push(stock);
+      }
+      stock.stock=N55(stock.stock)+qty;
+      stock.costPrice=unitCost;
+    }
+
+    if(f.paymentStatus==='Pagado'){
+      data.movements=data.movements||[];
+      data.movements.push({
+        id:id(),salonId:SID55(),
+        eventId:event?.id||'',
+        type:'Gasto',
+        category:f.targetType==='event'?'Compra para fiesta':'Compra de stock',
+        concept:`Compra ${prod.name} · ${supplierName}${event?' · '+(event.eventName||event.child||'Fiesta'):''}`,
+        amount:total,
+        movementDate:f.date,
+        createdAt:new Date().toISOString(),
+        sourceKey:`v55:purchase:${purchase.id}`
+      });
+    }
+
+    save();closeModal();renderSuppliersV55();toast('Pedido registrado');
+  };
+};
+
+window.openStockPurchase54=window.openStockPurchase55;
+window.openStockPurchase53=window.openStockPurchase55;
+window.openPurchaseFromCommunity53=function(providerId){
+  openStockPurchase55(`community:${providerId}`);
+};
+
+// ------------------------------------------------------------
+// RUTAS FINALES
+// ------------------------------------------------------------
+window.renderSuppliersV54=window.renderSuppliersV55;
+window.renderSuppliersV53=window.renderSuppliersV55;
+
+const route55=renderSalonView;
+renderSalonView=function(){
+  if(view==='suppliers')return renderSuppliersV55();
+  return route55();
+};
+
+})();
