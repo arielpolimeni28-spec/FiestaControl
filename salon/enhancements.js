@@ -19744,3 +19744,537 @@ setTimeout(()=>{
 setInterval(bindMyProducts63,1200);
 
 })();
+
+
+// ============================================================
+// V64 - FIX DEFINITIVO:
+// 1) "MIS PRODUCTOS" TOMA LOS PRODUCTOS REALES DE marketSuppliers[].products
+// 2) NUEVOS/EDITADOS SE SINCRONIZAN EN AMBAS ESTRUCTURAS
+// 3) "PEDIDOS Y MENSAJES" SE ELIMINA SIEMPRE DEL MENÚ
+// ============================================================
+(function(){
+'use strict';
+
+data.providerProducts=data.providerProducts||[];
+data.marketSuppliers=data.marketSuppliers||[];
+
+const norm64=v=>String(v||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+const esc64=v=>{
+  try{return esc(v)}catch(e){
+    return String(v??'').replace(/[&<>"']/g,ch=>({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[ch]));
+  }
+};
+const money64=v=>{
+  try{return money(v)}catch(e){return '$ '+Number(v||0).toLocaleString('es-AR')}
+};
+const sess64=()=>{
+  try{return session||{}}catch(e){return window.session||{}}
+};
+function role64(){return String(sess64().role||'').toLowerCase();}
+
+function provider64(){
+  const s=sess64();
+  const vals=[
+    s.providerId,s.supplierId,s.marketSupplierId,s.userId,s.id,
+    s.email,s.userEmail,s.username,s.userName,s.name,
+    s.business,s.businessName,s.fantasyName
+  ].filter(Boolean).map(norm64);
+
+  return (data.marketSuppliers||[]).find(p=>{
+    const keys=[
+      p.id,p.userId,p.providerId,p.supplierId,p.email,
+      p.username,p.userName,p.name,p.business,p.businessName,
+      p.fantasyName,p.owner
+    ].filter(Boolean).map(norm64);
+    return keys.some(k=>vals.includes(k));
+  })||null;
+}
+
+function providerDisplay64(p){
+  return String(
+    p?.fantasyName ||
+    p?.business ||
+    p?.businessName ||
+    p?.name ||
+    p?.username ||
+    p?.email ||
+    'Proveedor'
+  ).trim();
+}
+
+function belongs64(prod,p){
+  if(!prod||!p)return false;
+  return String(prod.providerId||'')===String(p.id||'') ||
+         String(prod.providerUserId||'')===String(p.userId||p.id||'') ||
+         (!!prod.providerEmail && !!p.email && norm64(prod.providerEmail)===norm64(p.email)) ||
+         (!!prod.providerName && [
+           p.fantasyName,p.business,p.businessName,p.name
+         ].filter(Boolean).map(norm64).includes(norm64(prod.providerName)));
+}
+
+// ------------------------------------------------------------
+// MIGRACIÓN REAL:
+// los productos antiguos estaban dentro de marketSuppliers[].products.
+// Los copiamos/sincronizamos a providerProducts sin perderlos.
+// ------------------------------------------------------------
+function migrateRealProviderProducts64(){
+  const p=provider64();
+  if(!p)return false;
+
+  p.products=Array.isArray(p.products)?p.products:[];
+  data.providerProducts=data.providerProducts||[];
+
+  let changed=false;
+
+  // 1. Los productos históricos del proveedor -> providerProducts.
+  p.products.forEach(old=>{
+    if(!old||!old.id)return;
+    let dst=data.providerProducts.find(x=>
+      String(x.id)===String(old.id) &&
+      (belongs64(x,p) || !x.providerId)
+    );
+
+    if(!dst){
+      dst={
+        id:old.id,
+        providerId:p.id,
+        providerUserId:p.userId||p.id,
+        providerEmail:p.email||'',
+        providerName:providerDisplay64(p),
+        name:old.name||'Producto',
+        category:old.category||p.category||'',
+        description:old.description||'',
+        price:Number(old.price||old.cost||0),
+        unit:old.unit||'unidad',
+        photo:old.photo||old.image||'',
+        visibleToSalons:old.visibleToSalons!==false,
+        active:old.active!==false
+      };
+      data.providerProducts.push(dst);
+      changed=true;
+    }else{
+      // Completa campos faltantes, pero no pisa mejoras más nuevas.
+      const patch={
+        providerId:p.id,
+        providerUserId:p.userId||p.id,
+        providerEmail:p.email||'',
+        providerName:providerDisplay64(p)
+      };
+      Object.entries(patch).forEach(([k,v])=>{
+        if(String(dst[k]||'')!==String(v||'')){dst[k]=v;changed=true;}
+      });
+      if(!dst.name && old.name){dst.name=old.name;changed=true;}
+      if((dst.price===undefined||dst.price===null) && old.price!==undefined){dst.price=Number(old.price||0);changed=true;}
+      if(!dst.description && old.description){dst.description=old.description;changed=true;}
+      if(!dst.category && (old.category||p.category)){dst.category=old.category||p.category;changed=true;}
+      if(!dst.unit){dst.unit=old.unit||'unidad';changed=true;}
+      if(!dst.photo && (old.photo||old.image)){dst.photo=old.photo||old.image;changed=true;}
+      if(typeof dst.visibleToSalons==='undefined'){dst.visibleToSalons=old.visibleToSalons!==false;changed=true;}
+      if(typeof dst.active==='undefined'){dst.active=old.active!==false;changed=true;}
+    }
+  });
+
+  // 2. Productos nuevos/extendidos -> también marketSuppliers[].products.
+  data.providerProducts.filter(x=>belongs64(x,p)).forEach(src=>{
+    let old=p.products.find(x=>String(x.id)===String(src.id));
+    if(!old){
+      old={id:src.id};
+      p.products.push(old);
+      changed=true;
+    }
+
+    const synced={
+      name:src.name||old.name||'Producto',
+      price:Number(src.price||0),
+      description:src.description||'',
+      category:src.category||'',
+      unit:src.unit||'unidad',
+      photo:src.photo||'',
+      visibleToSalons:src.visibleToSalons!==false,
+      active:src.active!==false
+    };
+
+    Object.entries(synced).forEach(([k,v])=>{
+      if(JSON.stringify(old[k])!==JSON.stringify(v)){
+        old[k]=v;changed=true;
+      }
+    });
+  });
+
+  if(changed)save();
+  return changed;
+}
+
+function products64(){
+  const p=provider64();
+  if(!p)return [];
+  migrateRealProviderProducts64();
+
+  // Unión por ID de las dos fuentes para garantizar que nunca desaparezcan.
+  const map=new Map();
+
+  (p.products||[]).forEach(x=>{
+    if(!x||!x.id)return;
+    map.set(String(x.id),{
+      id:x.id,
+      providerId:p.id,
+      providerUserId:p.userId||p.id,
+      providerEmail:p.email||'',
+      providerName:providerDisplay64(p),
+      name:x.name||'Producto',
+      category:x.category||p.category||'',
+      description:x.description||'',
+      price:Number(x.price||x.cost||0),
+      unit:x.unit||'unidad',
+      photo:x.photo||x.image||'',
+      visibleToSalons:x.visibleToSalons!==false,
+      active:x.active!==false
+    });
+  });
+
+  (data.providerProducts||[]).filter(x=>belongs64(x,p)).forEach(x=>{
+    const old=map.get(String(x.id))||{};
+    map.set(String(x.id),{...old,...x});
+  });
+
+  return [...map.values()].sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+}
+
+// ------------------------------------------------------------
+// CREAR / EDITAR PRODUCTO.
+// Mismos campos: nombre, categoría, costo, unidad, descripción,
+// foto y visible para salones.
+// ------------------------------------------------------------
+window.openProviderProduct64=function(productId=''){
+  const p=provider64();
+  if(!p)return toast('Proveedor no identificado');
+
+  migrateRealProviderProducts64();
+  const old=productId?products64().find(x=>String(x.id)===String(productId)):null;
+  const visible=old?old.visibleToSalons!==false:true;
+
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>${old?'Editar':'Agregar'} producto</h2>
+        <p>${esc64(providerDisplay64(p))}</p>
+      </div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="providerProduct64">
+      <div class="form-grid">
+        <div class="field span2">
+          <label>Producto</label>
+          <input name="name" required value="${esc64(old?.name||'')}">
+        </div>
+
+        <div class="field">
+          <label>Categoría</label>
+          <input name="category" required value="${esc64(old?.category||p.category||'')}">
+        </div>
+
+        <div class="field">
+          <label>Costo / precio</label>
+          <input name="price" type="number" min="0" step="0.01" required value="${Number(old?.price||0)}">
+        </div>
+
+        <div class="field">
+          <label>Unidad</label>
+          <input name="unit" value="${esc64(old?.unit||'unidad')}" placeholder="unidad, caja, kg...">
+        </div>
+
+        <div class="field span2">
+          <label>Descripción</label>
+          <textarea name="description" required>${esc64(old?.description||'')}</textarea>
+        </div>
+
+        <div class="field span2">
+          <label>Foto del producto</label>
+          <input name="photoFile" type="file" accept="image/*">
+          ${old?.photo?`<img src="${old.photo}" style="margin-top:8px;max-width:180px;max-height:130px;object-fit:cover;border-radius:12px">`:''}
+        </div>
+
+        <div class="field span2">
+          <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
+            <input name="visibleToSalons" type="checkbox" ${visible?'checked':''}>
+            <span>
+              <b>Visible para los salones</b><br>
+              <small>Si está tildado, aparece a los salones para hacer pedidos.</small>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="primary">Guardar producto</button>
+      </div>
+    </form>
+  `);
+
+  document.querySelector('#providerProduct64').onsubmit=e=>{
+    e.preventDefault();
+    const fd=new FormData(e.target);
+    const file=e.target.querySelector('[name="photoFile"]')?.files?.[0];
+
+    const finish=photo=>{
+      const obj={
+        id:old?.id||id(),
+        providerId:p.id,
+        providerUserId:p.userId||p.id,
+        providerEmail:p.email||'',
+        providerName:providerDisplay64(p),
+        name:String(fd.get('name')||'').trim(),
+        category:String(fd.get('category')||'').trim(),
+        description:String(fd.get('description')||'').trim(),
+        price:Number(fd.get('price')||0),
+        unit:String(fd.get('unit')||'unidad').trim(),
+        photo:photo||old?.photo||'',
+        visibleToSalons:fd.has('visibleToSalons'),
+        active:true
+      };
+
+      // providerProducts
+      const ix=data.providerProducts.findIndex(x=>String(x.id)===String(obj.id));
+      if(ix>=0)data.providerProducts[ix]={...data.providerProducts[ix],...obj};
+      else data.providerProducts.push(obj);
+
+      // marketSuppliers[].products (fuente histórica real)
+      p.products=Array.isArray(p.products)?p.products:[];
+      const px=p.products.findIndex(x=>String(x.id)===String(obj.id));
+      const legacy={
+        id:obj.id,
+        name:obj.name,
+        price:obj.price,
+        description:obj.description,
+        category:obj.category,
+        unit:obj.unit,
+        photo:obj.photo,
+        visibleToSalons:obj.visibleToSalons,
+        active:true
+      };
+      if(px>=0)p.products[px]={...p.products[px],...legacy};
+      else p.products.push(legacy);
+
+      save();
+      closeModal();
+      renderMyProducts64();
+      toast('Producto guardado');
+    };
+
+    if(file){
+      const r=new FileReader();
+      r.onload=()=>finish(String(r.result||''));
+      r.onerror=()=>finish('');
+      r.readAsDataURL(file);
+    }else finish('');
+  };
+};
+
+window.deleteProviderProduct64=function(productId){
+  const p=provider64();
+  if(!p)return toast('Proveedor no identificado');
+
+  const prod=products64().find(x=>String(x.id)===String(productId));
+  if(!prod)return toast('Producto no encontrado');
+
+  if(!confirm(`¿Borrar el producto "${prod.name}"?`))return;
+
+  data.providerProducts=(data.providerProducts||[]).filter(x=>String(x.id)!==String(productId));
+  p.products=(Array.isArray(p.products)?p.products:[]).filter(x=>String(x.id)!==String(productId));
+
+  save();
+  renderMyProducts64();
+  toast('Producto eliminado');
+};
+
+// ------------------------------------------------------------
+// MIS PRODUCTOS - PANTALLA DEFINITIVA.
+// ------------------------------------------------------------
+window.renderMyProducts64=function(){
+  const p=provider64();
+  if(!p)return toast('Proveedor no identificado');
+
+  migrateRealProviderProducts64();
+  const products=products64();
+  const content=document.querySelector('#content');
+  if(!content)return;
+
+  // Marcador para que el observer no vuelva a reemplazar nuestra propia vista.
+  content.dataset.v64Products='1';
+
+  try{
+    if(typeof setTitle==='function')setTitle('Mis productos','Ofrecé productos y conectate con salones.');
+  }catch(e){}
+
+  content.innerHTML=`
+    <div class="card">
+      <div class="section-title">
+        <div>
+          <h2>Mis productos</h2>
+          <small class="muted">Administrá acá todos los productos de ${esc64(providerDisplay64(p))}.</small>
+        </div>
+        <button class="primary" onclick="openProviderProduct64()">+ Producto</button>
+      </div>
+
+      ${products.length?`
+        <div class="table-wrap" style="margin-top:12px">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Producto</th>
+                <th>Categoría</th>
+                <th>Precio</th>
+                <th>Visible</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${products.map(x=>`
+                <tr>
+                  <td>
+                    <div style="display:flex;gap:10px;align-items:center">
+                      ${x.photo?`<img src="${x.photo}" style="width:58px;height:58px;object-fit:cover;border-radius:9px">`:''}
+                      <div>
+                        <b>${esc64(x.name)}</b>
+                        <small style="display:block">${esc64(x.description||'')}</small>
+                      </div>
+                    </div>
+                  </td>
+                  <td>${esc64(x.category||'')}</td>
+                  <td><b>${money64(x.price||0)}</b></td>
+                  <td>${x.visibleToSalons!==false?'✅ Sí':'🚫 No'}</td>
+                  <td>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap">
+                      <button class="secondary small" onclick="openProviderProduct64('${x.id}')">✏️ Editar</button>
+                      <button class="danger small" onclick="deleteProviderProduct64('${x.id}')">🗑️ Borrar</button>
+                    </div>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `:'<div class="empty" style="margin-top:12px">Todavía no hay productos cargados.</div>'}
+    </div>
+  `;
+};
+
+// Alias de todos los renders anteriores
+window.renderMyProducts63=window.renderMyProducts64;
+window.renderMyProducts62=window.renderMyProducts64;
+window.renderMyProducts61=window.renderMyProducts64;
+
+window.openProviderProduct56=window.openProviderProduct64;
+window.openProviderProduct55=window.openProviderProduct64;
+window.openProviderProduct54=window.openProviderProduct64;
+window.openProviderProduct53=window.openProviderProduct64;
+
+window.deleteProviderProduct59=window.deleteProviderProduct64;
+
+// ------------------------------------------------------------
+// MENÚ:
+// - interceptar Mis productos antes que cualquier handler antiguo.
+// - ELIMINAR SIEMPRE "Pedidos y mensajes".
+// ------------------------------------------------------------
+function menuNode64(el){
+  if(!el)return null;
+  return el.closest('button,a,li,[role="button"],.nav-item,.menu-item,.sidebar-item')||el;
+}
+
+function removeOldOrdersMessages64(){
+  if(!['provider','supplier'].includes(role64()))return;
+
+  const all=[...document.querySelectorAll(
+    'button,a,li,[role="button"],.nav-item,.menu-item,.sidebar-item'
+  )];
+
+  all.forEach(el=>{
+    const txt=norm64(el.textContent);
+    if(txt==='pedidos y mensajes' || txt.includes('pedidos y mensajes')){
+      const node=menuNode64(el);
+      if(node && norm64(node.textContent).includes('pedidos y mensajes')){
+        node.remove();
+      }
+    }
+  });
+}
+
+document.addEventListener('click',function(ev){
+  if(!['provider','supplier'].includes(role64()))return;
+
+  const node=menuNode64(ev.target);
+  if(!node)return;
+
+  const txt=norm64(node.textContent);
+
+  if(txt==='mis productos'){
+    ev.preventDefault();
+    ev.stopPropagation();
+    ev.stopImmediatePropagation();
+    setTimeout(renderMyProducts64,0);
+    return false;
+  }
+
+  if(txt==='pedidos y mensajes' || txt.includes('pedidos y mensajes')){
+    ev.preventDefault();
+    ev.stopPropagation();
+    ev.stopImmediatePropagation();
+    node.remove();
+    return false;
+  }
+},true);
+
+// ------------------------------------------------------------
+// OBSERVER:
+// El portal vuelve a dibujar el menú/pantalla en algunos cambios.
+// Este observer corrige cada re-render automáticamente.
+// ------------------------------------------------------------
+let observerLock64=false;
+function repairProviderUI64(){
+  if(observerLock64)return;
+  if(!['provider','supplier'].includes(role64()))return;
+
+  observerLock64=true;
+  try{
+    removeOldOrdersMessages64();
+
+    // Si se abrió la pantalla nativa "Mis productos" (la de la captura),
+    // reemplazarla por nuestra vista que sí toma p.products.
+    const content=document.querySelector('#content');
+    if(content && content.dataset.v64Products!=='1'){
+      const pageTitle=norm64(document.querySelector('#title')?.textContent||'');
+      const heading=[...content.querySelectorAll('h1,h2,h3')]
+        .some(h=>norm64(h.textContent)==='mis productos');
+
+      const nativeEmpty=norm64(content.textContent).includes('todavia no publicaste productos');
+
+      if(pageTitle==='mis productos' || heading || nativeEmpty){
+        setTimeout(()=>{
+          try{renderMyProducts64();}catch(e){}
+        },0);
+      }
+    }
+  }finally{
+    observerLock64=false;
+  }
+}
+
+const obs64=new MutationObserver(()=>repairProviderUI64());
+obs64.observe(document.documentElement,{childList:true,subtree:true});
+
+setTimeout(()=>{
+  migrateRealProviderProducts64();
+  removeOldOrdersMessages64();
+  repairProviderUI64();
+},250);
+
+setInterval(()=>{
+  removeOldOrdersMessages64();
+  repairProviderUI64();
+},1000);
+
+})();
