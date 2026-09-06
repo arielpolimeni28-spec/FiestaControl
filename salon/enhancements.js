@@ -13840,3 +13840,280 @@ renderSalonView=function(){
 };
 
 })();
+
+
+// ============================================================
+// V49 - FIX DEFINITIVO BOTONES "IMPRIMIR ESTADO"
+// Función completamente autónoma y global.
+// ============================================================
+(function(){
+'use strict';
+
+function n49(v){ return Number(v||0); }
+function esc49(v){
+  return String(v??'').replace(/[&<>"']/g,ch=>({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[ch]));
+}
+function money49(v){
+  try{
+    return new Intl.NumberFormat('es-AR',{
+      style:'currency',currency:'ARS',maximumFractionDigits:0
+    }).format(n49(v));
+  }catch(e){
+    return '$ '+n49(v).toLocaleString('es-AR');
+  }
+}
+function norm49(v){
+  return String(v||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+}
+function currentSalon49(){
+  try{
+    if(typeof salon==='function') return salon()||{};
+  }catch(e){}
+  const sid=window.session?.salonId;
+  return (window.data?.salons||[]).find(s=>s.id===sid)||{};
+}
+function event49(eid){
+  const sid=window.session?.salonId;
+  return (window.data?.events||[]).find(e=>e.id===eid && (!sid || e.salonId===sid));
+}
+function isPayment49(m){
+  const t=norm49(m?.type), c=norm49(m?.category), q=norm49(m?.concept);
+  return t==='ingreso' || t==='cobro' ||
+         c.includes('cobro') || c.includes('sena') || c.includes('reserva') ||
+         q.includes('pago') || q.includes('sena');
+}
+function isDeposit49(m){
+  const c=norm49(m?.category), q=norm49(m?.concept), sk=String(m?.sourceKey||'');
+  return c.includes('sena') || q.includes('sena') ||
+         sk.includes(':deposit:') || sk.startsWith('v47:deposit:');
+}
+function payments49(e){
+  const sid=window.session?.salonId;
+  const all=(window.data?.movements||[]).filter(m =>
+    m.eventId===e.id && (!sid || m.salonId===sid) && isPayment49(m)
+  );
+
+  const target=n49(e.paid);
+  if(target<=0)return [];
+
+  const out=[];
+  let sum=0;
+  const dep=n49(e.deposit);
+
+  if(dep>0){
+    const d=all.find(isDeposit49);
+    out.push(d ? {...d,amount:dep} : {
+      id:'dep-'+e.id,
+      concept:'Seña de reserva',
+      method:e.depositMethod||'',
+      movementDate:e.depositDate||'',
+      amount:dep
+    });
+    sum+=dep;
+  }
+
+  const seen=new Set();
+  for(const m of all.filter(x=>!isDeposit49(x))){
+    if(sum>=target) break;
+    const key=[
+      n49(m.amount),
+      norm49(m.method),
+      String(m.movementDate||''),
+      norm49(m.reference||''),
+      norm49(m.concept||'')
+    ].join('|');
+
+    if(seen.has(key)) continue;
+    seen.add(key);
+
+    const amount=Math.min(n49(m.amount),target-sum);
+    if(amount<=0)continue;
+    out.push({...m,amount});
+    sum+=amount;
+  }
+  return out;
+}
+
+function openPrint49(title,html,autoPrint){
+  const w=window.open('','_blank','width=1000,height=800');
+  if(!w){
+    if(typeof toast==='function') toast('El navegador bloqueó la ventana. Habilitá ventanas emergentes para imprimir.');
+    else alert('El navegador bloqueó la ventana de impresión.');
+    return;
+  }
+
+  w.document.open();
+  w.document.write(`<!doctype html>
+  <html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <title>${esc49(title)}</title>
+    <style>
+      *{box-sizing:border-box}
+      body{font-family:Arial,Helvetica,sans-serif;color:#111;margin:0;background:#fff}
+      .actions{max-width:900px;margin:0 auto;padding:12px 0;display:flex;gap:8px}
+      .actions button{padding:10px 14px;border:1px solid #bbb;background:#fff;border-radius:8px;cursor:pointer}
+      .page{max-width:900px;margin:0 auto;padding:28px}
+      .head{display:flex;justify-content:space-between;gap:20px;border-bottom:2px solid #111;padding-bottom:14px;margin-bottom:18px}
+      .head h1{margin:0;font-size:24px}.right{text-align:right}.muted{font-size:12px;color:#666}
+      h2{font-size:17px;margin:20px 0 8px}
+      .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 28px}
+      .row{display:flex;justify-content:space-between;gap:20px;padding:7px 0;border-bottom:1px solid #ddd}
+      .total{font-weight:bold;font-size:18px;border-top:2px solid #111;margin-top:8px}
+      table{width:100%;border-collapse:collapse}
+      th,td{padding:8px;border-bottom:1px solid #ddd;text-align:left;font-size:13px}
+      .sign{margin-top:50px;display:grid;grid-template-columns:1fr 1fr;gap:60px}
+      .line{border-top:1px solid #111;text-align:center;padding-top:6px;font-size:12px}
+      @media print{
+        .actions{display:none}.page{padding:0}
+        @page{size:A4;margin:14mm}
+      }
+    </style>
+  </head>
+  <body>
+    <div class="actions">
+      <button onclick="window.print()">🖨 Imprimir / Guardar PDF</button>
+      <button onclick="window.close()">Cerrar</button>
+    </div>
+    <div class="page">${html}</div>
+  </body></html>`);
+  w.document.close();
+
+  if(autoPrint){
+    setTimeout(()=>{
+      try{ w.focus(); w.print(); }catch(e){}
+    },500);
+  }
+}
+
+// FUNCIÓN GLOBAL USADA POR TODOS LOS BOTONES
+window.printReservationStatus49=function(eid,autoPrint=true){
+  try{
+    const e=event49(eid);
+    if(!e){
+      if(typeof toast==='function') toast('No se encontró la reserva');
+      return;
+    }
+
+    const s=currentSalon49();
+    const pays=payments49(e);
+    const total=n49(e.total);
+    const paid=n49(e.paid);
+    const balance=Math.max(0,total-paid);
+
+    const services=[];
+    if(e.includesTableware) services.push('Vajilla');
+    if(e.includesLinen) services.push('Mantelería');
+    if(e.includesCoffee) services.push('Cafetería');
+
+    const html=`
+      <div class="head">
+        <div>
+          <h1>${esc49(s.name||'FiestaControl')}</h1>
+          <div class="muted">${esc49(s.address||'')}</div>
+          <div class="muted">${esc49(s.phone||'')}${s.email?' · '+esc49(s.email):''}</div>
+        </div>
+        <div class="right">
+          <b>ESTADO DE RESERVA</b>
+          <div class="muted">Emitido ${new Date().toLocaleString('es-AR')}</div>
+        </div>
+      </div>
+
+      <h2>Datos del evento</h2>
+      <div class="grid">
+        <div><b>Tipo:</b> ${esc49(e.eventTypeName||'Evento')}</div>
+        <div><b>Fecha:</b> ${esc49(e.date||'')}</div>
+        <div><b>Nombre:</b> ${esc49(e.eventName||e.child||'')}</div>
+        <div><b>Fecha de cumpleaños:</b> ${esc49(e.birthdayDate||'—')}</div>
+        <div><b>Horario:</b> ${esc49(e.start||'')} a ${esc49(e.end||'')}</div>
+        <div><b>Duración:</b> ${n49(e.durationHours)} h${n49(e.extraHours)>0?' + '+n49(e.extraHours)+' h extra':''}</div>
+        <div><b>Adultos:</b> ${n49(e.adults)}</div>
+        <div><b>Niños:</b> ${n49(e.children)}</div>
+        <div><b>Responsable:</b> ${esc49(e.client||'')}</div>
+        <div><b>Estado:</b> ${esc49(e.status||'')}</div>
+      </div>
+
+      <h2>Incluido</h2>
+      <div class="row">
+        <span>Personal base</span>
+        <b>${n49(e.includedWaiters)} mozo(s) · ${n49(e.includedKitchen)} cocina · ${n49(e.includedAnimators)} animador(es)</b>
+      </div>
+      <div class="row">
+        <span>Servicios</span>
+        <b>${services.length?services.join(' · '):'—'}</b>
+      </div>
+
+      <h2>Adicionales</h2>
+      <div class="row"><span>Adultos adicionales (${n49(e.extraAdultQty)})</span><b>${money49(e.extraAdultTotal)}</b></div>
+      <div class="row"><span>Niños adicionales (${n49(e.extraChildQty)})</span><b>${money49(e.extraChildTotal)}</b></div>
+      <div class="row"><span>Mozo adicional (${n49(e.extraWaiters)})</span><b>${money49(e.extraWaiterTotal)}</b></div>
+      <div class="row"><span>Cocina adicional (${n49(e.extraKitchen)})</span><b>${money49(e.extraKitchenTotal)}</b></div>
+      <div class="row"><span>Animador adicional (${n49(e.extraAnimators)})</span><b>${money49(e.extraAnimatorTotal)}</b></div>
+      <div class="row"><span>Horas extra (${n49(e.extraHours)})</span><b>${money49(e.extraHourTotal)}</b></div>
+
+      <h2>Estado económico</h2>
+      <div class="row"><span>Total de la fiesta</span><b>${money49(total)}</b></div>
+      <div class="row"><span>Total pagado</span><b>${money49(paid)}</b></div>
+      <div class="row total"><span>Saldo pendiente</span><b>${money49(balance)}</b></div>
+
+      <h2>Pagos registrados</h2>
+      ${pays.length ? `
+        <table>
+          <thead><tr><th>Fecha</th><th>Concepto</th><th>Medio</th><th>Importe</th></tr></thead>
+          <tbody>
+            ${pays.map(m=>`
+              <tr>
+                <td>${esc49(m.movementDate||'')}</td>
+                <td>${esc49(m.concept||'Pago')}</td>
+                <td>${esc49(m.method||'')}</td>
+                <td>${money49(m.amount)}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      ` : '<div class="muted">No hay pagos registrados.</div>'}
+
+      <div style="text-align:right;margin-top:10px"><b>Total pagos: ${money49(paid)}</b></div>
+      <div class="sign">
+        <div class="line">Firma del salón</div>
+        <div class="line">Firma del cliente</div>
+      </div>
+    `;
+
+    openPrint49(`Estado reserva - ${e.eventName||e.child||'Evento'}`,html,autoPrint);
+  }catch(err){
+    console.error('printReservationStatus49',err);
+    alert('No se pudo generar el estado de reserva. Error: '+err.message);
+  }
+};
+
+// Compatibilidad total con TODAS las versiones anteriores y onclick existentes.
+window.printReservationStatus48=window.printReservationStatus49;
+window.printReservationStatus46=window.printReservationStatus49;
+window.printReservationStatus=window.printReservationStatus49;
+
+// Repara botones ya renderizados por versiones anteriores.
+function repairPrintButtons49(){
+  document.querySelectorAll('button').forEach(btn=>{
+    const txt=String(btn.textContent||'').toLowerCase();
+    if(!txt.includes('imprimir estado')) return;
+
+    const onclick=btn.getAttribute('onclick')||'';
+    const m=onclick.match(/['"]([^'"]+)['"]/);
+    if(m && m[1]){
+      const eid=m[1];
+      btn.onclick=function(ev){
+        ev?.preventDefault?.();
+        window.printReservationStatus49(eid,true);
+      };
+      btn.setAttribute('onclick',`printReservationStatus49('${eid}',true)`);
+    }
+  });
+}
+
+// Repara al cargar y después de cada render.
+setTimeout(repairPrintButtons49,300);
+setInterval(repairPrintButtons49,1500);
+
+})();
