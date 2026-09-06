@@ -5378,3 +5378,256 @@
   }, 1400);
 
 })();
+
+// ============================================================
+// V20 - RESTAURA "MI SALÓN" + EMAIL + SALDOS POST-RESET CORRECTOS
+// ============================================================
+(function () {
+  'use strict';
+
+  data.financeResets = data.financeResets || [];
+
+  function v20IsOwner() {
+    return session?.role === 'salon' && !session?.salonUserId;
+  }
+
+  function v20ResetRecord() {
+    return (data.financeResets || [])
+      .filter(r => r.salonId === session?.salonId)
+      .sort((a,b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))[0] || null;
+  }
+
+  function v20HasFinancialReset() {
+    const r = v20ResetRecord();
+    if (r) return true;
+    return (data.events || []).some(e => e.salonId === session?.salonId && e.financeResetLocked);
+  }
+
+  function v20EnsureProfileNav() {
+    if (!Array.isArray(salonNav)) return;
+    if (!salonNav.some(x => x[0] === 'profile')) {
+      salonNav.push(['profile','⚙️','Mi salón']);
+    }
+    const btn = document.querySelector('[data-v="profile"]');
+    if (btn && v20IsOwner()) {
+      btn.style.display = '';
+      btn.hidden = false;
+    }
+  }
+
+  const prevShellV20 = renderSalonShell;
+  renderSalonShell = function() {
+    const r = prevShellV20();
+    setTimeout(v20EnsureProfileNav, 0);
+    setTimeout(v20EnsureProfileNav, 100);
+    return r;
+  };
+
+  async function v20LoadEmailStatus() {
+    const s = salon();
+    if (!s) return null;
+    try {
+      const r = await fetch(`/api/salon-email?salonId=${encodeURIComponent(s.id)}`, {cache:'no-store'});
+      return await r.json();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function v20EmailPanel() {
+    if (!v20IsOwner()) return;
+    const content = document.querySelector('#content');
+    if (!content || document.querySelector('#v20-email-settings')) return;
+
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.id = 'v20-email-settings';
+    card.style.marginTop = '16px';
+    card.innerHTML = `
+      <div class="section-title">
+        <div>
+          <h3>✉️ Email de confirmación de reservas</h3>
+          <small class="muted">Configurá el correo desde el que salen las confirmaciones del salón.</small>
+        </div>
+      </div>
+      <div id="v20-email-status" class="admin-notice">
+        <span>📧</span>
+        <div><b>Estado del email</b><small>Cargando configuración...</small></div>
+      </div>
+      <div class="toolbar" style="margin-top:12px">
+        <button class="primary" onclick="openEmailSettingsV20()">Configurar email</button>
+      </div>
+    `;
+    content.appendChild(card);
+
+    v20LoadEmailStatus().then(res => {
+      const box = document.querySelector('#v20-email-status');
+      if (!box) return;
+      if (res?.configured) {
+        box.innerHTML = `<span>✅</span><div><b>Email configurado</b><small>${esc(res.email || '')}${res.provider ? ' · ' + esc(res.provider) : ''}</small></div>`;
+      } else {
+        box.innerHTML = `<span>⚠️</span><div><b>Email sin configurar</b><small>Configurá Gmail, Outlook, Yahoo u otro SMTP.</small></div>`;
+      }
+    });
+  }
+
+  window.openEmailSettingsV20 = async function() {
+    if (!v20IsOwner()) return toast('Solo el administrador del salón puede configurar el email');
+    const current = await v20LoadEmailStatus() || {};
+
+    showModal(`
+      <div class="modal-title">
+        <div><h2>✉️ Configurar email</h2><p>Confirmaciones de reserva del salón</p></div>
+        <button class="ghost small" onclick="closeModal()">✕</button>
+      </div>
+      <form id="v20-email-form">
+        <div class="form-grid">
+          <div class="field">
+            <label>Proveedor</label>
+            <select name="provider">
+              <option value="gmail" ${current.provider==='gmail'?'selected':''}>Gmail</option>
+              <option value="outlook" ${current.provider==='outlook'?'selected':''}>Outlook / Hotmail</option>
+              <option value="yahoo" ${current.provider==='yahoo'?'selected':''}>Yahoo</option>
+              <option value="other" ${current.provider==='other'?'selected':''}>Otro SMTP</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Email remitente</label>
+            <input name="email" type="email" required value="${esc(current.email || '')}">
+          </div>
+          <div class="field span2">
+            <label>Contraseña / clave de aplicación</label>
+            <input name="password" type="password" ${current.configured ? '' : 'required'} placeholder="${current.configured ? 'Dejar vacío para mantener la actual' : ''}">
+          </div>
+          <div class="field v20-custom-smtp">
+            <label>Servidor SMTP</label>
+            <input name="smtpHost" value="${esc(current.smtpHost || '')}" placeholder="smtp.ejemplo.com">
+          </div>
+          <div class="field v20-custom-smtp">
+            <label>Puerto</label>
+            <input name="smtpPort" type="number" value="${Number(current.smtpPort || 587)}">
+          </div>
+          <div class="field v20-custom-smtp">
+            <label>Seguridad</label>
+            <select name="smtpSecurity">
+              <option value="starttls" ${current.smtpSecurity==='starttls'?'selected':''}>STARTTLS</option>
+              <option value="ssl" ${current.smtpSecurity==='ssl'?'selected':''}>SSL</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+          <button class="primary">Guardar email</button>
+        </div>
+      </form>
+    `);
+
+    const form = document.querySelector('#v20-email-form');
+    function toggleCustom() {
+      const custom = form.querySelector('[name="provider"]').value === 'other';
+      form.querySelectorAll('.v20-custom-smtp').forEach(el => el.style.display = custom ? '' : 'none');
+    }
+    form.querySelector('[name="provider"]').onchange = toggleCustom;
+    toggleCustom();
+
+    form.onsubmit = async ev => {
+      ev.preventDefault();
+      const f = Object.fromEntries(new FormData(form));
+      const s = salon();
+      try {
+        const r = await fetch('/api/salon-email', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({
+            salonId:s.id,
+            provider:f.provider,
+            email:f.email,
+            password:f.password || '',
+            smtpHost:f.smtpHost || '',
+            smtpPort:Number(f.smtpPort || 587),
+            smtpSecurity:f.smtpSecurity || 'starttls'
+          }),
+          cache:'no-store'
+        });
+        const res = await r.json().catch(() => ({}));
+        if (!r.ok || !res.ok) throw new Error(res.error || 'No se pudo guardar');
+        closeModal();
+        toast('Email configurado');
+        renderProfile();
+      } catch (err) {
+        toast(err.message || 'No se pudo guardar el email');
+      }
+    };
+  };
+
+  const prevProfileV20 = renderProfile;
+  renderProfile = function() {
+    prevProfileV20();
+    setTimeout(v20EmailPanel, 0);
+  };
+
+  const prevDashboardV20 = renderDashboard;
+  renderDashboard = function() {
+    prevDashboardV20();
+    if (!v20HasFinancialReset()) return;
+
+    const content = document.querySelector('#content');
+    if (!content) return;
+
+    const reset = v20ResetRecord();
+    const resetAt = reset?.createdAt || '';
+
+    const events = (data.events || []).filter(e => {
+      if (e.salonId !== session?.salonId) return false;
+      if (e.financeResetLocked) return false;
+      if (e.beforeFinanceReset) return false;
+      if (resetAt && e.createdAt && String(e.createdAt) <= resetAt) return false;
+      return true;
+    });
+
+    const billed = events.reduce((s,e) => s + Number(e.total || 0), 0);
+    const paid = events.reduce((s,e) => s + Number(e.paid || 0), 0);
+    const balance = Math.max(0, billed - paid);
+
+    [...content.querySelectorAll('.card.stat')].forEach(card => {
+      const label = String(card.querySelector('small')?.textContent || '').toLowerCase();
+      const value = card.querySelector('strong');
+      const em = card.querySelector('em');
+      if (!value) return;
+
+      if (label.includes('facturado')) {
+        value.textContent = money(billed);
+        if (em) em.textContent = billed ? 'Reservas posteriores al reinicio' : 'Sin movimientos desde el reinicio';
+      }
+      if (label.includes('cobrado')) {
+        value.textContent = money(paid);
+        if (em) em.textContent = billed ? `${Math.round(paid/billed*100)}% del total` : '0% del total';
+      }
+      if (label.includes('por cobrar')) {
+        value.textContent = money(balance);
+        if (em) em.textContent = balance ? 'Seguimiento de saldos' : 'Sin saldos pendientes';
+      }
+    });
+  };
+
+  setTimeout(() => {
+    try {
+      const sid = session?.salonId;
+      if (!sid || !v20HasFinancialReset()) return;
+      const reset = v20ResetRecord();
+      const resetAt = reset?.createdAt || '';
+
+      (data.events || []).forEach(e => {
+        if (e.salonId !== sid) return;
+        if (e.financeResetLocked) e.beforeFinanceReset = true;
+        else if (resetAt && e.createdAt && String(e.createdAt) <= resetAt) e.beforeFinanceReset = true;
+      });
+      save();
+    } catch (_) {}
+  }, 700);
+
+  const observerV20 = new MutationObserver(() => {
+    try { v20EnsureProfileNav(); } catch (_) {}
+  });
+  observerV20.observe(document.documentElement, {childList:true,subtree:true});
+})();
