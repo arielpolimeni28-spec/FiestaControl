@@ -14922,3 +14922,351 @@ renderSalonView=function(){
 };
 
 })();
+
+
+// ============================================================
+// V52 - REINICIOS CORREGIDOS Y FUNCIONALES
+// ============================================================
+(function(){
+'use strict';
+
+const SID52=()=>{
+  try{return session?.salonId}catch(e){return window.session?.salonId}
+};
+const salon52=()=>{
+  try{return salon()}catch(e){
+    const sid=SID52();
+    return (data.salons||[]).find(s=>s.id===sid)||{};
+  }
+};
+const N52=v=>Number(v||0);
+
+function requirePassword52(onOk){
+  const s=salon52();
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>Confirmar operación</h2>
+        <p>Esta acción modifica datos del sistema.</p>
+      </div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="confirmReset52">
+      <div class="field">
+        <label>Contraseña del salón</label>
+        <input name="password" type="password" required autocomplete="current-password">
+      </div>
+      <div class="field">
+        <label>Motivo</label>
+        <input name="reason" placeholder="Ej.: reinicio de prueba" required>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="primary">Confirmar</button>
+      </div>
+    </form>
+  `);
+
+  document.querySelector('#confirmReset52').onsubmit=e=>{
+    e.preventDefault();
+    const f=Object.fromEntries(new FormData(e.target));
+    const expected=String(s.password||s.pass||'');
+    if(expected && String(f.password)!==expected){
+      return toast('Contraseña incorrecta');
+    }
+    closeModal();
+    onOk(String(f.reason||''));
+  };
+}
+
+// ------------------------------------------------------------
+// 1) PONER MOVIMIENTOS EN $0
+// Solo limpia la parte contable.
+// ------------------------------------------------------------
+window.zeroMoney52=function(){
+  requirePassword52(reason=>{
+    const sid=SID52();
+
+    data.movements=(data.movements||[]).filter(m=>m.salonId!==sid);
+    data.providerPayments=(data.providerPayments||[]).filter(x=>x.salonId!==sid);
+    data.servicePayments=(data.servicePayments||[]).filter(x=>x.salonId!==sid);
+
+    (data.events||[]).forEach(e=>{
+      if(e.salonId!==sid)return;
+      e.deposit=0;
+      e.depositMethod='';
+      e.depositDate='';
+      e.paid=0;
+      e.balance=N52(e.total);
+    });
+
+    (data.stockPurchases||[]).forEach(p=>{
+      if(p.salonId!==sid)return;
+      p.paymentStatus='Pendiente';
+    });
+
+    (data.orders||[]).forEach(o=>{
+      if(o.salonId!==sid)return;
+      o.paid=0;
+      if('paymentStatus' in o)o.paymentStatus='Pendiente';
+    });
+
+    (data.suppliers||[]).forEach(s=>{
+      if(s.salonId!==sid)return;
+      if('balance' in s)s.balance=0;
+      if('paid' in s)s.paid=0;
+    });
+
+    data.auditLog=data.auditLog||[];
+    data.auditLog.push({
+      id:id(),salonId:sid,type:'RESET_MONEY',reason,
+      createdAt:new Date().toISOString()
+    });
+
+    save();
+    toast('Movimientos y saldos puestos en $0');
+    setTimeout(()=>{view='finance';renderSalonShell();},100);
+  });
+};
+
+// ------------------------------------------------------------
+// 2) REINICIO TOTAL DEL SISTEMA DEL SALÓN
+// Borra datos operativos, pero conserva:
+// - cuenta del salón
+// - configuración de Mi salón
+// - tipos de evento configurados
+// ------------------------------------------------------------
+window.fullReset52=function(){
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>⚠️ Reinicio total del sistema</h2>
+        <p>Deja el salón limpio para comenzar de cero.</p>
+      </div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <div class="admin-notice">
+      <span>⚠️</span>
+      <div>
+        <b>Se eliminarán todos los datos operativos del salón.</b>
+        <small>
+          Reservas, movimientos, personal, productos de stock, compras,
+          proveedores propios, pedidos, tarjetas y registros relacionados.
+          Se conserva la cuenta del salón y la configuración de Mi salón.
+        </small>
+      </div>
+    </div>
+
+    <form id="fullReset52Confirm" style="margin-top:14px">
+      <div class="field">
+        <label>Escribí REINICIAR para confirmar</label>
+        <input name="word" required autocomplete="off">
+      </div>
+      <div class="field">
+        <label>Contraseña del salón</label>
+        <input name="password" type="password" required>
+      </div>
+      <div class="field">
+        <label>Motivo</label>
+        <input name="reason" required placeholder="Ej.: borrar datos de prueba">
+      </div>
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="danger">Reiniciar todo</button>
+      </div>
+    </form>
+  `);
+
+  document.querySelector('#fullReset52Confirm').onsubmit=e=>{
+    e.preventDefault();
+    const f=Object.fromEntries(new FormData(e.target));
+    const s=salon52();
+    const expected=String(s.password||s.pass||'');
+
+    if(String(f.word||'').trim().toUpperCase()!=='REINICIAR')
+      return toast('Tenés que escribir REINICIAR');
+
+    if(expected && String(f.password)!==expected)
+      return toast('Contraseña incorrecta');
+
+    const sid=SID52();
+
+    // Datos propios del salón
+    data.events=(data.events||[]).filter(x=>x.salonId!==sid);
+    data.staff=(data.staff||[]).filter(x=>x.salonId!==sid);
+    data.assignments=(data.assignments||[]).filter(x=>x.salonId!==sid);
+    data.suppliers=(data.suppliers||[]).filter(x=>x.salonId!==sid);
+    data.orders=(data.orders||[]).filter(x=>x.salonId!==sid);
+    data.cards=(data.cards||[]).filter(x=>x.salonId!==sid);
+    data.movements=(data.movements||[]).filter(x=>x.salonId!==sid);
+    data.stockProducts=(data.stockProducts||[]).filter(x=>x.salonId!==sid);
+    data.stockPurchases=(data.stockPurchases||[]).filter(x=>x.salonId!==sid);
+    data.providerPayments=(data.providerPayments||[]).filter(x=>x.salonId!==sid);
+    data.servicePayments=(data.servicePayments||[]).filter(x=>x.salonId!==sid);
+    data.salonExtras=(data.salonExtras||[]).filter(x=>x.salonId!==sid);
+    data.salonUsers=(data.salonUsers||[]).filter(x=>x.salonId!==sid);
+
+    // Conserva comunidad y proveedores comunitarios globales.
+    // Conserva el salón y toda su configuración.
+
+    data.auditLog=data.auditLog||[];
+    data.auditLog.push({
+      id:id(),salonId:sid,type:'FULL_RESET',
+      reason:String(f.reason||''),
+      createdAt:new Date().toISOString()
+    });
+
+    save();
+    closeModal();
+    toast('Sistema reiniciado. El salón quedó listo para comenzar de cero.');
+
+    setTimeout(()=>{
+      view='dashboard';
+      renderSalonShell();
+    },150);
+  };
+};
+
+// ------------------------------------------------------------
+// 3) REINICIO POR SECCIONES, FUNCIONAL
+// ------------------------------------------------------------
+window.sectionReset52=function(){
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>Reinicio por secciones</h2>
+        <p>Elegí qué datos querés borrar.</p>
+      </div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="sectionReset52Form">
+      <div class="form-grid">
+        <label class="check-card"><input type="checkbox" name="money"><span><b>Movimientos de dinero</b></span></label>
+        <label class="check-card"><input type="checkbox" name="events"><span><b>Reservas / fiestas</b></span></label>
+        <label class="check-card"><input type="checkbox" name="orders"><span><b>Pedidos / compras</b></span></label>
+        <label class="check-card"><input type="checkbox" name="staff"><span><b>Personal</b></span></label>
+        <label class="check-card"><input type="checkbox" name="stock"><span><b>Stock</b></span></label>
+        <label class="check-card"><input type="checkbox" name="suppliers"><span><b>Proveedores propios</b></span></label>
+      </div>
+
+      <div class="field" style="margin-top:12px">
+        <label>Contraseña del salón</label>
+        <input name="password" type="password" required>
+      </div>
+      <div class="field">
+        <label>Motivo</label>
+        <input name="reason" required>
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="danger">Aplicar reinicio</button>
+      </div>
+    </form>
+  `);
+
+  document.querySelector('#sectionReset52Form').onsubmit=e=>{
+    e.preventDefault();
+    const fd=new FormData(e.target);
+    const s=salon52();
+    const expected=String(s.password||s.pass||'');
+    if(expected && String(fd.get('password'))!==expected)
+      return toast('Contraseña incorrecta');
+
+    const sid=SID52();
+
+    if(fd.has('money')){
+      data.movements=(data.movements||[]).filter(x=>x.salonId!==sid);
+      data.providerPayments=(data.providerPayments||[]).filter(x=>x.salonId!==sid);
+      data.servicePayments=(data.servicePayments||[]).filter(x=>x.salonId!==sid);
+      (data.events||[]).forEach(ev=>{
+        if(ev.salonId===sid){
+          ev.deposit=0; ev.paid=0; ev.balance=N52(ev.total);
+        }
+      });
+    }
+
+    if(fd.has('events')){
+      data.events=(data.events||[]).filter(x=>x.salonId!==sid);
+      data.assignments=(data.assignments||[]).filter(x=>x.salonId!==sid);
+      data.cards=(data.cards||[]).filter(x=>x.salonId!==sid);
+      data.movements=(data.movements||[]).filter(x=>x.salonId!==sid);
+    }
+
+    if(fd.has('orders')){
+      data.orders=(data.orders||[]).filter(x=>x.salonId!==sid);
+      data.stockPurchases=(data.stockPurchases||[]).filter(x=>x.salonId!==sid);
+      data.providerPayments=(data.providerPayments||[]).filter(x=>x.salonId!==sid);
+    }
+
+    if(fd.has('staff')){
+      data.staff=(data.staff||[]).filter(x=>x.salonId!==sid);
+      data.assignments=(data.assignments||[]).filter(x=>x.salonId!==sid);
+    }
+
+    if(fd.has('stock')){
+      data.stockProducts=(data.stockProducts||[]).filter(x=>x.salonId!==sid);
+      data.stockPurchases=(data.stockPurchases||[]).filter(x=>x.salonId!==sid);
+    }
+
+    if(fd.has('suppliers')){
+      data.suppliers=(data.suppliers||[]).filter(x=>x.salonId!==sid);
+    }
+
+    data.auditLog=data.auditLog||[];
+    data.auditLog.push({
+      id:id(),salonId:sid,type:'SECTION_RESET',
+      reason:String(fd.get('reason')||''),
+      createdAt:new Date().toISOString()
+    });
+
+    save();
+    closeModal();
+    toast('Reinicio aplicado');
+    setTimeout(()=>renderSalonShell(),100);
+  };
+};
+
+// ------------------------------------------------------------
+// REPARA LOS BOTONES DE FINANZAS, AUNQUE VENGAN DE VERSIONES VIEJAS
+// ------------------------------------------------------------
+function repairResetButtons52(){
+  document.querySelectorAll('button').forEach(btn=>{
+    const txt=String(btn.textContent||'').toLowerCase();
+
+    if(txt.includes('poner movimientos en $0')){
+      btn.onclick=e=>{
+        e?.preventDefault?.();
+        zeroMoney52();
+      };
+      btn.setAttribute('onclick','zeroMoney52()');
+    }
+
+    if(txt.includes('reinicio por secciones')){
+      btn.onclick=e=>{
+        e?.preventDefault?.();
+        sectionReset52();
+      };
+      btn.setAttribute('onclick','sectionReset52()');
+
+      // Botón extra de reinicio total, una sola vez.
+      const parent=btn.parentElement;
+      if(parent && !document.querySelector('#fullResetBtn52')){
+        const full=document.createElement('button');
+        full.id='fullResetBtn52';
+        full.className='danger';
+        full.innerHTML='⚠️ Reiniciar sistema completo';
+        full.onclick=()=>fullReset52();
+        parent.appendChild(full);
+      }
+    }
+  });
+}
+
+setTimeout(repairResetButtons52,250);
+setInterval(repairResetButtons52,1200);
+
+})();
