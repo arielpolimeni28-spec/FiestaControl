@@ -6611,3 +6611,422 @@ const rv24=renderSalonView;
 renderSalonView=function(){if(view==='dashboard')return renderDashboardV24();if(view==='calendar')return renderCalendarV24();if(view==='suppliers')return renderSuppliersV24();if(view==='community')return renderCommunityV24();if(view==='staff')return renderStaffV24();if(view==='profile')return renderProfileV24();let r=rv24();if(view==='cards'&&$('#content')&&!$('#free24')){let b=document.createElement('button');b.id='free24';b.className='primary';b.textContent='+ Crear tarjeta sin fiesta';b.onclick=freeCardV24;$('#content').prepend(b)}return r};
 const sh24=renderSalonShell;renderSalonShell=function(){let r=sh24();setTimeout(()=>$$('button').forEach(b=>{if((b.textContent||'').includes('Nueva fiesta'))b.onclick=()=>openEventFormV24()}),0);return r};
 })();
+
+
+// ============================================================
+// V25 - STOCK: COSTO AUTOMÁTICO + COMPRA PENDIENTE + PAGAR/ENTREGA
+// ============================================================
+(function(){
+'use strict';
+
+data.stockPurchases=data.stockPurchases||[];
+data.movements=data.movements||[];
+data.auditLog=data.auditLog||[];
+
+const V25SID=()=>session?.salonId;
+const v25Products=()=> (data.stockProducts||[]).filter(p=>p.salonId===V25SID());
+const v25Buys=()=> (data.stockPurchases||[]).filter(c=>c.salonId===V25SID());
+const v25Prod=idp=> (data.stockProducts||[]).find(p=>p.id===idp && p.salonId===V25SID());
+const v25Methods=['Efectivo','Transferencia','Mercado Pago','Tarjeta','Otro'];
+
+function v25PurchaseTotal(c){
+  const q=Number(c.quantity??c.qty??0);
+  const u=Number(c.unitCost??c.costPrice??0);
+  return Number(c.total??(q*u));
+}
+
+function v25EnsurePendingMigration(){
+  // Compras creadas con versiones anteriores sin estado de pago:
+  // ahora pasan a Pendiente y el gasto se registra solo al pagar.
+  v25Buys().forEach(c=>{
+    if(!c.paymentStatus){
+      c.paymentStatus='Pendiente';
+      c.deliveryStatus='Pendiente de entrega';
+      data.movements=(data.movements||[]).filter(m=>
+        !(m.salonId===V25SID() &&
+          (m.stockPurchaseId===c.id || m.sourceKey===`stock-purchase:${c.id}`))
+      );
+    }
+  });
+}
+
+// REGISTRAR COMPRA: costo automático del producto; NO genera gasto hasta pagar.
+window.openStockPurchaseV25=function(pid=''){
+  const ps=v25Products();
+  if(!ps.length)return toast('Primero cargá un producto');
+
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>Registrar compra</h2>
+        <p>La cantidad comprada se suma al stock. El pago se registra después.</p>
+      </div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="v25-buy-form">
+      <div class="form-grid">
+        <div class="field span2">
+          <label>Producto</label>
+          <select name="productId" id="v25-product" required>
+            ${ps.map(p=>`<option value="${esc(p.id)}" ${p.id===pid?'selected':''}>${esc(p.name)}</option>`).join('')}
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Cantidad</label>
+          <input name="quantity" type="number" min="1" value="1" required>
+        </div>
+
+        <div class="field">
+          <label>Costo unitario</label>
+          <input name="unitCost" id="v25-unit-cost" type="number" min="0" required>
+          <small class="muted">Se trae automáticamente del producto.</small>
+        </div>
+
+        <div class="field">
+          <label>Fecha de compra</label>
+          <input name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required>
+        </div>
+
+        <div class="field">
+          <label>Total de compra</label>
+          <input id="v25-buy-total" readonly>
+        </div>
+      </div>
+
+      <div class="admin-notice">
+        <span>🧾</span>
+        <div>
+          <b>Estado inicial: Pendiente de pago</b>
+          <small>Después usá el botón “Pagar” para elegir medio de pago y estado de entrega.</small>
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="primary">Registrar compra</button>
+      </div>
+    </form>
+  `);
+
+  const form=$('#v25-buy-form');
+  const sel=$('#v25-product');
+  const cost=$('#v25-unit-cost');
+  const totalEl=$('#v25-buy-total');
+
+  function loadProductCost(){
+    const p=v25Prod(sel.value);
+    cost.value=Number(p?.costPrice||0);
+    calc();
+  }
+  function calc(){
+    const q=Number(form.quantity.value||0);
+    const u=Number(cost.value||0);
+    totalEl.value=money(q*u);
+  }
+
+  sel.onchange=loadProductCost;
+  form.quantity.oninput=calc;
+  cost.oninput=calc;
+  loadProductCost();
+
+  form.onsubmit=ev=>{
+    ev.preventDefault();
+    const f=Object.fromEntries(new FormData(form));
+    const p=v25Prod(f.productId);
+    if(!p)return toast('Producto no encontrado');
+
+    const qty=Number(f.quantity||0);
+    const unit=Number(f.unitCost||0);
+    if(qty<=0)return toast('Ingresá una cantidad válida');
+
+    const cid=id();
+    p.stock=Number(p.stock||0)+qty;
+
+    data.stockPurchases.push({
+      id:cid,
+      salonId:V25SID(),
+      productId:p.id,
+      productName:p.name,
+      quantity:qty,
+      unitCost:unit,
+      total:qty*unit,
+      date:f.date,
+      paymentStatus:'Pendiente',
+      deliveryStatus:'Pendiente de entrega',
+      paymentMethod:'',
+      createdAt:new Date().toISOString()
+    });
+
+    save();
+    closeModal();
+    toast('Compra registrada. Pendiente de pago.');
+    renderStockV25();
+  };
+};
+
+// EDITAR COMPRA: corrige diferencia de stock.
+window.editStockPurchaseV25=function(cid){
+  const c=v25Buys().find(x=>x.id===cid);
+  if(!c)return toast('Compra no encontrada');
+  const p=v25Prod(c.productId);
+  const oldQty=Number(c.quantity??c.qty??0);
+
+  showModal(`
+    <div class="modal-title">
+      <div><h2>Editar compra</h2><p>${esc(p?.name||c.productName||'')}</p></div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+    <form id="v25-edit-buy">
+      <div class="form-grid">
+        <div class="field">
+          <label>Cantidad</label>
+          <input name="quantity" type="number" min="1" value="${oldQty}" required>
+        </div>
+        <div class="field">
+          <label>Costo unitario</label>
+          <input name="unitCost" type="number" min="0" value="${Number(c.unitCost??c.costPrice??0)}" required>
+        </div>
+        <div class="field">
+          <label>Fecha</label>
+          <input name="date" type="date" value="${esc(c.date||new Date().toISOString().slice(0,10))}" required>
+        </div>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="primary">Guardar cambios</button>
+      </div>
+    </form>
+  `);
+
+  $('#v25-edit-buy').onsubmit=ev=>{
+    ev.preventDefault();
+    const f=Object.fromEntries(new FormData(ev.target));
+    const newQty=Number(f.quantity||0);
+    const unit=Number(f.unitCost||0);
+
+    if(p)p.stock=Math.max(0,Number(p.stock||0)+(newQty-oldQty));
+
+    c.quantity=newQty;
+    c.unitCost=unit;
+    c.total=newQty*unit;
+    c.date=f.date;
+    c.updatedAt=new Date().toISOString();
+
+    // Si ya estaba pagada, actualiza el importe del movimiento relacionado.
+    const mov=(data.movements||[]).find(m=>m.stockPurchaseId===c.id && m.salonId===V25SID());
+    if(mov && c.paymentStatus==='Pagado'){
+      mov.amount=c.total;
+      mov.updatedAt=new Date().toISOString();
+    }
+
+    save();
+    closeModal();
+    toast('Compra actualizada');
+    renderStockV25();
+  };
+};
+
+// PAGAR COMPRA: medio + entrega pendiente/entregado.
+// Recién acá impacta como egreso en Dashboard/Finanzas.
+window.payStockPurchaseV25=function(cid){
+  const c=v25Buys().find(x=>x.id===cid);
+  if(!c)return toast('Compra no encontrada');
+
+  const p=v25Prod(c.productId);
+  const amount=v25PurchaseTotal(c);
+
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>Pagar compra</h2>
+        <p>${esc(p?.name||c.productName||'Compra')} · ${money(amount)}</p>
+      </div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="v25-pay-buy">
+      <div class="form-grid">
+        <div class="field">
+          <label>Importe a pagar</label>
+          <input value="${money(amount)}" readonly>
+        </div>
+
+        <div class="field">
+          <label>Medio de pago</label>
+          <select name="method">
+            ${v25Methods.map(x=>`<option>${x}</option>`).join('')}
+          </select>
+        </div>
+
+        <div class="field span2">
+          <label>Estado de entrega</label>
+          <select name="deliveryStatus">
+            <option>Pendiente de entrega</option>
+            <option>Entregado</option>
+          </select>
+        </div>
+
+        <div class="field span2">
+          <label>Referencia / comprobante</label>
+          <input name="reference" placeholder="Opcional">
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="primary">Confirmar pago</button>
+      </div>
+    </form>
+  `);
+
+  $('#v25-pay-buy').onsubmit=ev=>{
+    ev.preventDefault();
+    const f=Object.fromEntries(new FormData(ev.target));
+
+    c.paymentStatus='Pagado';
+    c.paymentMethod=f.method;
+    c.deliveryStatus=f.deliveryStatus;
+    c.reference=f.reference||'';
+    c.paidAt=new Date().toISOString();
+
+    // evita duplicados
+    data.movements=(data.movements||[]).filter(m=>
+      !(m.salonId===V25SID() &&
+        (m.stockPurchaseId===c.id || m.sourceKey===`stock-purchase:${c.id}`))
+    );
+
+    data.movements.push({
+      id:id(),
+      salonId:V25SID(),
+      stockPurchaseId:c.id,
+      sourceKey:`stock-purchase:${c.id}`,
+      type:'Gasto',
+      category:'Compra de stock',
+      concept:`Pago compra ${p?.name||c.productName||''}`,
+      amount,
+      movementDate:new Date().toISOString().slice(0,10),
+      method:f.method,
+      reference:f.reference||'',
+      status:f.deliveryStatus,
+      createdAt:new Date().toISOString()
+    });
+
+    save();
+    closeModal();
+    toast(`Compra pagada · ${f.deliveryStatus}`);
+    renderStockV25();
+  };
+};
+
+window.markStockDeliveredV25=function(cid){
+  const c=v25Buys().find(x=>x.id===cid);
+  if(!c)return;
+  c.deliveryStatus='Entregado';
+  c.deliveredAt=new Date().toISOString();
+  const m=(data.movements||[]).find(x=>x.stockPurchaseId===cid && x.salonId===V25SID());
+  if(m)m.status='Entregado';
+  save();
+  renderStockV25();
+};
+
+// VISTA STOCK DEFINITIVA V25
+window.renderStockV25=function(){
+  v25EnsurePendingMigration();
+
+  const ps=v25Products();
+  const buys=v25Buys().slice().sort((a,b)=>
+    String(b.createdAt||b.date||'').localeCompare(String(a.createdAt||a.date||''))
+  );
+
+  const units=ps.reduce((s,p)=>s+Number(p.stock||0),0);
+  const value=ps.reduce((s,p)=>s+Number(p.stock||0)*Number(p.costPrice||0),0);
+  const low=ps.filter(p=>Number(p.stock||0)<=Number(p.minStock||0)).length;
+
+  setTitle('Stock','Productos, compras, pagos y entregas');
+
+  $('#content').innerHTML=`
+    <div class="grid stats">
+      <div class="card stat"><small>Productos</small><strong>${ps.length}</strong></div>
+      <div class="card stat"><small>Unidades en stock</small><strong>${units}</strong></div>
+      <div class="card stat"><small>Valor de stock a costo</small><strong>${money(value)}</strong></div>
+      <div class="card stat"><small>Stock bajo</small><strong class="${low?'bad':''}">${low}</strong></div>
+    </div>
+
+    <div class="toolbar" style="margin-top:16px">
+      <button class="primary" onclick="openStockProductV23()">+ Agregar producto</button>
+      <button class="secondary" onclick="openStockPurchaseV25()">🛒 Compra</button>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="section-title">
+        <div><h3>Productos</h3><small class="muted">El costo cargado se usa automáticamente al registrar una compra.</small></div>
+      </div>
+      ${ps.length?`
+      <div class="table-wrap"><table class="table">
+        <thead><tr><th>Producto</th><th>Stock</th><th>Mínimo</th><th>Costo</th><th>Venta</th><th>Acciones</th></tr></thead>
+        <tbody>${ps.map(p=>`
+          <tr>
+            <td><b>${esc(p.name||'')}</b><small style="display:block">${esc(p.description||p.category||'')}</small></td>
+            <td>${Number(p.stock||0)}</td>
+            <td>${Number(p.minStock||0)}</td>
+            <td>${money(p.costPrice||0)}</td>
+            <td>${money(p.salePrice||0)}</td>
+            <td>
+              <button class="secondary small" onclick="openStockProductV23('${p.id}')">✏️ Editar</button>
+              <button class="secondary small" onclick="openStockPurchaseV25('${p.id}')">Comprar</button>
+              <button class="danger small" onclick="deleteStockProductV23('${p.id}')">🗑 Borrar producto</button>
+            </td>
+          </tr>`).join('')}
+        </tbody>
+      </table></div>`:'<div class="empty">Todavía no hay productos.</div>'}
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="section-title">
+        <div><h3>Compras</h3><small class="muted">Registrar compra no significa pagarla. El egreso se genera al usar “Pagar”.</small></div>
+      </div>
+      ${buys.length?`
+      <div class="table-wrap"><table class="table">
+        <thead>
+          <tr><th>Fecha</th><th>Producto</th><th>Cantidad</th><th>Costo unitario</th><th>Total</th><th>Pago</th><th>Entrega</th><th>Acciones</th></tr>
+        </thead>
+        <tbody>${buys.map(c=>{
+          const p=v25Prod(c.productId);
+          return `<tr>
+            <td>${esc(c.date||'')}</td>
+            <td><b>${esc(p?.name||c.productName||'')}</b></td>
+            <td>${Number(c.quantity??c.qty??0)}</td>
+            <td>${money(c.unitCost??c.costPrice??0)}</td>
+            <td>${money(v25PurchaseTotal(c))}</td>
+            <td><span class="pill">${esc(c.paymentStatus||'Pendiente')}</span>${c.paymentMethod?`<small style="display:block">${esc(c.paymentMethod)}</small>`:''}</td>
+            <td><span class="pill">${esc(c.deliveryStatus||'Pendiente de entrega')}</span></td>
+            <td>
+              <button class="secondary small" onclick="editStockPurchaseV25('${c.id}')">✏️ Editar</button>
+              <button class="danger small" onclick="deleteStockPurchaseV23('${c.id}')">🗑 Borrar</button>
+              ${c.paymentStatus!=='Pagado'
+                ? `<button class="primary small" onclick="payStockPurchaseV25('${c.id}')">💳 Pagar</button>`
+                : c.deliveryStatus!=='Entregado'
+                  ? `<button class="secondary small" onclick="markStockDeliveredV25('${c.id}')">📦 Marcar entregado</button>`
+                  : ''}
+            </td>
+          </tr>`;
+        }).join('')}
+        </tbody>
+      </table></div>`:'<div class="empty">Todavía no hay compras registradas.</div>'}
+    </div>
+  `;
+
+  // Persistimos la migración de compras viejas como pendientes.
+  save();
+};
+
+// Override final de Stock.
+const v25PrevView=renderSalonView;
+renderSalonView=function(){
+  if(view==='stock')return renderStockV25();
+  return v25PrevView();
+};
+
+})();
