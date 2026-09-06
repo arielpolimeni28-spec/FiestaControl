@@ -10295,3 +10295,301 @@ renderSalonView=function(){
 };
 
 })();
+
+
+// ============================================================
+// V37 - REINICIO GENERAL SELECTIVO DEL SISTEMA
+// Opciones: dinero / reservas / pedidos / personal
+// ============================================================
+(function(){
+'use strict';
+
+data.movements=data.movements||[];
+data.providerPayments=data.providerPayments||[];
+data.orders=data.orders||[];
+data.assignments=data.assignments||[];
+data.staff=data.staff||[];
+data.cards=data.cards||[];
+data.stockPurchases=data.stockPurchases||[];
+data.auditLog=data.auditLog||[];
+
+const SID37=()=>session?.salonId;
+
+function restoreEventStock37(e){
+  (e?.stockItems||[]).forEach(i=>{
+    const p=(data.stockProducts||[]).find(x=>x.id===i.productId && x.salonId===SID37());
+    if(p)p.stock=Number(p.stock||0)+Number(i.qty||0);
+  });
+}
+
+function resetMoney37(){
+  const sid=SID37();
+
+  // Elimina todos los movimientos monetarios del salón.
+  data.movements=(data.movements||[]).filter(m=>m.salonId!==sid);
+
+  // Pagos a proveedores.
+  data.providerPayments=(data.providerPayments||[]).filter(p=>p.salonId!==sid);
+
+  // Reservas conservadas, pero sin señas/cobros previos.
+  (data.events||[]).forEach(e=>{
+    if(e.salonId!==sid)return;
+    e.deposit=0;
+    e.paid=0;
+    e.depositMethod='';
+    e.balance=Math.max(0,Number(e.total||0));
+  });
+
+  // Compras de stock conservadas, pero vuelven a pendiente de pago.
+  (data.stockPurchases||[]).forEach(c=>{
+    if(c.salonId!==sid)return;
+    c.paymentStatus='Pendiente';
+    c.paymentMethod='';
+    c.reference='';
+    c.paidAt=null;
+    if(!c.deliveryStatus)c.deliveryStatus='Pendiente de entrega';
+  });
+
+  // Pedidos de proveedores conservados, pero sin pago.
+  (data.orders||[]).forEach(o=>{
+    if(o.salonId!==sid)return;
+    o.paymentId=null;
+    o.paidAt=null;
+    o.paymentMethod='';
+    o.paymentReference='';
+    o.paidAmount=0;
+    if(o.status==='Pagado - pendiente de entrega' || o.status==='Entregado' || o.status==='Pagado'){
+      o.status='Pendiente';
+    }
+  });
+
+  // Saldos de proveedores a cero si existen.
+  (data.suppliers||[]).forEach(p=>{
+    if(p.salonId!==sid)return;
+    p.balance=0;
+    p.paid=0;
+    p.totalPaid=0;
+    p.totalPending=0;
+  });
+
+  // Cualquier pago de servicio asociado al salón queda fuera del movimiento general.
+  if(Array.isArray(data.servicePayments)){
+    data.servicePayments=data.servicePayments.filter(p=>p.salonId!==sid);
+  }
+}
+
+function resetReservations37(){
+  const sid=SID37();
+  const ids=(data.events||[]).filter(e=>e.salonId===sid).map(e=>e.id);
+  const idSet=new Set(ids);
+
+  // Restaura stock consumido por las reservas antes de borrarlas.
+  (data.events||[]).filter(e=>e.salonId===sid).forEach(restoreEventStock37);
+
+  // Borra movimientos contables ligados a esas reservas.
+  data.movements=(data.movements||[]).filter(m=>!idSet.has(m.eventId));
+
+  // Personal asignado.
+  data.assignments=(data.assignments||[]).filter(a=>!idSet.has(a.eventId));
+
+  // Pedidos ligados específicamente a reservas borradas.
+  const orderIds=(data.orders||[]).filter(o=>idSet.has(o.eventId)).map(o=>o.id);
+  data.orders=(data.orders||[]).filter(o=>!idSet.has(o.eventId));
+
+  // Pagos de esos pedidos.
+  data.providerPayments=(data.providerPayments||[]).filter(p=>!orderIds.includes(p.orderId));
+
+  // Tarjetas ligadas a esas reservas.
+  data.cards=(data.cards||[]).filter(c=>!idSet.has(c.eventId));
+
+  // Finalmente reservas.
+  data.events=(data.events||[]).filter(e=>e.salonId!==sid);
+}
+
+function resetOrders37(){
+  const sid=SID37();
+  const orderIds=(data.orders||[]).filter(o=>o.salonId===sid).map(o=>o.id);
+  const orderSet=new Set(orderIds);
+
+  // Borra movimientos de pedidos/proveedores.
+  data.movements=(data.movements||[]).filter(m=>
+    !(m.salonId===sid && (orderSet.has(m.orderId) || m.category==='Proveedor'))
+  );
+
+  data.providerPayments=(data.providerPayments||[]).filter(p=>!orderSet.has(p.orderId));
+  data.orders=(data.orders||[]).filter(o=>o.salonId!==sid);
+}
+
+function resetStaff37(){
+  const sid=SID37();
+  const staffIds=(data.staff||[]).filter(s=>s.salonId===sid).map(s=>s.id);
+  const staffSet=new Set(staffIds);
+
+  // Borra gastos de personal de todas las fiestas.
+  data.movements=(data.movements||[]).filter(m=>
+    !(m.salonId===sid && (staffSet.has(m.staffId) || m.category==='Personal'))
+  );
+
+  data.assignments=(data.assignments||[]).filter(a=>!staffSet.has(a.staffId));
+
+  // Limpia costo de personal guardado en reservas, sin borrar las reservas.
+  (data.events||[]).forEach(e=>{
+    if(e.salonId!==sid)return;
+    e.staffExpenseTotal=0;
+    e.staffClientChargeTotal=0;
+  });
+
+  data.staff=(data.staff||[]).filter(s=>s.salonId!==sid);
+}
+
+window.openGeneralResetV37=function(){
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>🔄 Reinicio general del sistema</h2>
+        <p>Elegí exactamente qué información querés borrar.</p>
+      </div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="reset37">
+      <div class="card">
+        <label class="check-card">
+          <input type="checkbox" name="money" value="1">
+          <span>
+            <b>💰 Movimientos de dinero</b>
+            <small>Pone en cero ingresos, egresos, señas, cobros, pagos a proveedores y movimientos bancarios.</small>
+          </span>
+        </label>
+
+        <label class="check-card" style="margin-top:8px">
+          <input type="checkbox" name="reservations" value="1">
+          <span>
+            <b>🎉 Reservas</b>
+            <small>Borra todas las fiestas y todo lo relacionado con ellas, incluidos sus movimientos.</small>
+          </span>
+        </label>
+
+        <label class="check-card" style="margin-top:8px">
+          <input type="checkbox" name="orders" value="1">
+          <span>
+            <b>🚚 Pedidos</b>
+            <small>Borra pedidos a proveedores, pagos y movimientos asociados.</small>
+          </span>
+        </label>
+
+        <label class="check-card" style="margin-top:8px">
+          <input type="checkbox" name="staff" value="1">
+          <span>
+            <b>👤 Personal</b>
+            <small>Borra empleados, asignaciones y gastos de personal.</small>
+          </span>
+        </label>
+      </div>
+
+      <div class="field" style="margin-top:14px">
+        <label>Contraseña administrativa</label>
+        <input name="password" type="password" required>
+      </div>
+
+      <div class="field">
+        <label>Motivo del reinicio</label>
+        <textarea name="reason" required placeholder="Ej: finalizar pruebas e iniciar operación real"></textarea>
+      </div>
+
+      <div class="admin-notice attention">
+        <span>⚠️</span>
+        <div>
+          <b>Esta acción es irreversible.</b>
+          <small>Solo se borrarán las opciones que marques.</small>
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="danger">Ejecutar reinicio seleccionado</button>
+      </div>
+    </form>
+  `);
+
+  $('#reset37').onsubmit=e=>{
+    e.preventDefault();
+    const fd=new FormData(e.target);
+    const s=salon();
+
+    if(String(fd.get('password')||'')!==String(s?.password||'')){
+      return toast('Contraseña incorrecta');
+    }
+
+    const money=fd.get('money')==='1';
+    const reservations=fd.get('reservations')==='1';
+    const orders=fd.get('orders')==='1';
+    const staff=fd.get('staff')==='1';
+
+    if(!money && !reservations && !orders && !staff){
+      return toast('Seleccioná al menos una opción');
+    }
+
+    // Orden pensado para evitar datos huérfanos.
+    if(reservations)resetReservations37();
+    if(orders)resetOrders37();
+    if(staff)resetStaff37();
+    if(money)resetMoney37();
+
+    data.auditLog.push({
+      id:id(),
+      salonId:SID37(),
+      action:'REINICIO GENERAL SELECTIVO',
+      options:{money,reservations,orders,staff},
+      reason:String(fd.get('reason')||'').trim(),
+      createdAt:new Date().toISOString()
+    });
+
+    save();
+    closeModal();
+    toast('Reinicio realizado');
+
+    view='dashboard';
+    renderSalonShell();
+  };
+};
+
+// ----------------------------------------------------------
+// BOTÓN REINICIO GENERAL EN MI SALÓN
+// ----------------------------------------------------------
+const oldProfile37=window.renderProfileV24 || window.renderProfile;
+
+window.renderProfileV37=function(){
+  oldProfile37();
+
+  const content=$('#content');
+  if(!content || $('#general-reset37'))return;
+
+  const card=document.createElement('div');
+  card.id='general-reset37';
+  card.className='card';
+  card.style.marginTop='16px';
+  card.innerHTML=`
+    <div class="section-title">
+      <div>
+        <h3>⚙️ Reinicio general</h3>
+        <small class="muted">Permite limpiar partes específicas del sistema sin borrar el salón.</small>
+      </div>
+    </div>
+    <button class="danger" onclick="openGeneralResetV37()">🔄 Reinicio general del sistema</button>
+  `;
+  content.appendChild(card);
+};
+
+// Alias de borrado individual de reserva: conserva la lógica de V36,
+// que elimina TODOS los movimientos contables asociados a esa fiesta.
+window.confirmDeleteEvent=window.confirmDeleteEvent;
+
+// Router final
+const route37=renderSalonView;
+renderSalonView=function(){
+  if(view==='profile')return renderProfileV37();
+  return route37();
+};
+
+})();
