@@ -17315,3 +17315,741 @@ if(oldCommunityProviders55_56){
 }
 
 })();
+
+
+// ============================================================
+// V57 - PEDIDOS DE COMUNIDAD: ACEPTACIÓN + CHAT + PAGO + ENTREGA
+// ============================================================
+(function(){
+'use strict';
+
+data.stockPurchases=data.stockPurchases||[];
+data.orderMessages=data.orderMessages||[];
+
+const N57=v=>Number(v||0);
+const norm57=v=>String(v||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+const esc57=v=>{
+  try{return esc(v)}catch(e){
+    return String(v??'').replace(/[&<>"']/g,ch=>({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[ch]));
+  }
+};
+const money57=v=>{
+  try{return money(v)}catch(e){return '$ '+N57(v).toLocaleString('es-AR')}
+};
+const SID57=()=>{
+  try{return session?.salonId}catch(e){return window.session?.salonId}
+};
+const sess57=()=>{
+  try{return session||{}}catch(e){return window.session||{}}
+};
+
+function provider57(){
+  const s=sess57();
+  const list=data.marketSuppliers||[];
+  const vals=[
+    s.providerId,s.supplierId,s.marketSupplierId,s.userId,s.id,
+    s.email,s.userEmail,s.username,s.userName,s.name,s.businessName
+  ].filter(Boolean).map(norm57);
+
+  return list.find(p=>{
+    const keys=[
+      p.id,p.userId,p.providerId,p.supplierId,
+      p.email,p.username,p.userName,p.name,p.businessName,p.fantasyName
+    ].filter(Boolean).map(norm57);
+    return keys.some(k=>vals.includes(k));
+  })||null;
+}
+function providerName57(p){
+  return String(p?.fantasyName||p?.businessName||p?.name||p?.username||p?.email||'Proveedor');
+}
+function communityProviders57(){
+  return (data.marketSuppliers||[])
+    .filter(p=>p.status!=='Suspendido'&&p.active!==false)
+    .map(p=>({
+      raw:p,
+      id:p.id,
+      display:providerName57(p),
+      products:(data.providerProducts||[])
+        .filter(x=>String(x.providerId)===String(p.id) && x.active!==false && x.visibleToSalons!==false)
+    }));
+}
+function ownProviders57(){
+  return (data.suppliers||[]).filter(x=>x.salonId===SID57());
+}
+function stockProducts57(){
+  return (data.stockProducts||[]).filter(x=>x.salonId===SID57());
+}
+function events57(){
+  return (data.events||[]).filter(x=>x.salonId===SID57()&&x.status!=='Cancelada')
+    .sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
+}
+function orderMessages57(orderId){
+  return (data.orderMessages||[])
+    .filter(m=>String(m.orderId)===String(orderId))
+    .sort((a,b)=>String(a.createdAt||'').localeCompare(String(b.createdAt||'')));
+}
+function getOrder57(idOrder){
+  return (data.stockPurchases||[]).find(x=>String(x.id)===String(idOrder));
+}
+function orderStatus57(o){
+  return o.orderStatus||(
+    o.supplierSource==='community'
+      ? 'Pendiente de aceptación'
+      : 'Registrado'
+  );
+}
+function paymentStatus57(o){
+  return o.paymentStatus||'Pendiente';
+}
+function deliveryStatus57(o){
+  return o.deliveryStatus||'Pendiente de entrega';
+}
+function addMessage57(orderId,fromType,fromName,text){
+  data.orderMessages=data.orderMessages||[];
+  data.orderMessages.push({
+    id:id(),
+    orderId,
+    fromType,
+    fromName,
+    text:String(text||'').trim(),
+    createdAt:new Date().toISOString()
+  });
+}
+function addStockOnce57(o){
+  // Regla V57: SOLO cuando EL SALÓN marca "Entregado".
+  if(o.stockAdded===true)return;
+  if(o.targetType!=='stock')return;
+  if(o.deliveryStatus!=='Entregado')return;
+
+  data.stockProducts=data.stockProducts||[];
+  let stock=stockProducts57().find(x=>norm57(x.name)===norm57(o.productName));
+  if(!stock){
+    stock={
+      id:id(),
+      salonId:o.salonId,
+      name:o.productName,
+      category:o.productCategory||'Compra a proveedor',
+      stock:0,
+      minStock:0,
+      costPrice:N57(o.unitCost),
+      salePrice:0
+    };
+    data.stockProducts.push(stock);
+  }
+  stock.stock=N57(stock.stock)+N57(o.qty);
+  stock.costPrice=N57(o.unitCost);
+  o.stockAdded=true;
+  o.stockAddedAt=new Date().toISOString();
+}
+function addExpenseOnce57(o){
+  if(o.paymentStatus!=='Pagado'||o.financeExpenseCreated===true)return;
+  data.movements=data.movements||[];
+  const exists=data.movements.some(m=>String(m.sourceKey)===`v57:community-order:${o.id}`);
+  if(!exists){
+    data.movements.push({
+      id:id(),
+      salonId:o.salonId,
+      eventId:o.eventId||'',
+      type:'Gasto',
+      category:o.targetType==='event'?'Compra para fiesta':'Compra de stock',
+      concept:`Pedido ${o.productName} · ${o.supplierName}`,
+      amount:N57(o.total),
+      movementDate:o.paymentDate||new Date().toISOString().slice(0,10),
+      createdAt:new Date().toISOString(),
+      sourceKey:`v57:community-order:${o.id}`
+    });
+  }
+  o.financeExpenseCreated=true;
+}
+
+// ------------------------------------------------------------
+// SALÓN - NUEVO PEDIDO
+// Para proveedor de comunidad: nace Pendiente de aceptación.
+// NO permite marcar entregado al crear.
+// ------------------------------------------------------------
+window.openStockPurchase57=function(preselect=''){
+  const own=ownProviders57();
+  const community=communityProviders57();
+  const events=events57();
+
+  const providerOptions=`
+    <option value="">Seleccionar proveedor</option>
+    ${own.length?`
+      <optgroup label="Mis proveedores manuales">
+        ${own.map(s=>`<option value="own:${s.id}" ${preselect===`own:${s.id}`?'selected':''}>${esc57(s.name||s.businessName||'Proveedor')}</option>`).join('')}
+      </optgroup>`:''}
+    ${community.length?`
+      <optgroup label="Proveedores de la comunidad">
+        ${community.map(c=>`<option value="community:${c.id}" ${preselect===`community:${c.id}`?'selected':''}>${esc57(c.display)}</option>`).join('')}
+      </optgroup>`:''}
+  `;
+
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>Nueva compra / pedido</h2>
+        <p>Los pedidos a proveedores de la comunidad deben ser aceptados por el proveedor.</p>
+      </div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="purchase57">
+      <div class="form-grid">
+        <div class="field">
+          <label>Destino</label>
+          <select id="target57" name="targetType">
+            <option value="stock">Para Stock</option>
+            <option value="event">Para una fiesta</option>
+          </select>
+        </div>
+
+        <div class="field" id="eventWrap57" style="display:none">
+          <label>Fiesta</label>
+          <select id="event57" name="eventId">
+            <option value="">Seleccionar fiesta</option>
+            ${events.map(e=>`<option value="${e.id}">${esc57(e.date||'')} · ${esc57(e.eventName||e.child||'Evento')}</option>`).join('')}
+          </select>
+        </div>
+
+        <div class="field span2">
+          <label>Proveedor</label>
+          <select id="supplier57" name="supplier" required>${providerOptions}</select>
+        </div>
+
+        <div class="field span2">
+          <label>Producto</label>
+          <select id="product57" name="product" required>
+            <option value="">Primero seleccioná un proveedor</option>
+          </select>
+          <small id="help57" class="muted"></small>
+        </div>
+
+        <div class="field">
+          <label>Cantidad</label>
+          <input id="qty57" name="qty" type="number" min="1" value="1" required>
+        </div>
+
+        <div class="field">
+          <label>Precio unitario</label>
+          <input id="cost57" name="unitCost" type="number" min="0" required>
+        </div>
+
+        <div class="field">
+          <label>Total</label>
+          <input id="total57" readonly>
+        </div>
+
+        <div class="field">
+          <label>Fecha del pedido</label>
+          <input name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required>
+        </div>
+
+        <div class="field span2">
+          <label>Mensaje inicial al proveedor</label>
+          <textarea name="initialMessage" placeholder="Ej.: Necesito entrega para el viernes por la mañana."></textarea>
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button class="primary">Enviar pedido</button>
+      </div>
+    </form>
+  `);
+
+  const target=$('#target57'), eventWrap=$('#eventWrap57'), eventEl=$('#event57');
+  const supplier=$('#supplier57'), product=$('#product57');
+  const qty=$('#qty57'), cost=$('#cost57'), total=$('#total57'), help=$('#help57');
+
+  function selectedCommunity(idp){
+    return community.find(x=>String(x.id)===String(idp));
+  }
+  function targetChange(){
+    eventWrap.style.display=target.value==='event'?'':'none';
+    eventEl.required=target.value==='event';
+  }
+  function loadProducts(){
+    const [source,pid]=String(supplier.value||'').split(':');
+    if(!pid){
+      product.innerHTML='<option value="">Primero seleccioná un proveedor</option>';
+      cost.value=''; cost.readOnly=false; help.textContent=''; total.value=money57(0);
+      return;
+    }
+
+    if(source==='community'){
+      const c=selectedCommunity(pid);
+      const ps=c?.products||[];
+      product.innerHTML='<option value="">Seleccionar producto</option>'+
+        ps.map(p=>`<option value="community:${p.id}">${esc57(p.name)} · ${money57(p.price)} / ${esc57(p.unit||'unidad')}</option>`).join('');
+      help.textContent=ps.length
+        ? `Catálogo de ${c.display}. El precio lo cargó el proveedor.`
+        : `${c?.display||'Este proveedor'} no tiene productos visibles.`;
+      cost.readOnly=true;
+      cost.value='';
+    }else{
+      const ps=stockProducts57();
+      product.innerHTML='<option value="">Seleccionar producto de Stock</option>'+
+        ps.map(p=>`<option value="stock:${p.id}">${esc57(p.name)}</option>`).join('');
+      help.textContent='Proveedor manual.';
+      cost.readOnly=false;
+      cost.value='';
+    }
+    total.value=money57(0);
+  }
+  function loadPrice(){
+    const [source,pid]=String(supplier.value||'').split(':');
+    const [,prodId]=String(product.value||'').split(':');
+
+    if(source==='community'){
+      const c=selectedCommunity(pid);
+      const p=(c?.products||[]).find(x=>String(x.id)===String(prodId));
+      cost.value=p?N57(p.price):'';
+    }else{
+      const p=stockProducts57().find(x=>String(x.id)===String(prodId));
+      if(p)cost.value=N57(p.costPrice);
+    }
+    total.value=money57(N57(qty.value)*N57(cost.value));
+  }
+
+  target.onchange=targetChange;
+  supplier.onchange=loadProducts;
+  product.onchange=loadPrice;
+  qty.oninput=loadPrice;
+  cost.oninput=loadPrice;
+  targetChange();
+
+  if(preselect){
+    supplier.value=preselect;
+    loadProducts();
+  }
+
+  $('#purchase57').onsubmit=e=>{
+    e.preventDefault();
+    const f=Object.fromEntries(new FormData(e.target));
+    const [source,supplierId]=String(f.supplier||'').split(':');
+    const [,productId]=String(f.product||'').split(':');
+
+    if(f.targetType==='event'&&!f.eventId)return toast('Seleccioná la fiesta');
+
+    let sup=null,prod=null,supplierName='Proveedor';
+    if(source==='community'){
+      const c=selectedCommunity(supplierId);
+      if(c){
+        sup=c.raw;
+        supplierName=c.display;
+        prod=c.products.find(x=>String(x.id)===String(productId));
+      }
+    }else{
+      sup=own.find(x=>String(x.id)===String(supplierId));
+      supplierName=sup?.name||sup?.businessName||'Proveedor';
+      prod=stockProducts57().find(x=>String(x.id)===String(productId));
+    }
+
+    if(!sup)return toast('Proveedor no encontrado');
+    if(!prod)return toast('Producto no encontrado');
+
+    const event=f.targetType==='event'?events.find(x=>String(x.id)===String(f.eventId)):null;
+    const unitCost=source==='community'?N57(prod.price):N57(f.unitCost);
+    const quantity=N57(f.qty);
+
+    const order={
+      id:id(),
+      salonId:SID57(),
+      supplierId,
+      supplierSource:source,
+      supplierName,
+      targetType:f.targetType,
+      eventId:event?.id||'',
+      eventName:event?.eventName||event?.child||'',
+      productId:prod.id,
+      productName:prod.name,
+      productCategory:prod.category||'',
+      productDescription:prod.description||'',
+      productPhoto:prod.photo||'',
+      qty:quantity,
+      unitCost,
+      total:quantity*unitCost,
+      date:f.date,
+      orderStatus:source==='community'?'Pendiente de aceptación':'Registrado',
+      paymentStatus:'Pendiente',
+      deliveryStatus:'Pendiente de entrega',
+      stockAdded:false,
+      financeExpenseCreated:false,
+      createdAt:new Date().toISOString()
+    };
+
+    data.stockPurchases.push(order);
+
+    if(source==='community'){
+      addMessage57(
+        order.id,
+        'salon',
+        'Salón',
+        f.initialMessage||`Nuevo pedido: ${quantity} x ${prod.name}.`
+      );
+    }
+
+    save();
+    closeModal();
+    renderSuppliersV57();
+    toast(source==='community'?'Pedido enviado al proveedor':'Pedido registrado');
+  };
+};
+
+// ------------------------------------------------------------
+// CHAT COMPARTIDO
+// ------------------------------------------------------------
+window.openOrderChat57=function(orderId,actor='salon'){
+  const o=getOrder57(orderId);
+  if(!o)return toast('Pedido no encontrado');
+
+  const msgs=orderMessages57(o.id);
+  const providerSide=actor==='provider';
+
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>💬 Pedido · ${esc57(o.productName)}</h2>
+        <p>${esc57(o.supplierName)} · ${money57(o.total)}</p>
+      </div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <div class="card" style="margin-bottom:12px;padding:12px">
+      <div><b>Estado:</b> ${esc57(orderStatus57(o))}</div>
+      <div><b>Pago:</b> ${esc57(paymentStatus57(o))}</div>
+      <div><b>Entrega:</b> ${esc57(deliveryStatus57(o))}</div>
+    </div>
+
+    <div id="messages57" style="max-height:340px;overflow:auto;padding:4px">
+      ${msgs.length?msgs.map(m=>`
+        <div style="margin:8px 0;padding:10px 12px;border:1px solid #e6e6ea;border-radius:12px;${m.fromType===actor?'margin-left:32px':'margin-right:32px'}">
+          <b>${esc57(m.fromName||m.fromType)}</b>
+          <div>${esc57(m.text)}</div>
+          <small class="muted">${new Date(m.createdAt).toLocaleString('es-AR')}</small>
+        </div>
+      `).join(''):'<div class="empty">Sin mensajes.</div>'}
+    </div>
+
+    <form id="chatForm57" style="margin-top:12px">
+      <div class="field">
+        <label>Mensaje</label>
+        <textarea name="text" required placeholder="Escribí un mensaje..."></textarea>
+      </div>
+      <div class="form-actions">
+        <button class="primary">Enviar mensaje</button>
+      </div>
+    </form>
+  `);
+
+  setTimeout(()=>{
+    const box=$('#messages57');
+    if(box)box.scrollTop=box.scrollHeight;
+  },20);
+
+  $('#chatForm57').onsubmit=e=>{
+    e.preventDefault();
+    const f=Object.fromEntries(new FormData(e.target));
+    const name=providerSide?o.supplierName:'Salón';
+    addMessage57(o.id,actor,name,f.text);
+    save();
+    closeModal();
+    openOrderChat57(o.id,actor);
+  };
+};
+
+// ------------------------------------------------------------
+// PROVEEDOR - PEDIDOS RECIBIDOS
+// ------------------------------------------------------------
+window.renderProviderOrders57=function(){
+  const p=provider57();
+  if(!p)return toast('Proveedor no identificado');
+
+  const orders=(data.stockPurchases||[])
+    .filter(o=>o.supplierSource==='community'&&String(o.supplierId)===String(p.id))
+    .sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
+
+  $('#content').innerHTML=`
+    <div class="card">
+      <div class="section-title">
+        <div>
+          <h2>📦 Pedidos recibidos</h2>
+          <small class="muted">Aceptá el pedido y comunicate con el salón hasta completar pago y entrega.</small>
+        </div>
+        <button class="secondary" onclick="renderProviderCommunity56()">← Volver a Comunidad</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      ${orders.length?`
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Fecha</th><th>Producto</th><th>Cant.</th><th>Total</th>
+                <th>Estado</th><th>Pago</th><th>Entrega</th><th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${orders.map(o=>`
+                <tr>
+                  <td>${esc57(o.date||'')}</td>
+                  <td>
+                    <b>${esc57(o.productName)}</b>
+                    ${o.eventName?`<small style="display:block">Fiesta: ${esc57(o.eventName)}</small>`:''}
+                  </td>
+                  <td>${N57(o.qty)}</td>
+                  <td>${money57(o.total)}</td>
+                  <td><b>${esc57(orderStatus57(o))}</b></td>
+                  <td>${esc57(paymentStatus57(o))}</td>
+                  <td>${esc57(deliveryStatus57(o))}</td>
+                  <td>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap">
+                      ${orderStatus57(o)==='Pendiente de aceptación'?`
+                        <button class="primary small" onclick="providerAcceptOrder57('${o.id}')">Aceptar</button>
+                        <button class="danger small" onclick="providerRejectOrder57('${o.id}')">Rechazar</button>
+                      `:''}
+                      ${orderStatus57(o)==='Aceptado'&&paymentStatus57(o)==='Pagado'&&!o.providerPaymentConfirmed?`
+                        <button class="secondary small" onclick="providerConfirmPayment57('${o.id}')">Confirmar pago recibido</button>
+                      `:''}
+                      <button class="secondary small" onclick="openOrderChat57('${o.id}','provider')">💬 Comunicación</button>
+                    </div>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `:'<div class="empty">Todavía no recibiste pedidos.</div>'}
+    </div>
+  `;
+};
+
+window.providerAcceptOrder57=function(orderId){
+  const o=getOrder57(orderId);
+  if(!o)return;
+  o.orderStatus='Aceptado';
+  o.acceptedAt=new Date().toISOString();
+  addMessage57(o.id,'provider',o.supplierName,'Pedido aceptado. Podemos continuar por este chat.');
+  save();
+  renderProviderOrders57();
+  toast('Pedido aceptado');
+};
+
+window.providerRejectOrder57=function(orderId){
+  const o=getOrder57(orderId);
+  if(!o)return;
+
+  const reason=prompt('Motivo del rechazo:');
+  if(reason===null)return;
+
+  o.orderStatus='Rechazado';
+  o.rejectedAt=new Date().toISOString();
+  o.rejectReason=String(reason||'').trim();
+  addMessage57(o.id,'provider',o.supplierName,`Pedido rechazado${o.rejectReason?': '+o.rejectReason:'.'}`);
+  save();
+  renderProviderOrders57();
+  toast('Pedido rechazado');
+};
+
+window.providerConfirmPayment57=function(orderId){
+  const o=getOrder57(orderId);
+  if(!o)return;
+  o.providerPaymentConfirmed=true;
+  o.providerPaymentConfirmedAt=new Date().toISOString();
+  addMessage57(o.id,'provider',o.supplierName,'Pago recibido y confirmado.');
+  save();
+  renderProviderOrders57();
+  toast('Pago confirmado');
+};
+
+// Inyecta botón PEDIDOS al proveedor
+function injectProviderOrdersButton57(){
+  const s=sess57();
+  if(s.role!=='provider'&&s.role!=='supplier')return;
+  if(document.querySelector('#provider-orders57'))return;
+
+  const host=document.querySelector('.topbar .toolbar') ||
+             document.querySelector('.nav') ||
+             document.querySelector('.toolbar') ||
+             document.querySelector('header') ||
+             document.querySelector('#app');
+  if(!host)return;
+
+  const b=document.createElement('button');
+  b.id='provider-orders57';
+  b.className='secondary';
+  b.innerHTML='📦 Pedidos';
+  b.onclick=()=>renderProviderOrders57();
+  host.appendChild(b);
+}
+setTimeout(injectProviderOrdersButton57,300);
+setInterval(injectProviderOrdersButton57,1400);
+
+// ------------------------------------------------------------
+// SALÓN - GESTIÓN DEL PEDIDO
+// ------------------------------------------------------------
+window.salonMarkPaid57=function(orderId){
+  const o=getOrder57(orderId);
+  if(!o)return;
+  if(orderStatus57(o)!=='Aceptado')return toast('El proveedor debe aceptar el pedido primero');
+  if(o.paymentStatus==='Pagado')return toast('El pedido ya figura pagado');
+
+  if(!confirm(`¿Confirmar pago de ${money57(o.total)} a ${o.supplierName}?`))return;
+
+  o.paymentStatus='Pagado';
+  o.paymentDate=new Date().toISOString().slice(0,10);
+  addExpenseOnce57(o);
+  addMessage57(o.id,'salon','Salón','Pago realizado.');
+  save();
+  renderSuppliersV57();
+  toast('Pago registrado');
+};
+
+window.salonMarkDelivered57=function(orderId){
+  const o=getOrder57(orderId);
+  if(!o)return;
+  if(orderStatus57(o)!=='Aceptado')return toast('El proveedor debe aceptar el pedido primero');
+  if(o.deliveryStatus==='Entregado')return toast('El pedido ya figura entregado');
+
+  if(!confirm(`¿Confirmás que recibiste el pedido de ${o.supplierName}?`))return;
+
+  o.deliveryStatus='Entregado';
+  o.deliveredAt=new Date().toISOString();
+
+  // ÚNICO punto donde se incrementa stock.
+  addStockOnce57(o);
+
+  addMessage57(o.id,'salon','Salón','Pedido recibido y marcado como entregado.');
+  save();
+  renderSuppliersV57();
+  toast(o.targetType==='stock'?'Pedido entregado y stock actualizado':'Pedido entregado');
+};
+
+window.renderSuppliersV57=function(){
+  const own=ownProviders57();
+  const community=communityProviders57();
+  const purchases=(data.stockPurchases||[])
+    .filter(o=>o.salonId===SID57())
+    .sort((a,b)=>String(b.createdAt||b.date||'').localeCompare(String(a.createdAt||a.date||'')));
+
+  setTitle('Proveedores','Pedidos, comunidad y stock');
+
+  $('#content').innerHTML=`
+    <div class="card">
+      <div class="section-title">
+        <div>
+          <h3>🚚 Proveedores</h3>
+          <small class="muted">Los pedidos a la comunidad deben ser aceptados antes del pago y la entrega.</small>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="secondary" onclick="openManualSupplier51()">+ Proveedor manual</button>
+          <button class="primary" onclick="openStockPurchase57()">+ Nueva compra / pedido</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h3>Proveedores de la comunidad</h3>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;margin-top:10px">
+        ${community.length?community.map(c=>`
+          <div class="card" style="margin:0">
+            <div style="display:flex;gap:10px;align-items:center">
+              ${c.raw.logo?`<img src="${c.raw.logo}" style="width:54px;height:54px;object-fit:contain;border-radius:10px">`:''}
+              <div>
+                <h3 style="margin:0">${esc57(c.display)}</h3>
+                <small>${esc57(c.raw.address||'')}</small>
+              </div>
+            </div>
+            <div style="margin-top:10px">
+              ${c.products.length?c.products.map(p=>`
+                <div style="display:grid;grid-template-columns:54px 1fr auto;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid #eee">
+                  ${p.photo?`<img src="${p.photo}" style="width:54px;height:54px;object-fit:cover;border-radius:8px">`:'<div></div>'}
+                  <div><b>${esc57(p.name)}</b><small style="display:block">${esc57(p.description||'')}</small></div>
+                  <b>${money57(p.price)}</b>
+                </div>
+              `).join(''):'<div class="empty">Sin productos visibles.</div>'}
+            </div>
+            <button class="primary small" style="margin-top:10px" onclick="openStockPurchase57('community:${c.id}')">Hacer pedido</button>
+          </div>
+        `).join(''):'<div class="empty">No hay proveedores de la comunidad.</div>'}
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h3>Mis proveedores manuales</h3>
+      ${own.length?own.map(s=>`
+        <div style="padding:8px 0;border-bottom:1px solid #eee">
+          <b>${esc57(s.name||s.businessName||'Proveedor')}</b>
+        </div>
+      `).join(''):'<div class="empty">Sin proveedores manuales.</div>'}
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h3>Pedidos / compras</h3>
+      ${purchases.length?`
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Fecha</th><th>Proveedor</th><th>Producto</th><th>Destino</th>
+                <th>Total</th><th>Estado</th><th>Pago</th><th>Entrega</th><th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${purchases.map(o=>`
+                <tr>
+                  <td>${esc57(o.date||'')}</td>
+                  <td>${esc57(o.supplierName||'')}</td>
+                  <td>${esc57(o.productName||'')} × ${N57(o.qty)}</td>
+                  <td>${o.targetType==='event'?`Fiesta: ${esc57(o.eventName||'')}`:'Stock'}</td>
+                  <td><b>${money57(o.total||0)}</b></td>
+                  <td><b>${esc57(orderStatus57(o))}</b></td>
+                  <td>${esc57(paymentStatus57(o))}</td>
+                  <td>${esc57(deliveryStatus57(o))}</td>
+                  <td>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap">
+                      ${o.supplierSource==='community'?`
+                        <button class="secondary small" onclick="openOrderChat57('${o.id}','salon')">💬 Comunicación</button>
+                        ${orderStatus57(o)==='Aceptado'&&paymentStatus57(o)!=='Pagado'?`
+                          <button class="secondary small" onclick="salonMarkPaid57('${o.id}')">💳 Marcar pagado</button>
+                        `:''}
+                        ${orderStatus57(o)==='Aceptado'&&deliveryStatus57(o)!=='Entregado'?`
+                          <button class="primary small" onclick="salonMarkDelivered57('${o.id}')">📦 Marcar entregado</button>
+                        `:''}
+                      `:''}
+                    </div>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `:'<div class="empty">Todavía no hay pedidos.</div>'}
+    </div>
+  `;
+};
+
+// Alias finales
+window.openStockPurchase56=window.openStockPurchase57;
+window.openStockPurchase55=window.openStockPurchase57;
+window.openStockPurchase54=window.openStockPurchase57;
+window.openStockPurchase53=window.openStockPurchase57;
+
+window.openPurchaseFromCommunity53=function(providerId){
+  openStockPurchase57(`community:${providerId}`);
+};
+
+window.renderSuppliersV56=window.renderSuppliersV57;
+window.renderSuppliersV55=window.renderSuppliersV57;
+window.renderSuppliersV54=window.renderSuppliersV57;
+window.renderSuppliersV53=window.renderSuppliersV57;
+
+const route57=renderSalonView;
+renderSalonView=function(){
+  if(view==='suppliers')return renderSuppliersV57();
+  return route57();
+};
+
+})();
