@@ -9090,3 +9090,223 @@ renderSalonView=function(){
 };
 
 })();
+
+
+// ============================================================
+// V32 - INICIO POR FIESTA + CONTABILIDAD GENERAL APARTE
+// ============================================================
+(function(){
+'use strict';
+
+data.movements=data.movements||[];
+data.assignments=data.assignments||[];
+
+const SID32=()=>session?.salonId;
+const EV32=()=> (data.events||[]).filter(e=>e.salonId===SID32() && e.status!=='Cancelada');
+const ASS32=eid=> (data.assignments||[]).filter(a=>a.eventId===eid);
+const MOV32=()=> (data.movements||[]).filter(m=>m.salonId===SID32());
+
+function n32(v){return Number(v||0)}
+function eventFigures32(e){
+  const base=n32(e.basePrice ?? e.baseTotal ?? 0);
+  const extras=n32(e.extrasTotal);
+  const stock=n32(e.stockItemsTotal);
+  const extraStaff=n32(e.staffClientChargeTotal);
+  const contracted=base+extras+stock+extraStaff;
+
+  // Todo lo efectivamente pagado por el cliente.
+  // e.paid incluye seña + cobros posteriores.
+  const paid=n32(e.paid ?? e.deposit ?? 0);
+  const pending=Math.max(0,contracted-paid);
+
+  const staffExpense=n32(
+    e.staffExpenseTotal ??
+    ASS32(e.id).reduce((s,a)=>s+n32(a.amount),0)
+  );
+
+  return {base,extras,stock,extraStaff,contracted,paid,pending,staffExpense};
+}
+
+// Inicio deja de ser una contabilidad general.
+// Muestra cada fiesta con su propia cuenta.
+window.renderDashboardV32=function(){
+  const events=EV32().slice().sort((a,b)=>{
+    const da=String(a.date||'')+String(a.start||'');
+    const db=String(b.date||'')+String(b.start||'');
+    return da.localeCompare(db);
+  });
+
+  setTitle('Inicio','Estado económico por fiesta');
+
+  $('#content').innerHTML=events.length ? `
+    <div class="card">
+      <div class="section-title">
+        <div>
+          <h3>Cuenta de cada fiesta</h3>
+          <small class="muted">Los importes se muestran por reserva. La contabilidad general está en la pestaña Contabilidad.</small>
+        </div>
+      </div>
+    </div>
+
+    ${events.map(e=>{
+      const f=eventFigures32(e);
+      return `
+      <div class="card" style="margin-top:16px">
+        <div class="section-title">
+          <div>
+            <h3>${esc(e.child||'Fiesta')} · ${esc(e.date||'')}</h3>
+            <small class="muted">${esc(e.client||'')} · ${esc(e.start||'')} a ${esc(e.end||'')} · ${esc(e.status||'')}</small>
+          </div>
+          <button class="secondary small" onclick="openEvent('${e.id}')">Abrir fiesta</button>
+        </div>
+
+        <div class="grid stats">
+          <div class="card stat">
+            <small>Valor de la fiesta</small>
+            <strong>${money(f.base)}</strong>
+          </div>
+
+          <div class="card stat">
+            <small>Adicionales</small>
+            <strong>${money(f.extras)}</strong>
+          </div>
+
+          <div class="card stat">
+            <small>Productos de stock</small>
+            <strong>${money(f.stock)}</strong>
+          </div>
+
+          <div class="card stat">
+            <small>Moza / personal adicional cobrado</small>
+            <strong>${money(f.extraStaff)}</strong>
+          </div>
+
+          <div class="card stat">
+            <small>Total contratado</small>
+            <strong>${money(f.contracted)}</strong>
+          </div>
+
+          <div class="card stat">
+            <small>Ingresado</small>
+            <strong>${money(f.paid)}</strong>
+            <em>Seña + cobros del cliente</em>
+          </div>
+
+          <div class="card stat">
+            <small>Pendiente de cobrar</small>
+            <strong>${money(f.pending)}</strong>
+          </div>
+
+          <div class="card stat">
+            <small>Gasto de personal del salón</small>
+            <strong>${money(f.staffExpense)}</strong>
+            <em>No se cobra al cliente</em>
+          </div>
+        </div>
+      </div>`;
+    }).join('')}
+  ` : `<div class="empty">No hay fiestas activas cargadas.</div>`;
+};
+
+// Contabilidad general separada.
+// Acá sí se muestran todas las entradas y salidas.
+window.renderAccountingV32=function(){
+  const mov=MOV32().slice().sort((a,b)=>{
+    const da=String(a.createdAt||a.movementDate||'');
+    const db=String(b.createdAt||b.movementDate||'');
+    return db.localeCompare(da);
+  });
+
+  const ingresos=mov.filter(m=>m.type==='Ingreso'||m.type==='Cobro')
+    .reduce((s,m)=>s+n32(m.amount),0);
+
+  const egresos=mov.filter(m=>m.type==='Gasto')
+    .reduce((s,m)=>s+n32(m.amount),0);
+
+  const cargos=mov.filter(m=>m.type==='Cargo')
+    .reduce((s,m)=>s+n32(m.amount),0);
+
+  setTitle('Contabilidad','Entradas, salidas y pagos del salón');
+
+  $('#content').innerHTML=`
+    <div class="grid stats">
+      <div class="card stat"><small>Ingresos cobrados</small><strong>${money(ingresos)}</strong></div>
+      <div class="card stat"><small>Egresos pagados</small><strong>${money(egresos)}</strong></div>
+      <div class="card stat"><small>Cargos / conceptos</small><strong>${money(cargos)}</strong></div>
+      <div class="card stat"><small>Resultado de caja</small><strong>${money(ingresos-egresos)}</strong></div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="section-title">
+        <div>
+          <h3>Movimientos contables</h3>
+          <small class="muted">Entradas, salidas, señas, cobros, personal, proveedores y stock.</small>
+        </div>
+      </div>
+
+      ${mov.length ? `
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Fecha</th>
+              <th>Tipo</th>
+              <th>Categoría</th>
+              <th>Concepto</th>
+              <th>Fiesta</th>
+              <th>Importe</th>
+              <th>Medio</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${mov.map(m=>{
+              const e=(data.events||[]).find(x=>x.id===m.eventId);
+              return `
+              <tr>
+                <td>${esc(m.movementDate || String(m.createdAt||'').slice(0,10))}</td>
+                <td>${esc(m.type||'')}</td>
+                <td>${esc(m.category||'')}</td>
+                <td>${esc(m.concept||'')}</td>
+                <td>${e ? `${esc(e.child||e.client||'Fiesta')} · ${esc(e.date||'')}` : '-'}</td>
+                <td><b>${money(m.amount||0)}</b></td>
+                <td>${esc(m.method||'')}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>` : `<div class="empty">No hay movimientos contables registrados.</div>`}
+    </div>
+  `;
+};
+
+// Renombra visualmente Finanzas a Contabilidad cuando existe el item.
+function renameFinanceNav32(){
+  try{
+    document.querySelectorAll('button, a').forEach(el=>{
+      const t=(el.textContent||'').trim();
+      if(t==='Finanzas'){
+        el.textContent='Contabilidad';
+      }
+    });
+  }catch(_){}
+}
+
+const prevView32=renderSalonView;
+renderSalonView=function(){
+  if(view==='dashboard')return renderDashboardV32();
+  if(view==='finance')return renderAccountingV32();
+  return prevView32();
+};
+
+const prevShell32=renderSalonShell;
+renderSalonShell=function(){
+  const r=prevShell32();
+  setTimeout(renameFinanceNav32,0);
+  setTimeout(renameFinanceNav32,100);
+  return r;
+};
+
+const obs32=new MutationObserver(()=>renameFinanceNav32());
+obs32.observe(document.documentElement,{childList:true,subtree:true});
+
+})();
