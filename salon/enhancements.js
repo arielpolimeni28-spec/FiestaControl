@@ -18053,3 +18053,520 @@ renderSalonView=function(){
 };
 
 })();
+
+
+// ============================================================
+// V58 - PORTAL PROVEEDOR: UN SOLO "PEDIDOS" + FINANZAS
+// ============================================================
+(function(){
+'use strict';
+
+data.providerFinanceMovements=data.providerFinanceMovements||[];
+
+const N58=v=>Number(v||0);
+const norm58=v=>String(v||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+const esc58=v=>{
+  try{return esc(v)}catch(e){
+    return String(v??'').replace(/[&<>"']/g,ch=>({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[ch]));
+  }
+};
+const money58=v=>{
+  try{return money(v)}catch(e){return '$ '+N58(v).toLocaleString('es-AR')}
+};
+const sess58=()=>{
+  try{return session||{}}catch(e){return window.session||{}}
+};
+
+function provider58(){
+  const s=sess58();
+  const vals=[
+    s.providerId,s.supplierId,s.marketSupplierId,s.userId,s.id,
+    s.email,s.userEmail,s.username,s.userName,s.name,s.businessName
+  ].filter(Boolean).map(norm58);
+
+  return (data.marketSuppliers||[]).find(p=>{
+    const keys=[
+      p.id,p.userId,p.providerId,p.supplierId,p.email,
+      p.username,p.userName,p.name,p.businessName,p.fantasyName
+    ].filter(Boolean).map(norm58);
+    return keys.some(k=>vals.includes(k));
+  })||null;
+}
+function providerName58(p){
+  return String(p?.fantasyName||p?.businessName||p?.name||p?.username||p?.email||'Proveedor');
+}
+function providerOrders58(p){
+  if(!p)return [];
+  return (data.stockPurchases||[])
+    .filter(o=>o.supplierSource==='community'&&String(o.supplierId)===String(p.id))
+    .sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
+}
+function providerMovements58(p){
+  if(!p)return [];
+  return (data.providerFinanceMovements||[])
+    .filter(m=>String(m.providerId)===String(p.id))
+    .sort((a,b)=>String(b.date||b.createdAt||'').localeCompare(String(a.date||a.createdAt||'')));
+}
+function paidSales58(p){
+  return providerOrders58(p).filter(o=>o.paymentStatus==='Pagado');
+}
+function providerTotals58(p){
+  const movs=providerMovements58(p);
+  const sales=paidSales58(p);
+
+  const ventas=sales.reduce((a,o)=>a+N58(o.total),0);
+  const entradasManual=movs.filter(m=>m.kind==='Entrada').reduce((a,m)=>a+N58(m.amount),0);
+  const salidas=movs.filter(m=>m.kind==='Salida').reduce((a,m)=>a+N58(m.amount),0);
+  const compras=movs.filter(m=>m.kind==='Compra').reduce((a,m)=>a+N58(m.amount),0);
+
+  return {
+    ventas,
+    entradas:ventas+entradasManual,
+    salidas:salidas+compras,
+    compras,
+    resultado:(ventas+entradasManual)-(salidas+compras)
+  };
+}
+
+// ------------------------------------------------------------
+// LIMPIEZA DEL MENÚ: SACAR "PEDIDOS Y MENSAJES"
+// y dejar el botón "PEDIDOS" existente.
+// ------------------------------------------------------------
+function cleanProviderMenu58(){
+  const s=sess58();
+  if(s.role!=='provider'&&s.role!=='supplier')return;
+
+  const els=[...document.querySelectorAll('a,button,[role="button"],.nav-item,.menu-item,.sidebar-item,li')];
+
+  els.forEach(el=>{
+    const txt=norm58(el.textContent);
+    if(txt==='pedidos y mensajes' || txt.includes('pedidos y mensajes')){
+      // No tocar el botón "Pedidos" independiente.
+      el.style.display='none';
+      el.setAttribute('data-hidden-v58','1');
+    }
+  });
+
+  // Agrega Finanzas una sola vez.
+  if(document.querySelector('#provider-finance58'))return;
+
+  const pedidos=[...document.querySelectorAll('a,button,[role="button"],.nav-item,.menu-item,.sidebar-item')]
+    .find(el=>norm58(el.textContent)==='pedidos');
+
+  const b=document.createElement('button');
+  b.id='provider-finance58';
+  b.className=pedidos?.className||'secondary';
+  b.innerHTML='💰 Finanzas';
+  b.onclick=()=>renderProviderFinance58();
+
+  if(pedidos?.parentNode){
+    pedidos.parentNode.insertBefore(b,pedidos.nextSibling);
+  }else{
+    const host=document.querySelector('.sidebar nav')||
+               document.querySelector('.sidebar')||
+               document.querySelector('.nav')||
+               document.querySelector('#app');
+    host?.appendChild(b);
+  }
+}
+
+setTimeout(cleanProviderMenu58,250);
+setInterval(cleanProviderMenu58,1200);
+
+// ------------------------------------------------------------
+// MOVIMIENTOS MANUALES DEL PROVEEDOR
+// ------------------------------------------------------------
+window.openProviderFinanceMovement58=function(kind){
+  const p=provider58();
+  if(!p)return toast('Proveedor no identificado');
+
+  const title=kind==='Entrada'?'Registrar entrada':
+              kind==='Salida'?'Registrar salida':
+              'Registrar compra';
+
+  showModal(`
+    <div class="modal-title">
+      <div><h2>${title}</h2><p>${esc58(providerName58(p))}</p></div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="providerMove58">
+      <div class="form-grid">
+        <div class="field span2">
+          <label>Concepto</label>
+          <input name="concept" required placeholder="${kind==='Compra'?'Ej.: Compra de insumos':'Detalle del movimiento'}">
+        </div>
+
+        <div class="field">
+          <label>Importe</label>
+          <input name="amount" type="number" min="0" step="0.01" required>
+        </div>
+
+        <div class="field">
+          <label>Fecha</label>
+          <input name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required>
+        </div>
+
+        <div class="field">
+          <label>Medio</label>
+          <select name="method">
+            <option>Efectivo</option>
+            <option>Transferencia</option>
+            <option>Mercado Pago</option>
+            <option>Tarjeta</option>
+            <option>Otro</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Categoría</label>
+          <input name="category" value="${kind==='Compra'?'Compra':'General'}">
+        </div>
+
+        <div class="field span2">
+          <label>Observaciones</label>
+          <textarea name="notes"></textarea>
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="primary">Guardar</button>
+      </div>
+    </form>
+  `);
+
+  document.querySelector('#providerMove58').onsubmit=e=>{
+    e.preventDefault();
+    const f=Object.fromEntries(new FormData(e.target));
+
+    data.providerFinanceMovements.push({
+      id:id(),
+      providerId:p.id,
+      kind,
+      concept:String(f.concept||'').trim(),
+      amount:N58(f.amount),
+      date:f.date,
+      method:f.method,
+      category:String(f.category||'General').trim(),
+      notes:String(f.notes||'').trim(),
+      createdAt:new Date().toISOString()
+    });
+
+    save();
+    closeModal();
+    renderProviderFinance58();
+    toast('Movimiento guardado');
+  };
+};
+
+window.deleteProviderFinanceMovement58=function(mid){
+  const p=provider58();
+  const m=(data.providerFinanceMovements||[]).find(x=>x.id===mid&&String(x.providerId)===String(p?.id));
+  if(!m)return;
+  if(!confirm(`¿Eliminar "${m.concept}" por ${money58(m.amount)}?`))return;
+
+  data.providerFinanceMovements=data.providerFinanceMovements.filter(x=>x.id!==mid);
+  save();
+  renderProviderFinance58();
+  toast('Movimiento eliminado');
+};
+
+// ------------------------------------------------------------
+// FINANZAS DEL PROVEEDOR
+// ------------------------------------------------------------
+window.renderProviderFinance58=function(){
+  const p=provider58();
+  if(!p)return toast('Proveedor no identificado');
+
+  const totals=providerTotals58(p);
+  const movs=providerMovements58(p);
+  const sales=paidSales58(p);
+
+  const rows=[
+    ...sales.map(o=>({
+      id:'',
+      date:o.paymentDate||o.date||o.createdAt?.slice?.(0,10)||'',
+      kind:'Venta',
+      concept:`Venta ${o.productName||''} · pedido ${String(o.id||'').slice(-6)}`,
+      method:o.paymentMethod||'',
+      amount:N58(o.total),
+      auto:true
+    })),
+    ...movs.map(m=>({...m,auto:false}))
+  ].sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')));
+
+  const entradasEfectivo=rows.filter(r=>(r.kind==='Entrada'||r.kind==='Venta')&&r.method==='Efectivo').reduce((a,r)=>a+N58(r.amount),0);
+  const entradasTransfer=rows.filter(r=>(r.kind==='Entrada'||r.kind==='Venta')&&r.method==='Transferencia').reduce((a,r)=>a+N58(r.amount),0);
+
+  const content=document.querySelector('#content');
+  if(!content)return;
+
+  content.innerHTML=`
+    <div class="card">
+      <div class="section-title">
+        <div>
+          <h2>💰 Finanzas · ${esc58(providerName58(p))}</h2>
+          <small class="muted">Entradas, salidas, compras y ventas del proveedor.</small>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="primary" onclick="openProviderFinanceMovement58('Entrada')">+ Entrada</button>
+          <button class="secondary" onclick="openProviderFinanceMovement58('Salida')">- Salida</button>
+          <button class="secondary" onclick="openProviderFinanceMovement58('Compra')">🛒 Compra</button>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-top:14px">
+      <div class="card">
+        <small>Entradas</small>
+        <h2>${money58(totals.entradas)}</h2>
+      </div>
+      <div class="card">
+        <small>Salidas</small>
+        <h2>${money58(totals.salidas)}</h2>
+      </div>
+      <div class="card">
+        <small>Ventas cobradas</small>
+        <h2>${money58(totals.ventas)}</h2>
+      </div>
+      <div class="card">
+        <small>Compras</small>
+        <h2>${money58(totals.compras)}</h2>
+      </div>
+      <div class="card">
+        <small>Resultado</small>
+        <h2>${money58(totals.resultado)}</h2>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h3>Resumen de ingresos</h3>
+      <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:8px">
+        <span><b>Efectivo:</b> ${money58(entradasEfectivo)}</span>
+        <span><b>Transferencia:</b> ${money58(entradasTransfer)}</span>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h3>Movimientos</h3>
+      ${rows.length?`
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Fecha</th><th>Tipo</th><th>Concepto</th>
+                <th>Medio</th><th>Importe</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map(r=>`
+                <tr>
+                  <td>${esc58(r.date||'')}</td>
+                  <td><b>${esc58(r.kind||'')}</b>${r.auto?' <small>Automático</small>':''}</td>
+                  <td>${esc58(r.concept||'')}</td>
+                  <td>${esc58(r.method||'-')}</td>
+                  <td><b>${money58(r.amount)}</b></td>
+                  <td>${!r.auto?`<button class="danger small" onclick="deleteProviderFinanceMovement58('${r.id}')">Eliminar</button>`:''}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `:'<div class="empty">Todavía no hay movimientos.</div>'}
+    </div>
+  `;
+};
+
+// ------------------------------------------------------------
+// AL CONFIRMAR PAGO EN PEDIDOS, LA VENTA QUEDA AUTOMÁTICAMENTE
+// reflejada en Finanzas porque se calcula desde pedidos pagados.
+// No duplica movimientos manuales.
+// ------------------------------------------------------------
+
+// Si existe el render de pedidos V57, lo conservamos y limpiamos menú después.
+const oldProviderOrders58=window.renderProviderOrders57;
+if(typeof oldProviderOrders58==='function'){
+  window.renderProviderOrders57=function(){
+    const r=oldProviderOrders58.apply(this,arguments);
+    setTimeout(cleanProviderMenu58,50);
+    return r;
+  };
+}
+
+})();
+
+
+// ============================================================
+// V59 - PRODUCTOS PROVEEDOR: EDITAR + BORRAR
+// ============================================================
+(function(){
+'use strict';
+
+const norm59=v=>String(v||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+const esc59=v=>{
+  try{return esc(v)}catch(e){
+    return String(v??'').replace(/[&<>"']/g,ch=>({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[ch]));
+  }
+};
+const money59=v=>{
+  try{return money(v)}catch(e){return '$ '+Number(v||0).toLocaleString('es-AR')}
+};
+const sess59=()=>{
+  try{return session||{}}catch(e){return window.session||{}}
+};
+
+function provider59(){
+  const s=sess59();
+  const vals=[
+    s.providerId,s.supplierId,s.marketSupplierId,s.userId,s.id,
+    s.email,s.userEmail,s.username,s.userName,s.name,s.businessName
+  ].filter(Boolean).map(norm59);
+
+  return (data.marketSuppliers||[]).find(p=>{
+    const keys=[
+      p.id,p.userId,p.providerId,p.supplierId,p.email,
+      p.username,p.userName,p.name,p.businessName,p.fantasyName
+    ].filter(Boolean).map(norm59);
+    return keys.some(k=>vals.includes(k));
+  })||null;
+}
+function belongs59(prod,p){
+  if(!prod||!p)return false;
+  return String(prod.providerId)===String(p.id) ||
+         String(prod.providerUserId)===String(p.userId||p.id) ||
+         (!!prod.providerEmail && !!p.email &&
+          norm59(prod.providerEmail)===norm59(p.email));
+}
+function products59(p){
+  return (data.providerProducts||[])
+    .filter(x=>belongs59(x,p))
+    .sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+}
+
+// BORRAR PRODUCTO
+window.deleteProviderProduct59=function(productId){
+  const p=provider59();
+  if(!p)return toast('Proveedor no identificado');
+
+  const prod=(data.providerProducts||[]).find(x=>x.id===productId&&belongs59(x,p));
+  if(!prod)return toast('Producto no encontrado');
+
+  const pending=(data.stockPurchases||[]).filter(o=>
+    o.supplierSource==='community' &&
+    String(o.supplierId)===String(p.id) &&
+    String(o.productId)===String(prod.id) &&
+    !['Entregado','Rechazado'].includes(String(o.deliveryStatus||o.orderStatus||''))
+  ).length;
+
+  const warning=pending
+    ? `\n\nHay ${pending} pedido(s) existente(s) relacionados. Esos pedidos conservarán los datos históricos del producto.`
+    : '';
+
+  if(!confirm(`¿Borrar el producto "${prod.name}"?${warning}`))return;
+
+  data.providerProducts=(data.providerProducts||[]).filter(x=>x.id!==productId);
+
+  save();
+  renderProviderCommunity59();
+  toast('Producto eliminado');
+};
+
+// LISTADO FINAL DE PRODUCTOS
+window.renderProviderCommunity59=function(){
+  const p=provider59();
+  if(!p)return toast('No se pudo identificar el proveedor');
+
+  const products=products59(p);
+
+  const content=document.querySelector('#content');
+  if(!content)return;
+
+  content.innerHTML=`
+    <div class="card">
+      <div class="section-title">
+        <div style="display:flex;align-items:center;gap:12px">
+          ${p.logo?`<img src="${p.logo}" style="width:58px;height:58px;object-fit:contain;border-radius:12px">`:''}
+          <div>
+            <h2>${esc59(p.fantasyName||p.businessName||p.name||'Proveedor')}</h2>
+            <small class="muted">
+              ${esc59(p.address||'')}
+              ${p.phone?' · '+esc59(p.phone):''}
+              ${p.email?' · '+esc59(p.email):''}
+            </small>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="secondary" onclick="openEditProviderUser56()">✏️ Editar usuario</button>
+          <button class="secondary" onclick="openProviderProfile55()">🖼️ Logo / perfil</button>
+          <button class="primary" onclick="openProviderOffer53()">+ Publicar oferta</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <div class="section-title">
+        <div>
+          <h3>Mis productos</h3>
+          <small class="muted">Cada producto puede editarse, ocultarse o eliminarse.</small>
+        </div>
+        <button class="primary" onclick="openProviderProduct56()">+ Agregar producto</button>
+      </div>
+
+      ${products.length?`
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Producto</th>
+                <th>Categoría</th>
+                <th>Precio</th>
+                <th>Visible</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${products.map(x=>`
+                <tr>
+                  <td>
+                    <div style="display:flex;gap:8px;align-items:center">
+                      ${x.photo?`<img src="${x.photo}" style="width:48px;height:48px;object-fit:cover;border-radius:8px">`:''}
+                      <div>
+                        <b>${esc59(x.name)}</b>
+                        <small style="display:block">${esc59(x.description||'')}</small>
+                      </div>
+                    </div>
+                  </td>
+                  <td>${esc59(x.category||'')}</td>
+                  <td><b>${money59(x.price||0)}</b></td>
+                  <td>${x.visibleToSalons!==false?'✅ Sí':'🚫 No'}</td>
+                  <td>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap">
+                      <button class="secondary small" onclick="openProviderProduct56('${x.id}')">✏️ Editar</button>
+                      <button class="danger small" onclick="deleteProviderProduct59('${x.id}')">🗑️ Borrar</button>
+                    </div>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `:'<div class="empty">Todavía no cargaste productos.</div>'}
+    </div>
+  `;
+};
+
+// Alias finales
+window.renderProviderCommunity58=window.renderProviderCommunity59;
+window.renderProviderCommunity57=window.renderProviderCommunity59;
+window.renderProviderCommunity56=window.renderProviderCommunity59;
+window.renderProviderCommunity55=window.renderProviderCommunity59;
+window.renderProviderCommunity54=window.renderProviderCommunity59;
+window.renderProviderCommunity53=window.renderProviderCommunity59;
+
+})();
