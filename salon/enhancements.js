@@ -8265,3 +8265,559 @@ renderSalonShell=function(){
 };
 
 })();
+
+
+// ============================================================
+// V30 - CONTABILIDAD CORRECTA DE LA RESERVA
+// Base + extras + stock + personal adicional = Total cliente
+// Seña/cobros descuentan saldo
+// Personal siempre = gasto del salón
+// Dashboard toma una única contabilidad
+// ============================================================
+(function(){
+'use strict';
+
+data.movements=data.movements||[];
+data.assignments=data.assignments||[];
+data.stockProducts=data.stockProducts||[];
+data.salonExtras=data.salonExtras||[];
+data.financeResets=data.financeResets||[];
+data.accountingEpochs=data.accountingEpochs||[];
+
+const SID30=()=>session?.salonId;
+const EVENTS30=()=> (data.events||[]).filter(e=>e.salonId===SID30());
+const EVENT30=eid=> (data.events||[]).find(e=>e.id===eid&&e.salonId===SID30());
+const STAFF30=()=> (data.staff||[]).filter(s=>s.salonId===SID30()&&s.staffStatus!=='Suspendido');
+const PROD30=()=> (data.stockProducts||[]).filter(p=>p.salonId===SID30());
+const EXTRA30=()=> (data.salonExtras||[]).filter(x=>x.salonId===SID30());
+const ASS30=eid=> (data.assignments||[]).filter(a=>a.eventId===eid);
+
+function unlock30(e){
+  (data.financeResets||[]).forEach(r=>{if(r.salonId===SID30())r.active=false});
+  data.accountingEpochs=(data.accountingEpochs||[]).filter(x=>x.salonId!==SID30());
+  if(e){
+    e.financeResetLocked=false;
+    e.beforeFinanceReset=false;
+    e.beforeAccountingReset=false;
+  }
+}
+
+function removeEventAutoMovements30(eid){
+  data.movements=(data.movements||[]).filter(m=>{
+    if(m.eventId!==eid)return true;
+    return !String(m.sourceKey||'').startsWith('v30:');
+  });
+}
+
+function rebuildEventMovements30(e){
+  if(!e)return;
+  removeEventAutoMovements30(e.id);
+
+  const deposit=Number(e.deposit||0);
+  if(deposit>0){
+    data.movements.push({
+      id:id(),salonId:SID30(),eventId:e.id,
+      sourceKey:`v30:deposit:${e.id}`,
+      type:'Ingreso',category:'Seña',
+      concept:`Seña ${e.child||e.client||''}`,
+      amount:deposit,method:e.depositMethod||'No especificado',
+      movementDate:e.date||new Date().toISOString().slice(0,10),
+      createdAt:new Date().toISOString()
+    });
+  }
+
+  ASS30(e.id).forEach(a=>{
+    const amount=Number(a.amount||0);
+    if(amount<=0)return;
+    data.movements.push({
+      id:id(),salonId:SID30(),eventId:e.id,
+      sourceKey:`v30:staff:${e.id}:${a.staffId}`,
+      type:'Gasto',category:'Personal',
+      concept:`Personal ${a.staffName||''} · ${e.child||e.client||''}`,
+      amount,method:'',
+      movementDate:e.date||new Date().toISOString().slice(0,10),
+      createdAt:new Date().toISOString()
+    });
+  });
+}
+
+function normalize30(e){
+  if(!e)return;
+  const base=Number(e.basePrice??e.baseTotal??0);
+  const extra=Number(e.extrasTotal||0);
+  const stock=Number(e.stockItemsTotal||0);
+  const staffCharge=Number(e.staffClientChargeTotal||0);
+  e.basePrice=base;
+  e.total=base+extra+stock+staffCharge;
+  e.deposit=Number(e.deposit??0);
+  if(Number(e.paid||0)<e.deposit)e.paid=e.deposit;
+  e.balance=Math.max(0,Number(e.total||0)-Number(e.paid||0));
+  unlock30(e);
+}
+
+function restoreStock30(e){
+  (e?.stockItems||[]).forEach(i=>{
+    const p=(data.stockProducts||[]).find(x=>x.id===i.productId&&x.salonId===SID30());
+    if(p)p.stock=Number(p.stock||0)+Number(i.qty||0);
+  });
+}
+function applyStock30(items){
+  items.forEach(i=>{
+    const p=(data.stockProducts||[]).find(x=>x.id===i.productId&&x.salonId===SID30());
+    if(p)p.stock=Math.max(0,Number(p.stock||0)-Number(i.qty||0));
+  });
+}
+
+window.openEventFormV30=function(eid=''){
+  const e=eid?EVENT30(eid):null;
+  const staff=STAFF30(), extras=EXTRA30(), products=PROD30();
+  const oldAssignments=ASS30(eid);
+  const oldExtras=Array.isArray(e?.extras)?e.extras:[];
+  const oldStock=Array.isArray(e?.stockItems)?e.stockItems:[];
+
+  showModal(`
+    <div class="modal-title">
+      <div><h2>${e?'Editar reserva':'Nueva reserva'}</h2><p>El total se calcula automáticamente.</p></div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="ev30">
+      <div class="form-grid">
+        <div class="field"><label>Nombre del cumpleañero/a</label><input name="child" required value="${esc(e?.child||'')}"></div>
+        <div class="field"><label>Edad que cumple</label><input name="age" type="number" min="0" value="${Number(e?.age||0)}"></div>
+        <div class="field"><label>Responsable del evento</label><input name="client" required value="${esc(e?.client||'')}"></div>
+        <div class="field"><label>Email del cliente</label><input name="email" type="email" required value="${esc(e?.email||'')}"></div>
+        <div class="field"><label>Fecha</label><input name="date" type="date" required value="${esc(e?.date||todayKey())}"></div>
+        <div class="field"><label>Estado</label><select name="status">${['Consulta','Pendiente','Señada','Confirmada','Finalizada','Cancelada'].map(x=>`<option ${e?.status===x?'selected':''}>${x}</option>`).join('')}</select></div>
+        <div class="field"><label>Horario desde</label><input name="start" type="time" required value="${esc(e?.start||'')}"></div>
+        <div class="field"><label>Horario hasta</label><input name="end" type="time" required value="${esc(e?.end||'')}"></div>
+        <div class="field"><label>Cantidad de invitados</label><input name="guests" type="number" min="0" value="${Number(e?.guests||0)}"></div>
+
+        <div class="field">
+          <label>Costo de la fiesta / precio base</label>
+          <input name="basePrice" id="base30" type="number" min="0" value="${Number(e?.basePrice??e?.baseTotal??0)}" required>
+          <small class="muted">Este es el valor base de la reserva.</small>
+        </div>
+
+        <div class="field">
+          <label>Valor de la seña</label>
+          <input name="deposit" id="dep30" type="number" min="0" value="${Number(e?.deposit??0)}">
+        </div>
+
+        <div class="field">
+          <label>Medio de pago de la seña</label>
+          <select name="depositMethod">
+            ${['Efectivo','Transferencia','Mercado Pago','Tarjeta','Otro'].map(x=>`<option ${e?.depositMethod===x?'selected':''}>${x}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+
+      <div id="same30" class="card" style="margin-top:12px"></div>
+
+      <div class="card" style="margin-top:12px">
+        <div class="section-title">
+          <div><h3>Personal asignado</h3><small class="muted">Siempre es gasto del salón. Solo suma al cliente si marcás “Cobrar como adicional”.</small></div>
+        </div>
+        ${staff.length?staff.map(s=>{
+          const a=oldAssignments.find(x=>x.staffId===s.id);
+          return `
+          <div class="form-grid staffrow30" data-id="${s.id}" data-fee="${Number(s.defaultFee||0)}" style="align-items:end;margin-bottom:8px">
+            <label class="check-card span2">
+              <input type="checkbox" class="staffsel30" ${a?'checked':''}>
+              <span><b>${esc(s.name)}</b><small>${esc(s.role||'')} · Costo salón ${money(s.defaultFee||0)}</small></span>
+            </label>
+            <label class="check-card">
+              <input type="checkbox" class="staffcharge30" ${a?.chargeToClient?'checked':''}>
+              <span><b>Cobrar como adicional</b><small>Se suma al total del cliente</small></span>
+            </label>
+            <div class="field">
+              <label>Valor a cobrar al cliente</label>
+              <input class="staffclient30" type="number" min="0" value="${Number(a?.clientCharge??s.defaultFee??0)}">
+            </div>
+          </div>`;
+        }).join(''):'<div class="empty">No hay personal activo cargado.</div>'}
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <div class="section-title"><div><h3>Adicionales</h3><small class="muted">Todo adicional seleccionado se suma al total.</small></div></div>
+        ${extras.length?`<div class="form-grid">${extras.map(x=>{
+          const checked=oldExtras.some(z=>z.extraId===x.id||z.id===x.id);
+          const price=Number(x.price||x.amount||0);
+          return `<label class="check-card"><input type="checkbox" class="extra30" value="${x.id}" data-price="${price}" ${checked?'checked':''}><span><b>${esc(x.name||x.description||'Adicional')}</b><small>${money(price)}</small></span></label>`;
+        }).join('')}</div>`:'<div class="empty">No hay adicionales configurados.</div>'}
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <div class="section-title"><div><h3>Productos de stock</h3><small class="muted">Cada producto seleccionado se suma al total de la fiesta.</small></div></div>
+        ${products.length?products.map(p=>{
+          const old=oldStock.find(x=>x.productId===p.id);
+          const available=Number(p.stock||0)+Number(old?.qty||0);
+          return `
+          <div class="form-grid stockrow30" data-id="${p.id}" data-price="${Number(p.salePrice||0)}" data-available="${available}" style="align-items:end;margin-bottom:8px">
+            <div class="field span2"><label>${esc(p.name)}</label><small>Disponible ${available} · Venta ${money(p.salePrice||0)}</small></div>
+            <div class="field"><label>Cantidad</label><input class="stockqty30" type="number" min="0" max="${available}" value="${Number(old?.qty||0)}"></div>
+          </div>`;
+        }).join(''):'<div class="empty">No hay productos cargados.</div>'}
+      </div>
+
+      <div class="grid stats" style="margin-top:14px">
+        <div class="card stat"><small>Precio base</small><strong id="baseSum30">$ 0</strong></div>
+        <div class="card stat"><small>Adicionales</small><strong id="extraSum30">$ 0</strong></div>
+        <div class="card stat"><small>Productos</small><strong id="stockSum30">$ 0</strong></div>
+        <div class="card stat"><small>Personal adicional cobrado</small><strong id="staffChargeSum30">$ 0</strong></div>
+        <div class="card stat"><small>Total de la reserva</small><strong id="totalSum30">$ 0</strong></div>
+        <div class="card stat"><small>Seña</small><strong id="depSum30">$ 0</strong></div>
+        <div class="card stat"><small>Saldo cliente</small><strong id="balSum30">$ 0</strong></div>
+        <div class="card stat"><small>Gasto personal salón</small><strong id="staffExpenseSum30">$ 0</strong></div>
+      </div>
+
+      <div class="field" style="margin-top:12px"><label>Observaciones</label><textarea name="notes">${esc(e?.notes||'')}</textarea></div>
+
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="primary">Guardar fiesta</button>
+      </div>
+    </form>
+  `);
+
+  const form=$('#ev30'),same=$('#same30');
+
+  function day(){
+    const a=EVENTS30().filter(x=>x.id!==eid&&x.date===form.date.value&&x.status!=='Cancelada');
+    same.innerHTML=`<b>Fiestas ya creadas ese día</b>${a.length?a.map(x=>`<div>${esc(x.start)}–${esc(x.end)} · ${esc(x.child||x.client)}</div>`).join(''):'<small>Día libre.</small>'}`;
+  }
+
+  function calc(){
+    const base=Number($('#base30').value||0);
+
+    let extra=0;
+    $$('.extra30').forEach(x=>{if(x.checked)extra+=Number(x.dataset.price||0)});
+
+    let stock=0;
+    $$('.stockrow30').forEach(r=>{
+      stock+=Number(r.querySelector('.stockqty30').value||0)*Number(r.dataset.price||0);
+    });
+
+    let staffClient=0, staffExpense=0;
+    $$('.staffrow30').forEach(r=>{
+      const selected=r.querySelector('.staffsel30').checked;
+      const charge=r.querySelector('.staffcharge30').checked;
+      if(selected){
+        staffExpense+=Number(r.dataset.fee||0);
+        if(charge)staffClient+=Number(r.querySelector('.staffclient30').value||0);
+      }
+    });
+
+    const total=base+extra+stock+staffClient;
+    const deposit=Math.min(Number($('#dep30').value||0),total);
+    const balance=Math.max(0,total-deposit);
+
+    $('#baseSum30').textContent=money(base);
+    $('#extraSum30').textContent=money(extra);
+    $('#stockSum30').textContent=money(stock);
+    $('#staffChargeSum30').textContent=money(staffClient);
+    $('#totalSum30').textContent=money(total);
+    $('#depSum30').textContent=money(deposit);
+    $('#balSum30').textContent=money(balance);
+    $('#staffExpenseSum30').textContent=money(staffExpense);
+  }
+
+  form.date.onchange=day;
+  $('#base30').oninput=calc;$('#dep30').oninput=calc;
+  $$('.extra30').forEach(x=>x.onchange=calc);
+  $$('.stockqty30').forEach(x=>x.oninput=calc);
+  $$('.staffrow30 input').forEach(x=>x.oninput=calc);
+  $$('.staffrow30 input[type=checkbox]').forEach(x=>x.onchange=calc);
+
+  day();calc();
+
+  form.onsubmit=ev=>{
+    ev.preventDefault();
+    const f=Object.fromEntries(new FormData(form));
+
+    if(f.end<=f.start)return toast('El horario de finalización debe ser posterior');
+    const conflict=EVENTS30().find(x=>x.id!==eid&&x.date===f.date&&x.status!=='Cancelada'&&f.start<x.end&&f.end>x.start);
+    if(conflict)return toast(`Se superpone con ${conflict.start} a ${conflict.end}`);
+
+    const extrasSel=$$('.extra30').filter(x=>x.checked).map(x=>{
+      const ex=extras.find(z=>z.id===x.value);
+      return {extraId:x.value,name:ex?.name||ex?.description||'Adicional',price:Number(x.dataset.price||0)};
+    });
+
+    const stockSel=$$('.stockrow30').map(r=>{
+      const q=Number(r.querySelector('.stockqty30').value||0);
+      return q>0?{
+        productId:r.dataset.id,
+        name:PROD30().find(p=>p.id===r.dataset.id)?.name||'',
+        qty:q,unitPrice:Number(r.dataset.price||0)
+      }:null;
+    }).filter(Boolean);
+
+    for(const i of stockSel){
+      const row=$(`.stockrow30[data-id="${i.productId}"]`);
+      if(i.qty>Number(row.dataset.available||0))return toast(`Stock insuficiente de ${i.name}`);
+    }
+
+    const base=Number(f.basePrice||0);
+    const extrasTotal=extrasSel.reduce((s,x)=>s+x.price,0);
+    const stockTotal=stockSel.reduce((s,x)=>s+x.qty*x.unitPrice,0);
+
+    const staffAssignments=$$('.staffrow30').map(r=>{
+      if(!r.querySelector('.staffsel30').checked)return null;
+      const staffId=r.dataset.id;
+      const p=STAFF30().find(x=>x.id===staffId);
+      const chargeToClient=r.querySelector('.staffcharge30').checked;
+      const clientCharge=chargeToClient?Number(r.querySelector('.staffclient30').value||0):0;
+      return {
+        staffId,
+        staffName:p?.name||'',
+        amount:Number(p?.defaultFee||0),
+        chargeToClient,
+        clientCharge
+      };
+    }).filter(Boolean);
+
+    const staffClientTotal=staffAssignments.reduce((s,a)=>s+Number(a.clientCharge||0),0);
+    const staffExpenseTotal=staffAssignments.reduce((s,a)=>s+Number(a.amount||0),0);
+    const total=base+extrasTotal+stockTotal+staffClientTotal;
+    const deposit=Math.min(Number(f.deposit||0),total);
+
+    if(e)restoreStock30(e);
+    applyStock30(stockSel);
+
+    const obj=e||{id:id(),salonId:SID30(),createdAt:new Date().toISOString(),rsvps:[]};
+    Object.assign(obj,{
+      child:f.child,age:Number(f.age||0),client:f.client,email:f.email,date:f.date,
+      status:f.status==='Señada'?'Confirmada':f.status,
+      start:f.start,end:f.end,guests:Number(f.guests||0),
+      basePrice:base,extras:extrasSel,extrasTotal,
+      stockItems:stockSel,stockItemsTotal:stockTotal,
+      staffClientChargeTotal:staffClientTotal,
+      staffExpenseTotal,
+      total,deposit,paid:deposit,
+      depositMethod:f.depositMethod,
+      balance:Math.max(0,total-deposit),
+      notes:f.notes||'',
+      updatedAt:new Date().toISOString()
+    });
+
+    if(!e)data.events.push(obj);
+
+    data.assignments=(data.assignments||[]).filter(a=>a.eventId!==obj.id);
+    staffAssignments.forEach(a=>{
+      data.assignments.push({
+        id:id(),salonId:SID30(),eventId:obj.id,
+        ...a,paid:false,createdAt:new Date().toISOString()
+      });
+    });
+
+    unlock30(obj);
+    rebuildEventMovements30(obj);
+
+    save();
+
+    setTimeout(()=>{
+      const again=EVENT30(obj.id);
+      if(!again)return;
+      normalize30(again);
+      rebuildEventMovements30(again);
+      save();
+    },350);
+
+    closeModal();
+    toast('Reserva guardada con cuentas correctas');
+    view='events';
+    renderSalonShell();
+  };
+};
+
+window.renderEventsV30=function(){
+  setTitle('Fiestas','Total, cobrado, saldo y gastos de cada reserva');
+  const a=EVENTS30().slice().sort((x,y)=>String(x.date||'').localeCompare(String(y.date||'')));
+
+  $('#content').innerHTML=a.length?`
+  <div class="table-wrap"><table class="table">
+    <thead><tr><th>Fecha</th><th>Cumpleañero</th><th>Cliente</th><th>Estado</th><th>Total reserva</th><th>Cobrado</th><th>Saldo</th><th>Gasto personal</th><th></th></tr></thead>
+    <tbody>${a.map(e=>{
+      normalize30(e);
+      return `<tr>
+        <td>${esc(e.date||'')}</td>
+        <td><b>${esc(e.child||'')}</b></td>
+        <td>${esc(e.client||'')}</td>
+        <td><span class="pill">${esc(e.status||'')}</span></td>
+        <td><b>${money(e.total||0)}</b></td>
+        <td>${money(e.paid||0)}</td>
+        <td>${money(Math.max(0,Number(e.total||0)-Number(e.paid||0)))}</td>
+        <td>${money(e.staffExpenseTotal||ASS30(e.id).reduce((s,x)=>s+Number(x.amount||0),0))}</td>
+        <td><button class="secondary small" onclick="openEventV30('${e.id}')">Abrir</button></td>
+      </tr>`;
+    }).join('')}</tbody>
+  </table></div>`:'<div class="empty">No hay fiestas.</div>';
+};
+
+window.openEventV30=function(eid){
+  const e=EVENT30(eid);if(!e)return;
+  normalize30(e);
+  rebuildEventMovements30(e);
+  save();
+
+  const paid=Number(e.paid||0),balance=Math.max(0,Number(e.total||0)-paid);
+  const ass=ASS30(eid),extra=e.extras||[],stock=e.stockItems||[];
+
+  showModal(`
+    <div class="modal-title">
+      <div><h2>${esc(e.child||'Fiesta')} · ${esc(e.date||'')}</h2><p>${esc(e.client||'')} · ${esc(e.start||'')} a ${esc(e.end||'')}</p></div>
+      <button class="ghost small" onclick="closeModal()">✕ Cerrar</button>
+    </div>
+
+    <div class="grid stats">
+      <div class="card stat"><small>Total reserva</small><strong>${money(e.total||0)}</strong></div>
+      <div class="card stat"><small>Cobrado</small><strong>${money(paid)}</strong></div>
+      <div class="card stat"><small>Saldo cliente</small><strong>${money(balance)}</strong></div>
+      <div class="card stat"><small>Gasto personal salón</small><strong>${money(e.staffExpenseTotal||0)}</strong></div>
+    </div>
+
+    <div class="toolbar" style="margin-top:12px">
+      ${balance>0?`<button class="primary" onclick="openPaymentV30('${e.id}')">+ Registrar cobro</button>`:''}
+      <button class="secondary" onclick="openEventFormV30('${e.id}')">Editar reserva</button>
+      <button class="danger" onclick="confirmDeleteEvent('${e.id}')">🗑 Borrar fiesta</button>
+    </div>
+
+    <div class="grid two" style="margin-top:14px">
+      <div class="card">
+        <h3>Cuenta del cliente</h3>
+        <div>Precio base <b>${money(e.basePrice||0)}</b></div>
+        <div>Adicionales <b>${money(e.extrasTotal||0)}</b></div>
+        <div>Productos stock <b>${money(e.stockItemsTotal||0)}</b></div>
+        <div>Personal adicional cobrado <b>${money(e.staffClientChargeTotal||0)}</b></div>
+        <hr>
+        <div>Total reserva <b>${money(e.total||0)}</b></div>
+        <div>Seña / cobrado <b>${money(paid)}</b></div>
+        <div>Saldo <b>${money(balance)}</b></div>
+      </div>
+
+      <div class="card">
+        <h3>Personal / costo salón</h3>
+        ${ass.length?ass.map(a=>`<div>👤 ${esc(a.staffName||'Personal')} · costo salón <b>${money(a.amount||0)}</b>${a.chargeToClient?` · cobrado al cliente <b>${money(a.clientCharge||0)}</b>`:''}</div>`).join(''):'<div class="empty">Sin personal asignado.</div>'}
+      </div>
+
+      <div class="card">
+        <h3>Adicionales</h3>
+        ${extra.length?extra.map(x=>`<div>${esc(x.name)} <b>${money(x.price||0)}</b></div>`).join(''):'<div class="empty">Sin adicionales.</div>'}
+      </div>
+
+      <div class="card">
+        <h3>Productos stock</h3>
+        ${stock.length?stock.map(x=>`<div>${esc(x.name)} · ${x.qty} × ${money(x.unitPrice)} = <b>${money(Number(x.qty)*Number(x.unitPrice))}</b></div>`).join(''):'<div class="empty">Sin productos.</div>'}
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h3>Movimientos de esta fiesta</h3>
+      ${data.movements.filter(m=>m.eventId===e.id).length?`
+      <div class="table-wrap"><table class="table"><thead><tr><th>Tipo</th><th>Concepto</th><th>Importe</th><th>Medio</th></tr></thead><tbody>
+      ${data.movements.filter(m=>m.eventId===e.id).map(m=>`<tr><td>${esc(m.type)}</td><td>${esc(m.concept)}</td><td>${money(m.amount)}</td><td>${esc(m.method||'')}</td></tr>`).join('')}
+      </tbody></table></div>`:'<div class="empty">Sin movimientos.</div>'}
+    </div>
+  `);
+};
+
+window.openPaymentV30=function(eid){
+  const e=EVENT30(eid);if(!e)return;
+  normalize30(e);
+  const balance=Math.max(0,Number(e.total||0)-Number(e.paid||0));
+  if(balance<=0)return toast('La fiesta ya está totalmente cobrada');
+
+  showModal(`
+    <div class="modal-title"><div><h2>Registrar cobro</h2><p>Saldo actual ${money(balance)}</p></div><button class="ghost small" onclick="closeModal()">✕</button></div>
+    <form id="pay30">
+      <div class="field"><label>Importe</label><input name="amount" type="number" min="1" max="${balance}" value="${balance}" required></div>
+      <div class="field"><label>Medio de pago</label><select name="method">${['Efectivo','Transferencia','Mercado Pago','Tarjeta','Otro'].map(x=>`<option>${x}</option>`).join('')}</select></div>
+      <div class="form-actions"><button type="button" class="ghost" onclick="closeModal()">Cancelar</button><button class="primary">Registrar cobro</button></div>
+    </form>
+  `);
+
+  $('#pay30').onsubmit=ev=>{
+    ev.preventDefault();
+    const f=Object.fromEntries(new FormData(ev.target));
+    const amount=Math.min(Number(f.amount||0),Math.max(0,Number(e.total||0)-Number(e.paid||0)));
+
+    unlock30(e);
+    e.paid=Number(e.paid||0)+amount;
+    e.balance=Math.max(0,Number(e.total||0)-Number(e.paid||0));
+
+    data.movements.push({
+      id:id(),salonId:SID30(),eventId:e.id,
+      type:'Ingreso',category:'Cobro de reserva',
+      concept:`Cobro ${e.child||e.client||''}`,
+      amount,method:f.method,
+      movementDate:new Date().toISOString().slice(0,10),
+      createdAt:new Date().toISOString()
+    });
+
+    save();
+    closeModal();
+    toast('Cobro registrado');
+    openEventV30(e.id);
+  };
+};
+
+window.renderDashboardV30=function(){
+  const ev=EVENTS30();
+  ev.forEach(normalize30);
+
+  const contracted=ev.filter(e=>e.status!=='Cancelada').reduce((s,e)=>s+Number(e.total||0),0);
+  const income=(data.movements||[]).filter(m=>m.salonId===SID30()&&m.type==='Ingreso').reduce((s,m)=>s+Number(m.amount||0),0);
+  const expenses=(data.movements||[]).filter(m=>m.salonId===SID30()&&m.type==='Gasto').reduce((s,m)=>s+Number(m.amount||0),0);
+  const pending=Math.max(0,contracted-income);
+
+  setTitle('Inicio','Resumen contable real del salón');
+  $('#content').innerHTML=`
+    <div class="grid stats">
+      <div class="card stat"><small>Fiestas activas</small><strong>${ev.filter(e=>!['Cancelada','Finalizada'].includes(e.status)).length}</strong></div>
+      <div class="card stat"><small>Contratado</small><strong>${money(contracted)}</strong></div>
+      <div class="card stat"><small>Ingresado</small><strong>${money(income)}</strong></div>
+      <div class="card stat"><small>Pendiente de cobrar</small><strong>${money(pending)}</strong></div>
+      <div class="card stat"><small>Egresos</small><strong>${money(expenses)}</strong></div>
+      <div class="card stat"><small>Resultado de caja</small><strong>${money(income-expenses)}</strong></div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <h3>Últimos movimientos</h3>
+      ${data.movements.filter(m=>m.salonId===SID30()).length?`
+      <div class="table-wrap"><table class="table"><thead><tr><th>Tipo</th><th>Concepto</th><th>Importe</th><th>Medio</th></tr></thead><tbody>
+      ${data.movements.filter(m=>m.salonId===SID30()).slice(-12).reverse().map(m=>`<tr><td>${esc(m.type||'')}</td><td>${esc(m.concept||'')}</td><td>${money(m.amount||0)}</td><td>${esc(m.method||'')}</td></tr>`).join('')}
+      </tbody></table></div>`:'<div class="empty">Sin movimientos.</div>'}
+    </div>
+  `;
+};
+
+// aliases finales
+window.openEventForm=window.openEventFormV30;
+window.openEventFormV29=window.openEventFormV30;
+window.openEventFormV28=window.openEventFormV30;
+window.openEvent=window.openEventV30;
+window.openEventV29=window.openEventV30;
+window.openPayment=window.openPaymentV30;
+window.openPaymentV29=window.openPaymentV30;
+
+const route30=renderSalonView;
+renderSalonView=function(){
+  if(view==='events')return renderEventsV30();
+  if(view==='dashboard')return renderDashboardV30();
+  return route30();
+};
+
+const shell30=renderSalonShell;
+renderSalonShell=function(){
+  const r=shell30();
+  setTimeout(()=>{
+    $$('button').forEach(b=>{
+      const t=(b.textContent||'').toLowerCase();
+      if(t.includes('nueva fiesta')||t.includes('nueva reserva'))b.onclick=()=>openEventFormV30();
+    });
+  },0);
+  return r;
+};
+
+})();
