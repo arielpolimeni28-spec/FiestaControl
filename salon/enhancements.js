@@ -19368,3 +19368,160 @@ setInterval(repairMyProductsMenu61,1200);
 setInterval(pollAdmin61,3000);
 
 })();
+
+
+// ============================================================
+// V62 - PROVEEDOR: PRODUCTOS SOLO EN "MIS PRODUCTOS"
+// ============================================================
+(function(){
+'use strict';
+
+const norm62=v=>String(v||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+const esc62=v=>{
+  try{return esc(v)}catch(e){
+    return String(v??'').replace(/[&<>"']/g,ch=>({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[ch]));
+  }
+};
+const sess62=()=>{
+  try{return session||{}}catch(e){return window.session||{}}
+};
+
+function role62(){ return String(sess62().role||'').toLowerCase(); }
+
+function provider62(){
+  const s=sess62();
+  const vals=[
+    s.providerId,s.supplierId,s.marketSupplierId,s.userId,s.id,
+    s.email,s.userEmail,s.username,s.userName,s.name,s.businessName
+  ].filter(Boolean).map(norm62);
+
+  return (data.marketSuppliers||[]).find(p=>{
+    const keys=[
+      p.id,p.userId,p.providerId,p.supplierId,p.email,
+      p.username,p.userName,p.name,p.businessName,p.fantasyName
+    ].filter(Boolean).map(norm62);
+    return keys.some(k=>vals.includes(k));
+  })||null;
+}
+
+function providerName62(p){
+  return String(p?.fantasyName||p?.businessName||p?.name||p?.username||p?.email||'Proveedor');
+}
+
+function providerOffers62(p){
+  if(!p)return [];
+  return (data.providerOffers||[])
+    .filter(x=>String(x.providerId)===String(p.id))
+    .sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
+}
+
+// ------------------------------------------------------------
+// COMUNIDAD DEL PROVEEDOR
+// Ya NO muestra productos.
+// Solo perfil/comunicación/ofertas + mensajes del administrador.
+// ------------------------------------------------------------
+window.renderProviderCommunity62=function(){
+  const p=provider62();
+  if(!p)return toast('Proveedor no identificado');
+
+  const offers=providerOffers62(p);
+  const content=document.querySelector('#content');
+  if(!content)return;
+
+  content.innerHTML=`
+    <div class="card">
+      <div class="section-title">
+        <div style="display:flex;align-items:center;gap:12px">
+          ${p.logo?`<img src="${p.logo}" style="width:58px;height:58px;object-fit:contain;border-radius:12px">`:''}
+          <div>
+            <h2>💬 Comunidad</h2>
+            <small class="muted">${esc62(providerName62(p))}</small>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="secondary" onclick="openEditProviderUser56()">✏️ Editar usuario</button>
+          <button class="secondary" onclick="openProviderProfile55()">🖼️ Logo / perfil</button>
+          <button class="primary" onclick="openProviderOffer53()">+ Publicar oferta</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <div class="section-title">
+        <div>
+          <h3>📢 Mis publicaciones en Comunidad</h3>
+          <small class="muted">Ofertas y mensajes que publicaste para los salones.</small>
+        </div>
+      </div>
+
+      ${offers.length?offers.map(o=>`
+        <div style="padding:12px 0;border-bottom:1px solid #eee">
+          <b>${esc62(o.title||'Oferta')}</b>
+          <div style="margin-top:4px">${esc62(o.message||'')}</div>
+          <small class="muted">${o.createdAt?new Date(o.createdAt).toLocaleString('es-AR'):''}</small>
+        </div>
+      `).join(''):'<div class="empty">Todavía no publicaste ofertas.</div>'}
+    </div>
+  `;
+
+  // Mantener los mensajes del administrador dentro de Comunidad.
+  setTimeout(()=>{
+    try{
+      if(typeof appendAdminCommunityBlock61==='function') appendAdminCommunityBlock61();
+    }catch(e){}
+  },50);
+};
+
+// Alias finales de todas las versiones anteriores de Comunidad proveedor.
+window.renderProviderCommunity61=window.renderProviderCommunity62;
+window.renderProviderCommunity60=window.renderProviderCommunity62;
+window.renderProviderCommunity59=window.renderProviderCommunity62;
+window.renderProviderCommunity58=window.renderProviderCommunity62;
+window.renderProviderCommunity57=window.renderProviderCommunity62;
+window.renderProviderCommunity56=window.renderProviderCommunity62;
+window.renderProviderCommunity55=window.renderProviderCommunity62;
+window.renderProviderCommunity54=window.renderProviderCommunity62;
+window.renderProviderCommunity53=window.renderProviderCommunity62;
+
+// ------------------------------------------------------------
+// MENÚ: asegurar que "Mis productos" abre SIEMPRE el listado.
+// ------------------------------------------------------------
+function bindProviderMenu62(){
+  if(!['provider','supplier'].includes(role62()))return;
+
+  const els=[...document.querySelectorAll(
+    'a,button,[role="button"],.nav-item,.menu-item,.sidebar-item,li'
+  )];
+
+  els.forEach(el=>{
+    const txt=norm62(el.textContent);
+
+    if(txt==='mis productos'){
+      if(el.dataset.v62Products==='1')return;
+      el.dataset.v62Products='1';
+      el.addEventListener('click',ev=>{
+        ev.preventDefault();
+        ev.stopImmediatePropagation();
+        if(typeof renderMyProducts61==='function') renderMyProducts61();
+      },true);
+    }
+
+    if(txt==='comunidad'){
+      if(el.dataset.v62Community==='1')return;
+      el.dataset.v62Community='1';
+      el.addEventListener('click',ev=>{
+        ev.preventDefault();
+        ev.stopImmediatePropagation();
+        renderProviderCommunity62();
+      },true);
+    }
+  });
+}
+
+setTimeout(bindProviderMenu62,250);
+setInterval(bindProviderMenu62,1200);
+
+})();
