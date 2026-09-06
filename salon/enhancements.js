@@ -9834,3 +9834,137 @@ renderSalonView=function(){
 };
 
 })();
+
+
+// ============================================================
+// V35 - FINANZAS: INGRESO MANUAL / MONTO INICIAL / OTROS INGRESOS
+// ============================================================
+(function(){
+'use strict';
+
+data.movements=data.movements||[];
+
+const SID35=()=>session?.salonId;
+const MOV35=()=> (data.movements||[]).filter(m=>m.salonId===SID35());
+
+window.openManualIncomeV35=function(){
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>Ingresar dinero</h2>
+        <p>Registrar monto inicial u otro ingreso del salón.</p>
+      </div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="manual-income35">
+      <div class="form-grid">
+        <div class="field">
+          <label>Motivo</label>
+          <select name="reasonType" id="reasonType35">
+            <option value="Monto inicial">Monto inicial</option>
+            <option value="Aporte del salón">Aporte del salón</option>
+            <option value="Otro ingreso">Otro ingreso</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Importe</label>
+          <input name="amount" type="number" min="1" required>
+        </div>
+
+        <div class="field">
+          <label>Medio</label>
+          <select name="method">
+            <option>Efectivo</option>
+            <option>Transferencia</option>
+            <option>Mercado Pago</option>
+            <option>Tarjeta</option>
+            <option>Otro</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Fecha</label>
+          <input name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required>
+        </div>
+
+        <div class="field span2">
+          <label>Detalle / observación</label>
+          <input name="detail" placeholder="Ej: caja inicial del mes, aporte del dueño, devolución, etc.">
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="primary">Registrar ingreso</button>
+      </div>
+    </form>
+  `);
+
+  $('#manual-income35').onsubmit=e=>{
+    e.preventDefault();
+    const f=Object.fromEntries(new FormData(e.target));
+    const amount=Number(f.amount||0);
+    if(amount<=0)return toast('Ingresá un importe válido');
+
+    data.movements.push({
+      id:id(),
+      salonId:SID35(),
+      type:'Ingreso',
+      category:f.reasonType||'Otro ingreso',
+      concept:f.detail
+        ? `${f.reasonType} · ${f.detail}`
+        : (f.reasonType||'Otro ingreso'),
+      amount,
+      method:f.method||'',
+      movementDate:f.date,
+      manualIncome:true,
+      createdAt:new Date().toISOString()
+    });
+
+    save();
+    closeModal();
+    toast('Ingreso registrado');
+    renderFinanceV35();
+  };
+};
+
+// Reusa el render financiero V33/V34 y agrega el botón sin cambiar el resto.
+window.renderFinanceV35=function(){
+  if(typeof renderFinanceV33==='function'){
+    renderFinanceV33();
+  }else if(typeof renderAccountingV32==='function'){
+    renderAccountingV32();
+  }else{
+    renderFinance();
+  }
+
+  const content=$('#content');
+  if(!content)return;
+
+  let toolbar=content.querySelector('.toolbar');
+  if(!toolbar){
+    toolbar=document.createElement('div');
+    toolbar.className='toolbar';
+    toolbar.style.marginBottom='16px';
+    content.prepend(toolbar);
+  }
+
+  if(!toolbar.querySelector('#manual-income-btn35')){
+    const b=document.createElement('button');
+    b.id='manual-income-btn35';
+    b.className='primary';
+    b.textContent='+ Ingresar dinero';
+    b.onclick=openManualIncomeV35;
+    toolbar.prepend(b);
+  }
+};
+
+const route35=renderSalonView;
+renderSalonView=function(){
+  if(view==='finance')return renderFinanceV35();
+  return route35();
+};
+
+})();
