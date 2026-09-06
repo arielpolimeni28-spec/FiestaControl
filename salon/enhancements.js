@@ -8821,3 +8821,272 @@ renderSalonShell=function(){
 };
 
 })();
+
+
+// ============================================================
+// V31 - PERSONAL COMPLETO + COSTO POR FIESTA COMO GASTO DEL SALÓN
+// ============================================================
+(function(){
+'use strict';
+
+data.staff=data.staff||[];
+data.assignments=data.assignments||[];
+data.movements=data.movements||[];
+
+const SID31=()=>session?.salonId;
+const STAFF31=()=> (data.staff||[]).filter(s=>s.salonId===SID31());
+const EVENT31=eid=> (data.events||[]).find(e=>e.id===eid&&e.salonId===SID31());
+
+function staffPhoto31(input, cb){
+  const f=input?.files?.[0];
+  if(!f)return cb('');
+  if(f.size>2*1024*1024){toast('La foto no puede superar 2 MB');return cb(null)}
+  const r=new FileReader();
+  r.onload=()=>cb(String(r.result||''));
+  r.readAsDataURL(f);
+}
+
+window.renderStaffV31=function(){
+  const rows=STAFF31();
+  setTitle('Personal','Empleados, roles y costo por fiesta');
+
+  $('#content').innerHTML=`
+    <div class="toolbar">
+      <button class="primary" onclick="openStaffV31()">+ Agregar empleado</button>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="section-title">
+        <div>
+          <h3>Listado de personal</h3>
+          <small class="muted">El costo por fiesta se toma automáticamente como gasto del salón cuando se asigna a una reserva.</small>
+        </div>
+      </div>
+
+      ${rows.length?`
+      <div class="table-wrap"><table class="table">
+        <thead>
+          <tr>
+            <th>Foto</th>
+            <th>Nombre completo</th>
+            <th>Teléfono</th>
+            <th>Rol</th>
+            <th>Costo x fiesta</th>
+            <th>Estado</th>
+            <th>Acciones</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map(s=>`
+            <tr>
+              <td>${s.photo?`<img src="${s.photo}" style="width:48px;height:48px;border-radius:50%;object-fit:cover">`:'👤'}</td>
+              <td><b>${esc(s.name||'')}</b></td>
+              <td>${esc(s.phone||'')}</td>
+              <td>${esc(s.role||'')}</td>
+              <td><b>${money(s.defaultFee||0)}</b></td>
+              <td><span class="pill">${esc(s.staffStatus||'Activo')}</span></td>
+              <td>
+                <button class="secondary small" onclick="openStaffV31('${s.id}')">Editar</button>
+                <button class="secondary small" onclick="toggleStaffV31('${s.id}')">${s.staffStatus==='Suspendido'?'Activar':'Suspender'}</button>
+                <button class="danger small" onclick="deleteStaffV31('${s.id}')">Eliminar</button>
+              </td>
+            </tr>`).join('')}
+        </tbody>
+      </table></div>`:'<div class="empty">No hay empleados cargados.</div>'}
+    </div>
+  `;
+};
+
+window.openStaffV31=function(staffId=''){
+  const s=(data.staff||[]).find(x=>x.id===staffId&&x.salonId===SID31());
+
+  showModal(`
+    <div class="modal-title">
+      <div><h2>${s?'Editar empleado':'Agregar empleado'}</h2><p>Datos y costo por fiesta.</p></div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="staff31">
+      <div class="form-grid">
+        <div class="field span2">
+          <label>Nombre completo</label>
+          <input name="name" required value="${esc(s?.name||'')}">
+        </div>
+
+        <div class="field">
+          <label>Teléfono</label>
+          <input name="phone" value="${esc(s?.phone||'')}">
+        </div>
+
+        <div class="field">
+          <label>Rol</label>
+          <input name="role" required value="${esc(s?.role||'')}" placeholder="Ej: Moza, Animador, Cocinero">
+        </div>
+
+        <div class="field">
+          <label>Costo por fiesta</label>
+          <input name="defaultFee" type="number" min="0" value="${Number(s?.defaultFee||0)}" required>
+          <small class="muted">Este valor NO se cobra al cliente. Se registra como gasto del salón.</small>
+        </div>
+
+        <div class="field">
+          <label>Foto del empleado</label>
+          <input name="photo" type="file" accept="image/*">
+          ${s?.photo?`<img src="${s.photo}" style="display:block;width:80px;height:80px;border-radius:50%;object-fit:cover;margin-top:8px">`:''}
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="primary">Guardar empleado</button>
+      </div>
+    </form>
+  `);
+
+  $('#staff31').onsubmit=e=>{
+    e.preventDefault();
+    const f=Object.fromEntries(new FormData(e.target));
+
+    staffPhoto31(e.target.photo, img=>{
+      if(img===null)return;
+
+      const obj=s||{
+        id:id(),
+        salonId:SID31(),
+        staffStatus:'Activo',
+        createdAt:new Date().toISOString()
+      };
+
+      obj.name=String(f.name||'').trim();
+      obj.phone=String(f.phone||'').trim();
+      obj.role=String(f.role||'').trim();
+      obj.defaultFee=Number(f.defaultFee||0);
+      if(img)obj.photo=img;
+      obj.updatedAt=new Date().toISOString();
+
+      if(!s)data.staff.push(obj);
+
+      save();
+      closeModal();
+      toast(s?'Empleado actualizado':'Empleado creado');
+      renderStaffV31();
+    });
+  };
+};
+
+window.toggleStaffV31=function(staffId){
+  const s=(data.staff||[]).find(x=>x.id===staffId&&x.salonId===SID31());
+  if(!s)return;
+  s.staffStatus=s.staffStatus==='Suspendido'?'Activo':'Suspendido';
+  save();
+  renderStaffV31();
+};
+
+window.deleteStaffV31=function(staffId){
+  const s=(data.staff||[]).find(x=>x.id===staffId&&x.salonId===SID31());
+  if(!s)return;
+  if(!confirm(`¿Eliminar a ${s.name}?`))return;
+
+  data.staff=(data.staff||[]).filter(x=>x.id!==staffId);
+  data.assignments=(data.assignments||[]).filter(a=>a.staffId!==staffId);
+
+  // Elimina gastos automáticos de personal vinculados a este empleado.
+  data.movements=(data.movements||[]).filter(m=>m.staffId!==staffId);
+
+  save();
+  toast('Empleado eliminado');
+  renderStaffV31();
+};
+
+// Recalcula el gasto de personal de una fiesta a partir de los empleados asignados.
+// NO suma al total del cliente.
+window.rebuildStaffExpenseV31=function(eventId){
+  const e=EVENT31(eventId);
+  if(!e)return;
+
+  const ass=(data.assignments||[]).filter(a=>a.eventId===eventId);
+  let totalExpense=0;
+
+  // Quita movimientos automáticos anteriores de personal para esta fiesta.
+  data.movements=(data.movements||[]).filter(m=>
+    !(m.eventId===eventId && m.category==='Personal' && m.autoStaffExpense===true)
+  );
+
+  ass.forEach(a=>{
+    const s=(data.staff||[]).find(x=>x.id===a.staffId&&x.salonId===SID31());
+    const fee=Number(s?.defaultFee??a.amount??0);
+
+    a.amount=fee;
+    a.staffName=s?.name||a.staffName||'Personal';
+
+    totalExpense+=fee;
+
+    if(fee>0){
+      data.movements.push({
+        id:id(),
+        salonId:SID31(),
+        eventId,
+        staffId:a.staffId,
+        type:'Gasto',
+        category:'Personal',
+        concept:`${s?.role||'Personal'} - ${s?.name||a.staffName||''} · ${e.child||e.client||''}`,
+        amount:fee,
+        autoStaffExpense:true,
+        movementDate:e.date||new Date().toISOString().slice(0,10),
+        createdAt:new Date().toISOString()
+      });
+    }
+  });
+
+  e.staffExpenseTotal=totalExpense;
+  save();
+};
+
+// Al abrir ficha de evento, garantiza que el costo de personal esté actualizado.
+const oldOpenEvent31=window.openEventV30||window.openEvent;
+window.openEventV31=function(eid){
+  rebuildStaffExpenseV31(eid);
+  return oldOpenEvent31(eid);
+};
+
+// Al guardar/editar una reserva, vuelve a calcular gasto de personal.
+const oldEventForm31=window.openEventFormV30||window.openEventForm;
+window.openEventFormV31=function(eid=''){
+  const before=new Set((data.events||[]).map(e=>e.id));
+  oldEventForm31(eid);
+
+  const form=document.querySelector('#ev30');
+  if(!form)return;
+
+  const oldSubmit=form.onsubmit;
+  form.onsubmit=function(ev){
+    const result=oldSubmit?oldSubmit.call(form,ev):undefined;
+
+    setTimeout(()=>{
+      let eventId=eid;
+      if(!eventId){
+        const created=(data.events||[]).find(e=>e.salonId===SID31()&&!before.has(e.id));
+        eventId=created?.id||'';
+      }
+      if(eventId)rebuildStaffExpenseV31(eventId);
+    },250);
+
+    return result;
+  };
+};
+
+// Aliases finales
+window.openStaffForm=window.openStaffV31;
+window.openStaffV24=window.openStaffV31;
+window.openEvent=window.openEventV31;
+window.openEventV30=window.openEventV31;
+window.openEventForm=window.openEventFormV31;
+window.openEventFormV30=window.openEventFormV31;
+
+const route31=renderSalonView;
+renderSalonView=function(){
+  if(view==='staff')return renderStaffV31();
+  return route31();
+};
+
+})();
