@@ -7930,3 +7930,338 @@ renderSalonShell=function(){
 };
 
 })();
+
+
+// ============================================================
+// V29 - RESERVAS PERSISTENTES: NO VUELVEN A CERO + MOVIMIENTOS
+// ============================================================
+(function(){
+'use strict';
+
+data.movements=data.movements||[];
+data.assignments=data.assignments||[];
+data.financeResets=data.financeResets||[];
+data.accountingEpochs=data.accountingEpochs||[];
+
+const S29=()=>session?.salonId;
+const E29=()=> (data.events||[]).filter(e=>e.salonId===S29());
+const F29=eid=> (data.events||[]).find(e=>e.id===eid&&e.salonId===S29());
+const A29=eid=> (data.assignments||[]).filter(a=>a.eventId===eid);
+
+function unlockReservationAccounting29(e){
+  const sid=S29();
+  // Desactiva cualquier reset viejo que estaba borrando números nuevos.
+  (data.financeResets||[]).forEach(r=>{if(r.salonId===sid)r.active=false});
+  data.accountingEpochs=(data.accountingEpochs||[]).filter(x=>x.salonId!==sid);
+
+  if(e){
+    e.financeResetLocked=false;
+    e.beforeFinanceReset=false;
+    e.beforeAccountingReset=false;
+  }
+}
+
+function rebuildEventMovements29(e){
+  if(!e)return;
+  const depKey=`event-deposit:${e.id}`;
+  const extrasKey=`event-extras:${e.id}`;
+  const stockKey=`event-stock:${e.id}`;
+
+  data.movements=(data.movements||[]).filter(m=>
+    ![depKey,extrasKey,stockKey].includes(m.sourceKey)
+  );
+
+  const d=Number(e.deposit||0);
+  if(d>0){
+    data.movements.push({
+      id:id(),salonId:S29(),sourceKey:depKey,eventId:e.id,
+      type:'Ingreso',category:'Seña',
+      concept:`Seña reserva ${e.child||e.client||''}`,
+      amount:d,method:e.depositMethod||'No especificado',
+      movementDate:e.date||new Date().toISOString().slice(0,10),
+      createdAt:new Date().toISOString()
+    });
+  }
+
+  const ex=Number(e.extrasTotal||0);
+  if(ex>0){
+    data.movements.push({
+      id:id(),salonId:S29(),sourceKey:extrasKey,eventId:e.id,
+      type:'Cargo',category:'Adicionales de reserva',
+      concept:`Adicionales ${e.child||e.client||''}`,
+      amount:ex,movementDate:e.date||new Date().toISOString().slice(0,10),
+      createdAt:new Date().toISOString()
+    });
+  }
+
+  const st=Number(e.stockItemsTotal||0);
+  if(st>0){
+    data.movements.push({
+      id:id(),salonId:S29(),sourceKey:stockKey,eventId:e.id,
+      type:'Cargo',category:'Productos de stock',
+      concept:`Productos de stock ${e.child||e.client||''}`,
+      amount:st,movementDate:e.date||new Date().toISOString().slice(0,10),
+      createdAt:new Date().toISOString()
+    });
+  }
+}
+
+function normalizeEvent29(e){
+  if(!e)return;
+  // Recupera datos coherentes si una versión vieja dejó campos parciales.
+  const base=Number(e.basePrice ?? e.baseTotal ?? 0);
+  const ex=Number(e.extrasTotal||0);
+  const st=Number(e.stockItemsTotal||0);
+  let total=Number(e.total||0);
+
+  if(total<=0 && (base>0||ex>0||st>0)) total=base+ex+st;
+
+  e.basePrice=base;
+  e.extrasTotal=ex;
+  e.stockItemsTotal=st;
+  e.total=total;
+
+  const dep=Number(e.deposit ?? e.paid ?? 0);
+  e.deposit=dep;
+  if(Number(e.paid||0)<dep)e.paid=dep;
+
+  unlockReservationAccounting29(e);
+}
+
+function fixAllEvents29(){
+  E29().forEach(e=>{
+    normalizeEvent29(e);
+    rebuildEventMovements29(e);
+  });
+}
+
+// Wrapper final sobre el guardado V28: después de guardar vuelve a afirmar
+// importes y movimientos, evitando que capas anteriores los pongan en cero.
+const originalOpenEventForm29=window.openEventFormV28 || window.openEventForm;
+window.openEventFormV29=function(eid=''){
+  const beforeIds=new Set((data.events||[]).map(e=>e.id));
+  originalOpenEventForm29(eid);
+
+  const form=document.querySelector('#ev28');
+  if(!form)return;
+
+  const oldSubmit=form.onsubmit;
+  form.onsubmit=function(ev){
+    const result=oldSubmit ? oldSubmit.call(form,ev) : undefined;
+
+    setTimeout(()=>{
+      let e=eid?F29(eid):(data.events||[]).find(x=>x.salonId===S29()&&!beforeIds.has(x.id));
+      if(!e)return;
+
+      unlockReservationAccounting29(e);
+      normalizeEvent29(e);
+      rebuildEventMovements29(e);
+      save();
+
+      // Segundo guardado: protege contra wrappers viejos que reescriben el estado.
+      setTimeout(()=>{
+        const again=F29(e.id);
+        if(!again)return;
+        unlockReservationAccounting29(again);
+        normalizeEvent29(again);
+        rebuildEventMovements29(again);
+        save();
+      },450);
+    },80);
+
+    return result;
+  };
+};
+
+// Lista definitiva de fiestas.
+window.renderEventsV29=function(){
+  fixAllEvents29();
+  setTitle('Fiestas','Reservas con importes y movimientos reales');
+
+  const arr=E29().slice().sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
+
+  $('#content').innerHTML=arr.length?`
+    <div class="table-wrap"><table class="table">
+      <thead>
+        <tr>
+          <th>Fecha</th><th>Cumpleañero</th><th>Responsable</th><th>Estado</th>
+          <th>Total</th><th>Seña / Cobrado</th><th>Saldo</th><th>Personal</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        ${arr.map(e=>{
+          normalizeEvent29(e);
+          const paid=Number(e.paid||e.deposit||0);
+          const balance=Math.max(0,Number(e.total||0)-paid);
+          return `<tr>
+            <td>${esc(e.date||'')}</td>
+            <td><b>${esc(e.child||'')}</b>${e.age?`<small style="display:block">${Number(e.age)} años</small>`:''}</td>
+            <td>${esc(e.client||'')}</td>
+            <td><span class="pill">${esc(e.status||'')}</span></td>
+            <td><b>${money(e.total||0)}</b></td>
+            <td>${money(paid)}</td>
+            <td>${money(balance)}</td>
+            <td>${A29(e.id).length}</td>
+            <td><button class="secondary small" onclick="openEventV29('${e.id}')">Abrir</button></td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table></div>`:'<div class="empty">No hay fiestas cargadas.</div>';
+
+  save();
+};
+
+window.openEventV29=function(eid){
+  const e=F29(eid); if(!e)return;
+  normalizeEvent29(e);
+  rebuildEventMovements29(e);
+  save();
+
+  const paid=Number(e.paid||e.deposit||0);
+  const balance=Math.max(0,Number(e.total||0)-paid);
+  const ass=A29(eid);
+  const extras=Array.isArray(e.extras)?e.extras:[];
+  const stock=Array.isArray(e.stockItems)?e.stockItems:[];
+
+  showModal(`
+    <div class="modal-title">
+      <div><h2>${esc(e.child||'Fiesta')} · ${esc(e.date||'')}</h2>
+      <p>${esc(e.client||'')} · ${esc(e.start||'')} a ${esc(e.end||'')}</p></div>
+      <button class="ghost small" onclick="closeModal()">✕ Cerrar</button>
+    </div>
+
+    <div class="grid stats">
+      <div class="card stat"><small>Contratado</small><strong>${money(e.total||0)}</strong></div>
+      <div class="card stat"><small>Cobrado / seña</small><strong>${money(paid)}</strong></div>
+      <div class="card stat"><small>Pendiente</small><strong>${money(balance)}</strong></div>
+      <div class="card stat"><small>Personal asignado</small><strong>${ass.length}</strong></div>
+    </div>
+
+    <div class="toolbar" style="margin-top:12px">
+      ${balance>0?`<button class="primary" onclick="openPaymentV29('${e.id}')">+ Registrar cobro</button>`:''}
+      <button class="secondary" onclick="openEventFormV29('${e.id}')">Editar reserva</button>
+      <button class="danger" onclick="confirmDeleteEvent('${e.id}')">🗑 Borrar fiesta</button>
+    </div>
+
+    <div class="grid two" style="margin-top:14px">
+      <div class="card">
+        <h3>Detalle económico</h3>
+        <div>Precio base <b>${money(e.basePrice||0)}</b></div>
+        <div>Adicionales <b>${money(e.extrasTotal||0)}</b></div>
+        <div>Productos de stock <b>${money(e.stockItemsTotal||0)}</b></div>
+        <hr>
+        <div>Total reserva <b>${money(e.total||0)}</b></div>
+        <div>Seña / cobrado <b>${money(paid)}</b></div>
+        <div>Saldo pendiente <b>${money(balance)}</b></div>
+      </div>
+
+      <div class="card">
+        <h3>Personal asignado</h3>
+        ${ass.length?ass.map(a=>`<div>👤 ${esc(a.staffName||'Personal')}</div>`).join(''):'<div class="empty">Sin personal asignado.</div>'}
+      </div>
+
+      <div class="card">
+        <h3>Adicionales</h3>
+        ${extras.length?extras.map(x=>`<div>${esc(x.name||'Adicional')} <b>${money(x.price||0)}</b></div>`).join(''):'<div class="empty">Sin adicionales.</div>'}
+      </div>
+
+      <div class="card">
+        <h3>Productos de stock</h3>
+        ${stock.length?stock.map(x=>`<div>${esc(x.name||'Producto')} · ${Number(x.qty||0)} × ${money(x.unitPrice||0)} = <b>${money(Number(x.qty||0)*Number(x.unitPrice||0))}</b></div>`).join(''):'<div class="empty">Sin productos de stock.</div>'}
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h3>Movimientos de esta reserva</h3>
+      ${((data.movements||[]).filter(m=>m.eventId===e.id)).length
+        ? `<div class="table-wrap"><table class="table"><thead><tr><th>Tipo</th><th>Concepto</th><th>Importe</th><th>Medio</th></tr></thead><tbody>
+          ${(data.movements||[]).filter(m=>m.eventId===e.id).map(m=>`<tr><td>${esc(m.type||'')}</td><td>${esc(m.concept||'')}</td><td>${money(m.amount||0)}</td><td>${esc(m.method||'')}</td></tr>`).join('')}
+          </tbody></table></div>`
+        : '<div class="empty">Sin movimientos registrados.</div>'}
+    </div>
+  `);
+};
+
+window.openPaymentV29=function(eid){
+  const e=F29(eid); if(!e)return;
+  normalizeEvent29(e);
+
+  const current=Number(e.paid||0);
+  const balance=Math.max(0,Number(e.total||0)-current);
+  if(balance<=0)return toast('La reserva ya está totalmente cobrada');
+
+  showModal(`
+    <div class="modal-title"><div><h2>Registrar cobro</h2><p>Saldo actual ${money(balance)}</p></div><button class="ghost small" onclick="closeModal()">✕</button></div>
+    <form id="pay29">
+      <div class="field"><label>Importe</label><input name="amount" type="number" min="1" max="${balance}" value="${balance}" required></div>
+      <div class="field"><label>Medio de pago</label><select name="method">${['Efectivo','Transferencia','Mercado Pago','Tarjeta','Otro'].map(x=>`<option>${x}</option>`).join('')}</select></div>
+      <div class="form-actions"><button type="button" class="ghost" onclick="closeModal()">Cancelar</button><button class="primary">Registrar cobro</button></div>
+    </form>
+  `);
+
+  $('#pay29').onsubmit=ev=>{
+    ev.preventDefault();
+    const f=Object.fromEntries(new FormData(ev.target));
+    const amount=Math.min(Number(f.amount||0),Math.max(0,Number(e.total||0)-Number(e.paid||0)));
+
+    unlockReservationAccounting29(e);
+    e.paid=Number(e.paid||0)+amount;
+
+    data.movements.push({
+      id:id(),salonId:S29(),eventId:e.id,
+      type:'Ingreso',category:'Cobro de reserva',
+      concept:`Cobro ${e.child||e.client||''}`,
+      amount,method:f.method,
+      movementDate:new Date().toISOString().slice(0,10),
+      createdAt:new Date().toISOString()
+    });
+
+    save();
+    setTimeout(()=>{
+      unlockReservationAccounting29(e);
+      save();
+      closeModal();
+      toast('Cobro registrado');
+      openEventV29(e.id);
+    },150);
+  };
+};
+
+// Al entrar al sistema, corrige reservas existentes y preserva sus números.
+setTimeout(()=>{
+  try{
+    if(session?.role==='salon'){
+      fixAllEvents29();
+      save();
+    }
+  }catch(_){}
+},900);
+
+// Aliases definitivos: ninguna capa vieja vuelve a tomar control.
+window.openEventForm=window.openEventFormV29;
+window.openEventFormV28=window.openEventFormV29;
+window.openEvent=window.openEventV29;
+window.openEventV28=window.openEventV29;
+window.openPayment=window.openPaymentV29;
+
+const route29=renderSalonView;
+renderSalonView=function(){
+  if(view==='events')return renderEventsV29();
+  return route29();
+};
+
+const shell29=renderSalonShell;
+renderSalonShell=function(){
+  const r=shell29();
+  setTimeout(()=>{
+    $$('button').forEach(b=>{
+      const t=(b.textContent||'').toLowerCase();
+      if(t.includes('nueva fiesta')||t.includes('nueva reserva')){
+        b.onclick=()=>openEventFormV29();
+      }
+    });
+  },0);
+  return r;
+};
+
+})();
