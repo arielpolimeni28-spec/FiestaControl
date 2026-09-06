@@ -12958,3 +12958,278 @@ renderSalonView=function(){
 };
 
 })();
+
+
+// ============================================================
+// V46 - IMPRIMIR ESTADO DE RESERVA + RECIBO DE PAGO / PDF
+// ============================================================
+(function(){
+'use strict';
+
+const SID46=()=>session?.salonId;
+const SALON46=()=>salon();
+const EVT46=eid=>(data.events||[]).find(e=>e.id===eid&&e.salonId===SID46());
+const MOV46=eid=>(data.movements||[]).filter(m=>m.salonId===SID46()&&m.eventId===eid);
+const N46=v=>Number(v||0);
+
+function esc46(v){
+  return String(v??'').replace(/[&<>"']/g,ch=>({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[ch]));
+}
+function money46(v){
+  try{return new Intl.NumberFormat('es-AR',{style:'currency',currency:'ARS',maximumFractionDigits:0}).format(N46(v));}
+  catch(e){return '$ '+N46(v).toLocaleString('es-AR');}
+}
+function paymentMovements46(eid){
+  return MOV46(eid).filter(m=>{
+    const t=String(m.type||'').toLowerCase();
+    const c=String(m.category||'').toLowerCase();
+    return t==='ingreso' || t==='cobro' || c.includes('cobro') || c.includes('seña') || c.includes('cliente');
+  }).sort((a,b)=>String(a.createdAt||a.movementDate||'').localeCompare(String(b.createdAt||b.movementDate||'')));
+}
+function salonInfo46(){
+  const s=SALON46()||{};
+  return {
+    name:s.name||'FiestaControl',
+    phone:s.phone||'',
+    email:s.email||'',
+    address:s.address||''
+  };
+}
+function openPrintable46(title,body,autoPrint=false){
+  const w=window.open('','_blank','width=980,height=760');
+  if(!w)return toast('El navegador bloqueó la ventana de impresión');
+  w.document.open();
+  w.document.write(`<!doctype html>
+  <html lang="es"><head><meta charset="utf-8"><title>${esc46(title)}</title>
+  <style>
+    *{box-sizing:border-box} body{font-family:Arial,Helvetica,sans-serif;color:#111;margin:0;background:#fff}
+    .page{max-width:900px;margin:0 auto;padding:28px}
+    .head{display:flex;justify-content:space-between;gap:24px;border-bottom:2px solid #111;padding-bottom:14px;margin-bottom:18px}
+    .head h1{font-size:24px;margin:0}.muted{color:#666;font-size:13px}.right{text-align:right}
+    h2{font-size:18px;margin:22px 0 10px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px 28px}
+    .row{display:flex;justify-content:space-between;gap:20px;padding:7px 0;border-bottom:1px solid #ddd}
+    .total{font-size:18px;font-weight:bold;border-top:2px solid #111;margin-top:10px;padding-top:10px}
+    table{width:100%;border-collapse:collapse}th,td{padding:8px;border-bottom:1px solid #ddd;text-align:left;font-size:13px}
+    .sign{margin-top:55px;display:grid;grid-template-columns:1fr 1fr;gap:60px}.line{border-top:1px solid #111;padding-top:6px;text-align:center;font-size:12px}
+    .no-print{margin:0 auto 20px;max-width:900px;padding:12px;display:flex;gap:8px}
+    button{padding:10px 14px;border:1px solid #bbb;background:#fff;border-radius:8px;cursor:pointer}
+    @media print{.no-print{display:none}.page{padding:0}.head{margin-top:0}@page{size:A4;margin:14mm}}
+  </style></head><body>
+  <div class="no-print"><button onclick="window.print()">🖨 Imprimir / Guardar como PDF</button><button onclick="window.close()">Cerrar</button></div>
+  <div class="page">${body}</div>
+  </body></html>`);
+  w.document.close();
+  if(autoPrint)setTimeout(()=>{try{w.focus();w.print();}catch(e){}},350);
+  return w;
+}
+
+window.printReservationStatus46=function(eid,autoPrint=false){
+  const e=EVT46(eid); if(!e)return;
+  const s=salonInfo46();
+  const pays=paymentMovements46(eid);
+  const paid=N46(e.paid??e.deposit);
+  const total=N46(e.total);
+  const balance=Math.max(0,total-paid);
+
+  const included=[
+    e.includesTableware?'Vajilla':'',
+    e.includesLinen?'Mantelería':'',
+    e.includesCoffee?'Cafetería':''
+  ].filter(Boolean);
+
+  const body=`
+    <div class="head">
+      <div>
+        <h1>${esc46(s.name)}</h1>
+        <div class="muted">${esc46(s.address)}</div>
+        <div class="muted">${esc46(s.phone)} ${s.email?'· '+esc46(s.email):''}</div>
+      </div>
+      <div class="right"><b>ESTADO DE RESERVA</b><div class="muted">Emitido ${new Date().toLocaleString('es-AR')}</div></div>
+    </div>
+
+    <h2>Datos del evento</h2>
+    <div class="grid">
+      <div><b>Tipo:</b> ${esc46(e.eventTypeName||'Evento')}</div>
+      <div><b>Fecha:</b> ${esc46(e.date||'')}</div>
+      <div><b>Nombre:</b> ${esc46(e.eventName||e.child||'')}</div>
+      <div><b>Fecha de cumpleaños:</b> ${esc46(e.birthdayDate||'—')}</div>
+      <div><b>Horario:</b> ${esc46(e.start||'')} a ${esc46(e.end||'')}</div>
+      <div><b>Duración:</b> ${N46(e.durationHours)} h${N46(e.extraHours)>0?' + '+N46(e.extraHours)+' h extra':''}</div>
+      <div><b>Adultos:</b> ${N46(e.adults)}</div>
+      <div><b>Niños:</b> ${N46(e.children)}</div>
+      <div><b>Responsable:</b> ${esc46(e.client||'')}</div>
+      <div><b>Estado:</b> ${esc46(e.status||'')}</div>
+    </div>
+
+    <h2>Incluido</h2>
+    <div class="row"><span>Personal base</span><b>${N46(e.includedWaiters)} mozo(s) · ${N46(e.includedKitchen)} cocina · ${N46(e.includedAnimators)} animador(es)</b></div>
+    <div class="row"><span>Servicios</span><b>${included.length?included.join(' · '):'—'}</b></div>
+
+    <h2>Adicionales</h2>
+    <div class="row"><span>Adultos adicionales (${N46(e.extraAdultQty)})</span><b>${money46(e.extraAdultTotal)}</b></div>
+    <div class="row"><span>Niños adicionales (${N46(e.extraChildQty)})</span><b>${money46(e.extraChildTotal)}</b></div>
+    <div class="row"><span>Mozo adicional (${N46(e.extraWaiters)})</span><b>${money46(e.extraWaiterTotal)}</b></div>
+    <div class="row"><span>Cocina adicional (${N46(e.extraKitchen)})</span><b>${money46(e.extraKitchenTotal)}</b></div>
+    <div class="row"><span>Animador adicional (${N46(e.extraAnimators)})</span><b>${money46(e.extraAnimatorTotal)}</b></div>
+    <div class="row"><span>Horas extra (${N46(e.extraHours)})</span><b>${money46(e.extraHourTotal)}</b></div>
+
+    <h2>Estado económico</h2>
+    <div class="row"><span>Total de la fiesta</span><b>${money46(total)}</b></div>
+    <div class="row"><span>Total pagado</span><b>${money46(paid)}</b></div>
+    <div class="row total"><span>Saldo pendiente</span><b>${money46(balance)}</b></div>
+
+    <h2>Pagos registrados</h2>
+    ${pays.length?`<table><thead><tr><th>Fecha</th><th>Concepto</th><th>Medio</th><th>Importe</th></tr></thead><tbody>
+      ${pays.map(m=>`<tr><td>${esc46(m.movementDate||'')}</td><td>${esc46(m.concept||'Pago')}</td><td>${esc46(m.method||'')}</td><td>${money46(m.amount)}</td></tr>`).join('')}
+    </tbody></table>`:'<div class="muted">No hay pagos registrados.</div>'}
+
+    <div class="sign"><div class="line">Firma del salón</div><div class="line">Firma del cliente</div></div>
+  `;
+  openPrintable46(`Estado reserva - ${e.eventName||e.child||'Evento'}`,body,autoPrint);
+};
+
+window.printReceipt46=function(eid,movementId,autoPrint=false){
+  const e=EVT46(eid); if(!e)return;
+  const m=(data.movements||[]).find(x=>x.id===movementId&&x.eventId===eid);
+  if(!m)return toast('No se encontró el pago');
+  const s=salonInfo46();
+  const pays=paymentMovements46(eid);
+  const paid=pays.reduce((a,x)=>a+N46(x.amount),0);
+  const total=N46(e.total);
+  const balance=Math.max(0,total-paid);
+
+  const body=`
+    <div class="head">
+      <div>
+        <h1>${esc46(s.name)}</h1>
+        <div class="muted">${esc46(s.address)}</div>
+        <div class="muted">${esc46(s.phone)} ${s.email?'· '+esc46(s.email):''}</div>
+      </div>
+      <div class="right"><b>RECIBO DE PAGO</b><div class="muted">N° ${esc46(String(m.id||'').slice(-10).toUpperCase())}</div></div>
+    </div>
+
+    <h2>Recibimos</h2>
+    <div class="row"><span>Cliente</span><b>${esc46(e.client||'')}</b></div>
+    <div class="row"><span>Evento</span><b>${esc46(e.eventTypeName||'Evento')} · ${esc46(e.eventName||e.child||'')}</b></div>
+    <div class="row"><span>Fecha del evento</span><b>${esc46(e.date||'')}</b></div>
+    <div class="row"><span>Fecha del pago</span><b>${esc46(m.movementDate||new Date().toISOString().slice(0,10))}</b></div>
+    <div class="row"><span>Medio de pago</span><b>${esc46(m.method||'')}</b></div>
+    ${m.reference?`<div class="row"><span>Referencia</span><b>${esc46(m.reference)}</b></div>`:''}
+    <div class="row total"><span>Importe recibido</span><b>${money46(m.amount)}</b></div>
+
+    <h2>Estado posterior al pago</h2>
+    <div class="row"><span>Total de la fiesta</span><b>${money46(total)}</b></div>
+    <div class="row"><span>Total abonado</span><b>${money46(paid)}</b></div>
+    <div class="row total"><span>Saldo pendiente</span><b>${money46(balance)}</b></div>
+
+    <div class="muted" style="margin-top:18px">Este recibo corresponde al pago registrado en FiestaControl.</div>
+    <div class="sign"><div class="line">Firma / sello del salón</div><div class="line">Aclaración del cliente</div></div>
+  `;
+  openPrintable46(`Recibo - ${e.eventName||e.child||'Evento'} - ${m.movementDate||''}`,body,autoPrint);
+};
+
+// ------------------------------------------------------------
+// BOTÓN "IMPRIMIR ESTADO" EN CADA RESERVA
+// ------------------------------------------------------------
+const oldOpenEvent46=window.openEventV45 || window.openEvent;
+window.openEventV46=function(eid){
+  oldOpenEvent46(eid);
+  setTimeout(()=>{
+    const modal=document.querySelector('#modal-body');
+    if(!modal || modal.querySelector('#print-status46'))return;
+    const toolbar=modal.querySelector('.toolbar');
+    const btn=document.createElement('button');
+    btn.id='print-status46';
+    btn.className='secondary';
+    btn.innerHTML='🖨 Imprimir estado';
+    btn.onclick=()=>printReservationStatus46(eid,true);
+    if(toolbar)toolbar.appendChild(btn);
+    else{
+      const top=modal.querySelector('.modal-title');
+      if(top)top.insertAdjacentElement('afterend',btn);
+    }
+  },50);
+};
+window.openEvent=window.openEventV46;
+
+// ------------------------------------------------------------
+// COBRO: después de guardar muestra opciones de recibo.
+// ------------------------------------------------------------
+window.openPaymentV30=function(eid){
+  const e=EVT46(eid); if(!e)return;
+  const balance=Math.max(0,N46(e.total)-N46(e.paid));
+  if(balance<=0)return toast('La fiesta ya está totalmente cobrada');
+
+  showModal(`
+    <div class="modal-title">
+      <div><h2>Registrar cobro</h2><p>${esc46(e.eventName||e.child||'Evento')} · Saldo ${money46(balance)}</p></div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+    <form id="pay46">
+      <div class="form-grid">
+        <div class="field"><label>Importe</label><input name="amount" type="number" min="1" max="${balance}" value="${balance}" required></div>
+        <div class="field"><label>Medio de pago</label>
+          <select name="method"><option>Efectivo</option><option>Transferencia</option><option>Mercado Pago</option><option>Tarjeta</option><option>Otro</option></select>
+        </div>
+        <div class="field"><label>Fecha</label><input name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required></div>
+        <div class="field"><label>Referencia / comprobante</label><input name="reference" placeholder="Opcional"></div>
+        <div class="field span2"><label>Concepto</label><input name="concept" value="Pago de reserva"></div>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="primary">Registrar cobro</button>
+      </div>
+    </form>
+  `);
+
+  document.querySelector('#pay46').onsubmit=ev=>{
+    ev.preventDefault();
+    const f=Object.fromEntries(new FormData(ev.target));
+    const amount=Math.min(N46(f.amount),Math.max(0,N46(e.total)-N46(e.paid)));
+    if(amount<=0)return toast('Ingresá un importe válido');
+
+    e.paid=N46(e.paid)+amount;
+    e.balance=Math.max(0,N46(e.total)-N46(e.paid));
+
+    const movement={
+      id:id(),salonId:SID46(),eventId:e.id,
+      type:'Ingreso',category:'Cobro de reserva',
+      concept:String(f.concept||'Pago de reserva'),
+      amount,method:f.method,
+      reference:f.reference||'',
+      movementDate:f.date,
+      createdAt:new Date().toISOString()
+    };
+    data.movements=data.movements||[];
+    data.movements.push(movement);
+    save();
+
+    showModal(`
+      <div class="modal-title">
+        <div><h2>✅ Pago registrado</h2><p>${esc46(e.eventName||e.child||'Evento')}</p></div>
+        <button class="ghost small" onclick="closeModal()">✕</button>
+      </div>
+      <div class="grid stats">
+        <div class="card stat"><small>Pago recibido</small><strong>${money46(amount)}</strong></div>
+        <div class="card stat"><small>Saldo pendiente</small><strong>${money46(e.balance)}</strong></div>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <div><b>Medio:</b> ${esc46(f.method)}</div>
+        <div><b>Fecha:</b> ${esc46(f.date)}</div>
+        ${f.reference?`<div><b>Referencia:</b> ${esc46(f.reference)}</div>`:''}
+      </div>
+      <div class="form-actions" style="margin-top:16px">
+        <button class="secondary" onclick="printReceipt46('${e.id}','${movement.id}',true)">🖨 Imprimir recibo</button>
+        <button class="primary" onclick="printReceipt46('${e.id}','${movement.id}',true)">📄 Generar PDF</button>
+        <button class="ghost" onclick="openEvent('${e.id}')">Ver fiesta</button>
+      </div>
+      <small class="muted">“Generar PDF” abre el recibo listo para elegir “Guardar como PDF” en la ventana de impresión del navegador.</small>
+    `);
+  };
+};
+
+window.openPayment=window.openPaymentV30;
+
+})();
