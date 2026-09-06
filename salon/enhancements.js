@@ -7030,3 +7030,361 @@ renderSalonView=function(){
 };
 
 })();
+
+
+// ============================================================
+// V26 - STOCK FLUJO DEFINITIVO
+// costo automático + pendientes + pagadas + entrega
+// ============================================================
+(function(){
+'use strict';
+
+data.stockPurchases=data.stockPurchases||[];
+data.movements=data.movements||[];
+
+const S26=()=>session?.salonId;
+const P26=()=> (data.stockProducts||[]).filter(p=>p.salonId===S26());
+const B26=()=> (data.stockPurchases||[]).filter(c=>c.salonId===S26());
+const PROD26=idp=> (data.stockProducts||[]).find(p=>p.id===idp && p.salonId===S26());
+const METHODS26=['Efectivo','Transferencia','Mercado Pago','Tarjeta','Otro'];
+
+function total26(c){
+  const q=Number(c.quantity??c.qty??0), u=Number(c.unitCost??c.costPrice??0);
+  return Number(c.total??(q*u));
+}
+
+function normalize26(){
+  B26().forEach(c=>{
+    if(!c.paymentStatus)c.paymentStatus='Pendiente';
+    if(!c.deliveryStatus)c.deliveryStatus='Pendiente de entrega';
+    if(c.paymentStatus!=='Pagado'){
+      data.movements=(data.movements||[]).filter(m=>
+        !(m.salonId===S26() && (m.stockPurchaseId===c.id || m.sourceKey===`stock-purchase:${c.id}`))
+      );
+    }
+  });
+}
+
+window.openStockPurchaseV26=function(pid=''){
+  const ps=P26();
+  if(!ps.length)return toast('Primero cargá un producto');
+
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>Registrar compra</h2>
+        <p>Elegí el producto y el costo unitario se completa automáticamente.</p>
+      </div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="buy26">
+      <div class="form-grid">
+        <div class="field span2">
+          <label>Producto</label>
+          <select name="productId" id="product26" required>
+            ${ps.map(p=>`<option value="${p.id}" ${p.id===pid?'selected':''}>${esc(p.name)}</option>`).join('')}
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Cantidad</label>
+          <input name="quantity" id="qty26" type="number" min="1" value="1" required>
+        </div>
+
+        <div class="field">
+          <label>Costo unitario</label>
+          <input name="unitCost" id="cost26" type="number" min="0" readonly required>
+          <small class="muted">Costo tomado de la ficha del producto.</small>
+        </div>
+
+        <div class="field">
+          <label>Fecha</label>
+          <input name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required>
+        </div>
+
+        <div class="field">
+          <label>Total de la compra</label>
+          <input id="total26" readonly>
+        </div>
+      </div>
+
+      <div class="admin-notice">
+        <span>🧾</span>
+        <div>
+          <b>La compra se registra como Pendiente</b>
+          <small>El pago y el estado de entrega se cargan después desde la línea de la compra.</small>
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="primary">Registrar compra</button>
+      </div>
+    </form>
+  `);
+
+  const f=$('#buy26'), product=$('#product26'), qty=$('#qty26'), cost=$('#cost26'), tot=$('#total26');
+
+  function refreshCost(){
+    const p=PROD26(product.value);
+    cost.value=Number(p?.costPrice||0);
+    refreshTotal();
+  }
+  function refreshTotal(){
+    tot.value=money(Number(qty.value||0)*Number(cost.value||0));
+  }
+
+  product.onchange=refreshCost;
+  qty.oninput=refreshTotal;
+  refreshCost();
+
+  f.onsubmit=e=>{
+    e.preventDefault();
+    const v=Object.fromEntries(new FormData(f));
+    const p=PROD26(v.productId);
+    if(!p)return toast('Producto no encontrado');
+
+    const q=Number(v.quantity||0);
+    const u=Number(p.costPrice||0);
+    if(q<=0)return toast('Ingresá una cantidad válida');
+
+    p.stock=Number(p.stock||0)+q;
+
+    data.stockPurchases.push({
+      id:id(),
+      salonId:S26(),
+      productId:p.id,
+      productName:p.name,
+      quantity:q,
+      unitCost:u,
+      total:q*u,
+      date:v.date,
+      paymentStatus:'Pendiente',
+      deliveryStatus:'Pendiente de entrega',
+      paymentMethod:'',
+      createdAt:new Date().toISOString()
+    });
+
+    save();
+    closeModal();
+    toast('Compra registrada como pendiente');
+    renderStockV26();
+  };
+};
+
+window.editStockPurchaseV26=function(cid){
+  const c=B26().find(x=>x.id===cid);
+  if(!c)return;
+  const p=PROD26(c.productId);
+  const oldQ=Number(c.quantity??c.qty??0);
+
+  showModal(`
+    <div class="modal-title">
+      <div><h2>Editar compra</h2><p>${esc(p?.name||c.productName||'')}</p></div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+    <form id="edit26">
+      <div class="form-grid">
+        <div class="field"><label>Cantidad</label><input name="quantity" type="number" min="1" value="${oldQ}" required></div>
+        <div class="field"><label>Costo unitario</label><input value="${money(c.unitCost??c.costPrice??0)}" readonly></div>
+        <div class="field"><label>Fecha</label><input name="date" type="date" value="${esc(c.date||'')}" required></div>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="primary">Guardar</button>
+      </div>
+    </form>
+  `);
+
+  $('#edit26').onsubmit=e=>{
+    e.preventDefault();
+    const v=Object.fromEntries(new FormData(e.target));
+    const nq=Number(v.quantity||0);
+    if(p)p.stock=Math.max(0,Number(p.stock||0)+(nq-oldQ));
+    c.quantity=nq;
+    c.unitCost=Number(p?.costPrice??c.unitCost??0);
+    c.total=nq*c.unitCost;
+    c.date=v.date;
+    c.updatedAt=new Date().toISOString();
+
+    const m=(data.movements||[]).find(x=>x.salonId===S26()&&x.stockPurchaseId===c.id);
+    if(m&&c.paymentStatus==='Pagado')m.amount=c.total;
+
+    save();
+    closeModal();
+    toast('Compra actualizada');
+    renderStockV26();
+  };
+};
+
+window.payStockPurchaseV26=function(cid){
+  const c=B26().find(x=>x.id===cid);
+  if(!c)return;
+  const p=PROD26(c.productId);
+  const amount=total26(c);
+
+  showModal(`
+    <div class="modal-title">
+      <div><h2>Pagar compra</h2><p>${esc(p?.name||c.productName||'')} · ${money(amount)}</p></div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="pay26">
+      <div class="form-grid">
+        <div class="field"><label>Importe</label><input value="${money(amount)}" readonly></div>
+        <div class="field"><label>Medio de pago</label><select name="method">${METHODS26.map(x=>`<option>${x}</option>`).join('')}</select></div>
+
+        <div class="field span2">
+          <label>Estado de entrega</label>
+          <select name="deliveryStatus">
+            <option value="Pendiente de entrega">Pagada - pendiente de entrega</option>
+            <option value="Entregado">Pagada - entregada</option>
+          </select>
+        </div>
+
+        <div class="field span2">
+          <label>Referencia / comprobante</label>
+          <input name="reference" placeholder="Opcional">
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="primary">Confirmar pago</button>
+      </div>
+    </form>
+  `);
+
+  $('#pay26').onsubmit=e=>{
+    e.preventDefault();
+    const v=Object.fromEntries(new FormData(e.target));
+
+    c.paymentStatus='Pagado';
+    c.paymentMethod=v.method;
+    c.deliveryStatus=v.deliveryStatus;
+    c.reference=v.reference||'';
+    c.paidAt=new Date().toISOString();
+
+    data.movements=(data.movements||[]).filter(m=>
+      !(m.salonId===S26() && (m.stockPurchaseId===c.id || m.sourceKey===`stock-purchase:${c.id}`))
+    );
+
+    data.movements.push({
+      id:id(),
+      salonId:S26(),
+      stockPurchaseId:c.id,
+      sourceKey:`stock-purchase:${c.id}`,
+      type:'Gasto',
+      category:'Compra de stock',
+      concept:`Compra ${p?.name||c.productName||''}`,
+      amount,
+      movementDate:new Date().toISOString().slice(0,10),
+      method:v.method,
+      status:v.deliveryStatus,
+      reference:v.reference||'',
+      createdAt:new Date().toISOString()
+    });
+
+    save();
+    closeModal();
+    toast(v.deliveryStatus==='Entregado'?'Compra pagada y entregada':'Compra pagada, pendiente de entrega');
+    renderStockV26();
+  };
+};
+
+window.deleteStockPurchaseV26=function(cid){
+  const c=B26().find(x=>x.id===cid);
+  if(!c)return;
+  const p=PROD26(c.productId);
+  if(!confirm('¿Borrar esta compra?'))return;
+
+  const q=Number(c.quantity??c.qty??0);
+  if(p)p.stock=Math.max(0,Number(p.stock||0)-q);
+
+  data.stockPurchases=(data.stockPurchases||[]).filter(x=>x.id!==cid);
+  data.movements=(data.movements||[]).filter(m=>
+    !(m.stockPurchaseId===cid || m.sourceKey===`stock-purchase:${cid}`)
+  );
+
+  save();
+  toast('Compra eliminada');
+  renderStockV26();
+};
+
+window.markDeliveredStockV26=function(cid){
+  const c=B26().find(x=>x.id===cid);
+  if(!c)return;
+  c.deliveryStatus='Entregado';
+  c.deliveredAt=new Date().toISOString();
+  const m=(data.movements||[]).find(x=>x.stockPurchaseId===cid&&x.salonId===S26());
+  if(m)m.status='Entregado';
+  save();
+  renderStockV26();
+};
+
+window.renderStockV26=function(){
+  normalize26();
+
+  const ps=P26();
+  const pending=B26().filter(c=>c.paymentStatus!=='Pagado').sort((a,b)=>String(b.createdAt||b.date||'').localeCompare(String(a.createdAt||a.date||'')));
+  const paid=B26().filter(c=>c.paymentStatus==='Pagado').sort((a,b)=>String(b.paidAt||b.createdAt||'').localeCompare(String(a.paidAt||a.createdAt||'')));
+
+  const units=ps.reduce((s,p)=>s+Number(p.stock||0),0);
+  const val=ps.reduce((s,p)=>s+Number(p.stock||0)*Number(p.costPrice||0),0);
+  const low=ps.filter(p=>Number(p.stock||0)<=Number(p.minStock||0)).length;
+
+  setTitle('Stock','Productos, compras pendientes y compras pagadas');
+
+  $('#content').innerHTML=`
+    <div class="grid stats">
+      <div class="card stat"><small>Productos</small><strong>${ps.length}</strong></div>
+      <div class="card stat"><small>Unidades en stock</small><strong>${units}</strong></div>
+      <div class="card stat"><small>Valor de stock a costo</small><strong>${money(val)}</strong></div>
+      <div class="card stat"><small>Stock bajo</small><strong>${low}</strong></div>
+    </div>
+
+    <div class="toolbar" style="margin-top:16px">
+      <button class="primary" onclick="openStockProductV23()">+ Agregar producto</button>
+      <button class="secondary" onclick="openStockPurchaseV26()">🛒 Registrar compra</button>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="section-title"><div><h3>Productos</h3><small class="muted">El costo unitario cargado acá se usa automáticamente en las compras.</small></div></div>
+      ${ps.length?`<div class="table-wrap"><table class="table"><thead><tr><th>Producto</th><th>Stock</th><th>Mínimo</th><th>Costo</th><th>Venta</th><th>Acciones</th></tr></thead><tbody>
+      ${ps.map(p=>`<tr><td><b>${esc(p.name||'')}</b><small style="display:block">${esc(p.description||'')}</small></td><td>${Number(p.stock||0)}</td><td>${Number(p.minStock||0)}</td><td>${money(p.costPrice||0)}</td><td>${money(p.salePrice||0)}</td><td><button class="secondary small" onclick="openStockProductV23('${p.id}')">Editar</button> <button class="secondary small" onclick="openStockPurchaseV26('${p.id}')">Comprar</button> <button class="danger small" onclick="deleteStockProductV23('${p.id}')">Borrar producto</button></td></tr>`).join('')}
+      </tbody></table></div>`:'<div class="empty">Sin productos.</div>'}
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="section-title"><div><h3>Últimas compras pendientes</h3><small class="muted">Estas compras todavía no fueron pagadas.</small></div></div>
+      ${pending.length?`<div class="table-wrap"><table class="table"><thead><tr><th>Fecha</th><th>Producto</th><th>Cantidad</th><th>Costo unitario</th><th>Total</th><th>Acciones</th></tr></thead><tbody>
+      ${pending.map(c=>{let p=PROD26(c.productId);return`<tr><td>${esc(c.date||'')}</td><td>${esc(p?.name||c.productName||'')}</td><td>${Number(c.quantity??c.qty??0)}</td><td>${money(c.unitCost??c.costPrice??0)}</td><td>${money(total26(c))}</td><td><button class="secondary small" onclick="editStockPurchaseV26('${c.id}')">Editar compra</button> <button class="danger small" onclick="deleteStockPurchaseV26('${c.id}')">Borrar compra</button> <button class="primary small" onclick="payStockPurchaseV26('${c.id}')">Pagar compra</button></td></tr>`}).join('')}
+      </tbody></table></div>`:'<div class="empty">No hay compras pendientes.</div>'}
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="section-title"><div><h3>Compras pagadas</h3><small class="muted">Separadas según fueron entregadas o siguen pendientes de entrega.</small></div></div>
+      ${paid.length?`<div class="table-wrap"><table class="table"><thead><tr><th>Fecha pago</th><th>Producto</th><th>Total</th><th>Medio</th><th>Entrega</th><th>Acciones</th></tr></thead><tbody>
+      ${paid.map(c=>{let p=PROD26(c.productId);return`<tr><td>${esc((c.paidAt||'').slice(0,10))}</td><td>${esc(p?.name||c.productName||'')}</td><td>${money(total26(c))}</td><td>${esc(c.paymentMethod||'')}</td><td><span class="pill">${c.deliveryStatus==='Entregado'?'Entregada':'Pendiente de entrega'}</span></td><td>${c.deliveryStatus!=='Entregado'?`<button class="secondary small" onclick="markDeliveredStockV26('${c.id}')">Marcar entregada</button>`:''} <button class="danger small" onclick="deleteStockPurchaseV26('${c.id}')">Borrar compra</button></td></tr>`}).join('')}
+      </tbody></table></div>`:'<div class="empty">No hay compras pagadas.</div>'}
+    </div>
+  `;
+
+  save();
+};
+
+// Alias para anular cualquier función vieja que siga llamando versiones anteriores.
+window.openStockPurchaseV23=window.openStockPurchaseV26;
+window.openStockPurchaseV25=window.openStockPurchaseV26;
+window.openStockPurchaseV12=window.openStockPurchaseV26;
+window.payStockPurchaseV25=window.payStockPurchaseV26;
+window.editStockPurchaseV25=window.editStockPurchaseV26;
+
+const prev26=renderSalonView;
+renderSalonView=function(){
+  if(view==='stock')return renderStockV26();
+  return prev26();
+};
+
+})();
