@@ -18570,3 +18570,321 @@ window.renderProviderCommunity54=window.renderProviderCommunity59;
 window.renderProviderCommunity53=window.renderProviderCommunity59;
 
 })();
+
+
+// ============================================================
+// V60 - MENSAJES DEL ADMINISTRADOR: POPUP + COMUNIDAD
+// ============================================================
+(function(){
+'use strict';
+
+data.adminCommunityMessages=data.adminCommunityMessages||[];
+
+const norm60=v=>String(v||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+const esc60=v=>{
+  try{return esc(v)}catch(e){
+    return String(v??'').replace(/[&<>"']/g,ch=>({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[ch]));
+  }
+};
+const sess60=()=>{
+  try{return session||{}}catch(e){return window.session||{}}
+};
+
+function role60(){
+  return String(sess60().role||'').toLowerCase();
+}
+function userKey60(){
+  const s=sess60();
+  return String(
+    s.salonId ||
+    s.providerId ||
+    s.supplierId ||
+    s.marketSupplierId ||
+    s.userId ||
+    s.id ||
+    s.email ||
+    'anon'
+  );
+}
+function audienceAllows60(m){
+  const r=role60();
+  const aud=String(m.audience||m.target||'all').toLowerCase();
+  if(aud==='all'||aud==='todos'||aud==='ambos')return r==='salon'||r==='provider'||r==='supplier';
+  if((aud==='salons'||aud==='salones'||aud==='salon')&&r==='salon')return true;
+  if((aud==='providers'||aud==='proveedores'||aud==='provider'||aud==='supplier')&&(r==='provider'||r==='supplier'))return true;
+  return false;
+}
+function adminMessages60(){
+  return (data.adminCommunityMessages||[])
+    .filter(m=>m.active!==false&&audienceAllows60(m))
+    .sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
+}
+function seenKey60(id){
+  return `fc_admin_msg_seen_${userKey60()}_${id}`;
+}
+function isSeen60(id){
+  try{return localStorage.getItem(seenKey60(id))==='1'}catch(e){return false}
+}
+function markSeen60(id){
+  try{localStorage.setItem(seenKey60(id),'1')}catch(e){}
+}
+function fmtDate60(v){
+  try{return new Date(v).toLocaleString('es-AR')}catch(e){return ''}
+}
+
+// ------------------------------------------------------------
+// ADMIN: BOTÓN PARA ENVIAR MENSAJE A TODA LA COMUNIDAD
+// ------------------------------------------------------------
+window.openAdminCommunityMessage60=function(){
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>📢 Mensaje a la comunidad</h2>
+        <p>Se mostrará como popup y también quedará guardado en Comunidad.</p>
+      </div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="adminCommunity60">
+      <div class="form-grid">
+        <div class="field span2">
+          <label>Título</label>
+          <input name="title" required>
+        </div>
+
+        <div class="field span2">
+          <label>Mensaje</label>
+          <textarea name="text" required></textarea>
+        </div>
+
+        <div class="field">
+          <label>Destinatarios</label>
+          <select name="audience">
+            <option value="all">Salones y proveedores</option>
+            <option value="salons">Solo salones</option>
+            <option value="providers">Solo proveedores</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Prioridad</label>
+          <select name="priority">
+            <option value="normal">Normal</option>
+            <option value="important">Importante</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="primary">Enviar mensaje</button>
+      </div>
+    </form>
+  `);
+
+  document.querySelector('#adminCommunity60').onsubmit=e=>{
+    e.preventDefault();
+    const f=Object.fromEntries(new FormData(e.target));
+
+    data.adminCommunityMessages.push({
+      id:id(),
+      title:String(f.title||'').trim(),
+      text:String(f.text||'').trim(),
+      audience:f.audience||'all',
+      priority:f.priority||'normal',
+      from:'Administrador',
+      active:true,
+      createdAt:new Date().toISOString()
+    });
+
+    save();
+    closeModal();
+    toast('Mensaje enviado a la comunidad');
+  };
+};
+
+function injectAdminCommunityButton60(){
+  const r=role60();
+  if(r!=='admin'&&r!=='administrator')return;
+  if(document.querySelector('#admin-community-message60'))return;
+
+  const host=document.querySelector('.topbar .toolbar')||
+             document.querySelector('.nav')||
+             document.querySelector('.toolbar')||
+             document.querySelector('header')||
+             document.querySelector('#app');
+  if(!host)return;
+
+  const b=document.createElement('button');
+  b.id='admin-community-message60';
+  b.className='primary';
+  b.innerHTML='📢 Mensaje comunidad';
+  b.onclick=()=>openAdminCommunityMessage60();
+  host.appendChild(b);
+}
+
+// ------------------------------------------------------------
+// POPUP INMEDIATO PARA SALÓN / PROVEEDOR
+// ------------------------------------------------------------
+let popupBusy60=false;
+
+function showNextAdminPopup60(){
+  const r=role60();
+  if(!['salon','provider','supplier'].includes(r))return;
+  if(popupBusy60)return;
+
+  const m=adminMessages60().find(x=>!isSeen60(x.id));
+  if(!m)return;
+
+  popupBusy60=true;
+  markSeen60(m.id);
+
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>${m.priority==='important'?'⚠️':'📢'} ${esc60(m.title||'Mensaje del administrador')}</h2>
+        <p>Mensaje de la comunidad</p>
+      </div>
+      <button class="ghost small" onclick="closeModal();window.finishAdminPopup60()">✕</button>
+    </div>
+
+    <div class="card" style="padding:16px">
+      <div style="font-size:16px;line-height:1.55">${esc60(m.text||'')}</div>
+      <small class="muted" style="display:block;margin-top:12px">${fmtDate60(m.createdAt)}</small>
+    </div>
+
+    <div class="form-actions">
+      <button class="primary" onclick="closeModal();window.finishAdminPopup60()">Entendido</button>
+    </div>
+  `);
+}
+
+window.finishAdminPopup60=function(){
+  popupBusy60=false;
+  setTimeout(showNextAdminPopup60,250);
+};
+
+// ------------------------------------------------------------
+// SECTOR COMUNIDAD: LISTADO PERMANENTE
+// ------------------------------------------------------------
+function adminMessagesCard60(){
+  const msgs=adminMessages60();
+  return `
+    <div class="card" id="admin-community-card60" style="margin-top:14px">
+      <div class="section-title">
+        <div>
+          <h3>📢 Mensajes del administrador</h3>
+          <small class="muted">Comunicaciones oficiales para salones y proveedores.</small>
+        </div>
+      </div>
+
+      ${msgs.length?msgs.map(m=>`
+        <div style="padding:12px 0;border-bottom:1px solid #eee">
+          <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+            <div>
+              <b>${m.priority==='important'?'⚠️ ':''}${esc60(m.title||'Mensaje')}</b>
+              <div style="margin-top:4px">${esc60(m.text||'')}</div>
+            </div>
+            <small class="muted">${fmtDate60(m.createdAt)}</small>
+          </div>
+        </div>
+      `).join(''):'<div class="empty">No hay mensajes del administrador.</div>'}
+    </div>
+  `;
+}
+
+function appendAdminMessagesCard60(){
+  if(!['salon','provider','supplier'].includes(role60()))return;
+  const c=document.querySelector('#content');
+  if(!c||document.querySelector('#admin-community-card60'))return;
+  const box=document.createElement('div');
+  box.innerHTML=adminMessagesCard60();
+  c.appendChild(box.firstElementChild);
+}
+
+// Proveedor: Comunidad
+const oldProviderCommunity60=window.renderProviderCommunity59;
+if(typeof oldProviderCommunity60==='function'){
+  window.renderProviderCommunity59=function(){
+    const r=oldProviderCommunity60.apply(this,arguments);
+    setTimeout(appendAdminMessagesCard60,50);
+    return r;
+  };
+  window.renderProviderCommunity58=window.renderProviderCommunity59;
+  window.renderProviderCommunity57=window.renderProviderCommunity59;
+  window.renderProviderCommunity56=window.renderProviderCommunity59;
+  window.renderProviderCommunity55=window.renderProviderCommunity59;
+  window.renderProviderCommunity54=window.renderProviderCommunity59;
+  window.renderProviderCommunity53=window.renderProviderCommunity59;
+}
+
+// Salón: Comunidad
+const oldCommunityV24_60=window.renderCommunityV24;
+if(typeof oldCommunityV24_60==='function'){
+  window.renderCommunityV24=function(){
+    const r=oldCommunityV24_60.apply(this,arguments);
+    setTimeout(appendAdminMessagesCard60,50);
+    return r;
+  };
+}
+
+// Si existe renderCommunity general, también lo reforzamos.
+const oldCommunityGeneral60=window.renderCommunity;
+if(typeof oldCommunityGeneral60==='function'){
+  window.renderCommunity=function(){
+    const r=oldCommunityGeneral60.apply(this,arguments);
+    setTimeout(appendAdminMessagesCard60,50);
+    return r;
+  };
+}
+
+// ------------------------------------------------------------
+// POLLING: PARA QUE APAREZCA "EN EL MOMENTO"
+// Consulta solo los mensajes administrativos sin tocar el resto
+// del estado local.
+// ------------------------------------------------------------
+let polling60=false;
+async function pollAdminMessages60(){
+  if(polling60)return;
+  const r=role60();
+  if(!['salon','provider','supplier'].includes(r))return;
+
+  polling60=true;
+  try{
+    const res=await fetch('/api/data',{cache:'no-store'});
+    if(res.ok){
+      const remote=await res.json();
+      const src=(remote&&remote.data)?remote.data:remote;
+      if(Array.isArray(src?.adminCommunityMessages)){
+        const localById=new Map((data.adminCommunityMessages||[]).map(x=>[String(x.id),x]));
+        src.adminCommunityMessages.forEach(x=>localById.set(String(x.id),x));
+        data.adminCommunityMessages=[...localById.values()];
+      }
+    }
+  }catch(e){}
+  finally{
+    polling60=false;
+    showNextAdminPopup60();
+
+    // Si el usuario está justo dentro de Comunidad, actualiza el bloque.
+    const card=document.querySelector('#admin-community-card60');
+    if(card){
+      const wrap=document.createElement('div');
+      wrap.innerHTML=adminMessagesCard60();
+      card.replaceWith(wrap.firstElementChild);
+    }
+  }
+}
+
+setTimeout(()=>{
+  injectAdminCommunityButton60();
+  showNextAdminPopup60();
+  pollAdminMessages60();
+},400);
+
+setInterval(injectAdminCommunityButton60,1400);
+setInterval(pollAdminMessages60,5000);
+
+})();
