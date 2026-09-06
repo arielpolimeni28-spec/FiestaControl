@@ -5631,3 +5631,607 @@
   });
   observerV20.observe(document.documentElement, {childList:true,subtree:true});
 })();
+
+
+// ============================================================
+// V21 - RESET CONTABLE TOTAL Y COHERENTE EN TODAS LAS PANTALLAS
+// ============================================================
+(function () {
+  'use strict';
+
+  data.financeResets = data.financeResets || [];
+  data.movements = data.movements || [];
+  data.stockPurchases = data.stockPurchases || [];
+  data.accountingEpochs = data.accountingEpochs || [];
+  data.auditLog = data.auditLog || [];
+
+  function v21Sid() {
+    return session?.salonId;
+  }
+
+  function v21LatestEpoch() {
+    const sid = v21Sid();
+    return (data.accountingEpochs || [])
+      .filter(x => x.salonId === sid)
+      .sort((a,b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))[0] || null;
+  }
+
+  function v21HasReset() {
+    return !!v21LatestEpoch();
+  }
+
+  function v21MarkExistingAsOld() {
+    const sid = v21Sid();
+    if (!sid) return;
+
+    (data.events || []).forEach(e => {
+      if (e.salonId === sid) e.beforeAccountingReset = true;
+    });
+
+    (data.orders || []).forEach(o => {
+      if (o.salonId === sid) o.beforeAccountingReset = true;
+    });
+
+    (data.movements || []).forEach(m => {
+      if (m.salonId === sid) m.beforeAccountingReset = true;
+    });
+
+    (data.stockPurchases || []).forEach(p => {
+      if (p.salonId === sid) p.beforeAccountingReset = true;
+    });
+  }
+
+  function v21HardZeroStoredAccounting() {
+    const sid = v21Sid();
+    if (!sid) return;
+
+    const eventIds = new Set(
+      (data.events || []).filter(e => e.salonId === sid).map(e => e.id)
+    );
+
+    // Contabilidad / caja
+    data.movements = (data.movements || []).filter(m => m.salonId !== sid);
+    data.stockPurchases = (data.stockPurchases || []).filter(p => p.salonId !== sid);
+
+    // Personal asociado a fiestas anteriores: evita que vuelva a generar egresos automáticos.
+    data.assignments = (data.assignments || []).filter(a => !eventIds.has(a.eventId));
+
+    // Reservas: conservar la ficha, pero dejar toda su parte contable en cero.
+    (data.events || []).forEach(e => {
+      if (e.salonId !== sid) return;
+
+      e.beforeAccountingReset = true;
+      e.financeResetLocked = true;
+
+      e.paid = 0;
+      e.baseTotal = 0;
+      e.total = 0;
+      e.extrasTotal = 0;
+      e.extras = [];
+      e.stockItemsTotal = 0;
+      e.stockItems = [];
+
+      if (e.finalNumbers) {
+        e.finalNumbers.total = 0;
+        e.finalNumbers.paid = 0;
+        e.finalNumbers.balance = 0;
+        e.finalNumbers.staffCost = 0;
+        e.finalNumbers.supplierCost = 0;
+        e.finalNumbers.net = 0;
+      }
+    });
+
+    // Proveedores: mantenerlos, pero sin saldo contable.
+    (data.suppliers || []).forEach(s => {
+      if (s.salonId === sid) {
+        s.balance = 0;
+        s.paid = 0;
+        s.totalPaid = 0;
+        s.totalPending = 0;
+      }
+    });
+
+    // Pedidos: mantenerlos como historial, sin efecto contable.
+    (data.orders || []).forEach(o => {
+      if (o.salonId === sid || eventIds.has(o.eventId)) {
+        o.beforeAccountingReset = true;
+        o.paidAt = null;
+        o.paymentMethod = '';
+        o.paymentReference = '';
+        o.paidAmount = 0;
+        o.total = 0;
+        o.amount = 0;
+        o.balance = 0;
+        if (o.status === 'Pagado') o.status = 'Pendiente';
+      }
+    });
+
+    // Stock físico a cero, conservando productos.
+    (data.stockProducts || []).forEach(p => {
+      if (p.salonId === sid) p.stock = 0;
+    });
+
+    // Pagos de servicio del salón (si existen) fuera de la contabilidad del negocio.
+    // No se borran, solo se evita que entren en indicadores del salón.
+  }
+
+  function v21ZeroDashboardVisuals() {
+    const content = document.querySelector('#content');
+    if (!content || !v21HasReset()) return;
+
+    // Cero absoluto en todos los indicadores contables del Inicio.
+    const accountingLabels = [
+      'contratado','facturado','ingresado','cobrado','pendiente','por cobrar',
+      'egresos','gastos','resultado','resultado de caja','saldo','ganancia',
+      'ingresos'
+    ];
+
+    [...content.querySelectorAll('.card, .stat, .summary-card')].forEach(card => {
+      const txt = String(card.textContent || '').toLowerCase();
+      if (!accountingLabels.some(k => txt.includes(k))) return;
+
+      // Solo toca números monetarios, no conteos de fiestas.
+      card.querySelectorAll('strong, b, .amount, .value').forEach(el => {
+        const t = String(el.textContent || '').trim();
+        if (t.includes('$') || /\$\s*[\d.,]+/.test(t)) {
+          el.textContent = money(0);
+        }
+      });
+    });
+
+    // Resultado de caja puede no usar las mismas clases.
+    [...content.querySelectorAll('*')].forEach(el => {
+      const label = String(el.textContent || '').trim().toLowerCase();
+      if (label === 'ingresos' || label === 'egresos' || label === 'resultado') {
+        const parent = el.parentElement;
+        if (!parent) return;
+        const candidates = [...parent.querySelectorAll('strong,b,span,div')]
+          .filter(x => String(x.textContent || '').includes('$'));
+        candidates.forEach(x => x.textContent = money(0));
+      }
+    });
+  }
+
+  // ----------------------------------------------------------
+  // REEMPLAZA EL RESET: TODO CONTABLE EN CERO EN TODO EL SISTEMA
+  // ----------------------------------------------------------
+  window.resetEverythingV16 = function () {
+    if (session?.role !== 'salon' || session?.salonUserId) {
+      return toast('Solo el administrador del salón puede hacer este reset');
+    }
+
+    showModal(`
+      <div class="modal-title">
+        <div>
+          <h2>🔄 Poner TODA la contabilidad en cero</h2>
+          <p>Reinicia caja, saldos, ingresos, egresos y stock del salón.</p>
+        </div>
+        <button class="ghost small" onclick="closeModal()">✕</button>
+      </div>
+
+      <form id="v21-reset-form">
+        <div class="field">
+          <label>Contraseña administrativa</label>
+          <input name="password" type="password" required>
+        </div>
+
+        <div class="field">
+          <label>Motivo</label>
+          <textarea name="reason" required placeholder="Ej: finalizar pruebas y comenzar contabilidad real"></textarea>
+        </div>
+
+        <div class="admin-notice attention">
+          <span>⚠️</span>
+          <div>
+            <b>Quedará en $0 en TODAS las pantallas.</b>
+            <small>Contratado, ingresado, pendiente, egresos, resultado, finanzas, proveedores y stock.</small>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+          <button class="danger">Confirmar puesta a cero total</button>
+        </div>
+      </form>
+    `);
+
+    document.querySelector('#v21-reset-form').onsubmit = ev => {
+      ev.preventDefault();
+      const f = Object.fromEntries(new FormData(ev.target));
+      const s = salon();
+
+      if (String(f.password || '') !== String(s?.password || '')) {
+        return toast('Contraseña incorrecta');
+      }
+
+      const sid = v21Sid();
+      const now = new Date().toISOString();
+
+      v21MarkExistingAsOld();
+
+      data.accountingEpochs = (data.accountingEpochs || []).filter(x => x.salonId !== sid);
+      data.accountingEpochs.push({
+        id:id(),
+        salonId:sid,
+        createdAt:now,
+        reason:String(f.reason || '').trim()
+      });
+
+      // Compatibilidad con versiones anteriores.
+      data.financeResets = (data.financeResets || []).filter(r => r.salonId !== sid);
+      data.financeResets.push({
+        id:id(),
+        salonId:sid,
+        active:true,
+        createdAt:now,
+        reason:String(f.reason || '').trim()
+      });
+
+      v21HardZeroStoredAccounting();
+
+      data.auditLog.push({
+        id:id(),
+        salonId:sid,
+        action:'RESET CONTABLE TOTAL V21',
+        reason:String(f.reason || '').trim(),
+        createdAt:now
+      });
+
+      save();
+
+      // Viejos sincronizadores intentan reconstruir datos. Los anulamos varias veces.
+      [200, 700, 1500, 2500].forEach(ms => {
+        setTimeout(() => {
+          if (!v21HasReset()) return;
+          v21HardZeroStoredAccounting();
+          save();
+
+          if (ms === 2500) {
+            closeModal();
+            toast('Toda la contabilidad quedó en cero');
+            view = 'dashboard';
+            renderSalonShell();
+          }
+        }, ms);
+      });
+    };
+  };
+
+  // ----------------------------------------------------------
+  // INICIO: DESPUÉS DEL RESET, TODO CONTABLE EN CERO
+  // ----------------------------------------------------------
+  const prevDashboardV21 = renderDashboard;
+  renderDashboard = function() {
+    if (v21HasReset()) v21HardZeroStoredAccounting();
+    prevDashboardV21();
+    if (v21HasReset()) {
+      v21HardZeroStoredAccounting();
+      v21ZeroDashboardVisuals();
+    }
+  };
+
+  // ----------------------------------------------------------
+  // FINANZAS: TAMBIÉN GARANTIZA CERO
+  // ----------------------------------------------------------
+  const prevFinanceV21 = renderFinance;
+  renderFinance = function() {
+    if (v21HasReset()) v21HardZeroStoredAccounting();
+    prevFinanceV21();
+
+    if (!v21HasReset()) return;
+
+    v21HardZeroStoredAccounting();
+
+    const content = document.querySelector('#content');
+    if (!content) return;
+
+    [...content.querySelectorAll('.card.stat strong, .card.stat b, .amount, .value')].forEach(el => {
+      const t = String(el.textContent || '');
+      if (t.includes('$')) el.textContent = money(0);
+    });
+
+    // Libro de movimientos debe quedar vacío.
+    [...content.querySelectorAll('tbody')].forEach(tb => {
+      const tableText = String(tb.closest('table')?.textContent || '').toLowerCase();
+      if (tableText.includes('movimiento') || tableText.includes('importe')) {
+        tb.innerHTML = '';
+      }
+    });
+  };
+
+  // ----------------------------------------------------------
+  // PROVEEDORES / STOCK: SALDOS Y VALORES CONTABLES EN CERO
+  // ----------------------------------------------------------
+  const prevSalonViewV21 = renderSalonView;
+  renderSalonView = function() {
+    if (v21HasReset()) v21HardZeroStoredAccounting();
+
+    const r = prevSalonViewV21();
+
+    if (v21HasReset()) {
+      setTimeout(() => {
+        const content = document.querySelector('#content');
+        if (!content) return;
+
+        // Solo pone en cero importes monetarios, no cantidades físicas excepto stock
+        // que ya fue puesto a cero por el reset.
+        [...content.querySelectorAll('strong,b,.amount,.value')].forEach(el => {
+          const t = String(el.textContent || '').trim();
+          if (t.includes('$')) el.textContent = money(0);
+        });
+
+        v21ZeroDashboardVisuals();
+      }, 0);
+    }
+
+    return r;
+  };
+
+  // Persistencia al recargar.
+  setTimeout(() => {
+    try {
+      if (session?.role === 'salon' && v21HasReset()) {
+        v21HardZeroStoredAccounting();
+        save();
+        if (view === 'dashboard') {
+          renderDashboard();
+          v21ZeroDashboardVisuals();
+        }
+      }
+    } catch (_) {}
+  }, 1200);
+
+})();
+
+
+// ============================================================
+// V22 - STOCK: BORRAR PRODUCTO + BORRAR COMPRA
+// ============================================================
+(function () {
+  'use strict';
+
+  data.stockProducts = data.stockProducts || [];
+  data.stockPurchases = data.stockPurchases || [];
+  data.auditLog = data.auditLog || [];
+
+  function v22Product(pid) {
+    return (data.stockProducts || []).find(p =>
+      p.id === pid && p.salonId === session?.salonId
+    );
+  }
+
+  function v22Purchase(cid) {
+    return (data.stockPurchases || []).find(c =>
+      c.id === cid && c.salonId === session?.salonId
+    );
+  }
+
+  function v22OwnerPasswordOk(pass) {
+    const s = salon();
+    return !!s && String(s.password || '') === String(pass || '');
+  }
+
+  // ----------------------------------------------------------
+  // BORRAR PRODUCTO
+  // ----------------------------------------------------------
+  window.deleteStockProductV22 = function(pid) {
+    const p = v22Product(pid);
+    if (!p) return toast('Producto no encontrado');
+
+    showModal(`
+      <div class="modal-title">
+        <div>
+          <h2>🗑 Borrar producto</h2>
+          <p>${esc(p.name || '')}</p>
+        </div>
+        <button class="ghost small" onclick="closeModal()">✕</button>
+      </div>
+
+      <form id="v22-delete-product-form">
+        <div class="field">
+          <label>Contraseña administrativa</label>
+          <input name="password" type="password" required>
+        </div>
+
+        <div class="field">
+          <label>Motivo</label>
+          <textarea name="reason" required placeholder="Ej: producto cargado por error"></textarea>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+          <button class="danger">Borrar producto</button>
+        </div>
+      </form>
+    `);
+
+    document.querySelector('#v22-delete-product-form').onsubmit = ev => {
+      ev.preventDefault();
+      const f = Object.fromEntries(new FormData(ev.target));
+
+      if (!v22OwnerPasswordOk(f.password)) {
+        return toast('Contraseña incorrecta');
+      }
+
+      data.stockProducts = (data.stockProducts || []).filter(x => x.id !== pid);
+
+      data.auditLog.push({
+        id:id(),
+        salonId:session.salonId,
+        action:'BORRAR PRODUCTO STOCK',
+        productId:pid,
+        productName:p.name || '',
+        reason:String(f.reason || '').trim(),
+        createdAt:new Date().toISOString()
+      });
+
+      save();
+      closeModal();
+      toast('Producto eliminado');
+      renderSalonShell();
+    };
+  };
+
+  // ----------------------------------------------------------
+  // BORRAR COMPRA
+  // ----------------------------------------------------------
+  window.deleteStockPurchaseV22 = function(cid) {
+    const c = v22Purchase(cid);
+    if (!c) return toast('Compra no encontrada');
+
+    const p = (data.stockProducts || []).find(x => x.id === c.productId);
+
+    showModal(`
+      <div class="modal-title">
+        <div>
+          <h2>🗑 Borrar compra</h2>
+          <p>${esc(p?.name || c.productName || 'Compra de stock')}</p>
+        </div>
+        <button class="ghost small" onclick="closeModal()">✕</button>
+      </div>
+
+      <form id="v22-delete-purchase-form">
+        <div class="field">
+          <label>Contraseña administrativa</label>
+          <input name="password" type="password" required>
+        </div>
+
+        <div class="field">
+          <label>Motivo</label>
+          <textarea name="reason" required placeholder="Ej: compra cargada duplicada"></textarea>
+        </div>
+
+        <div class="admin-notice attention">
+          <span>⚠️</span>
+          <div>
+            <b>Se eliminará la compra.</b>
+            <small>Si esa compra había sumado stock, también se descuenta esa cantidad del stock actual.</small>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+          <button class="danger">Borrar compra</button>
+        </div>
+      </form>
+    `);
+
+    document.querySelector('#v22-delete-purchase-form').onsubmit = ev => {
+      ev.preventDefault();
+      const f = Object.fromEntries(new FormData(ev.target));
+
+      if (!v22OwnerPasswordOk(f.password)) {
+        return toast('Contraseña incorrecta');
+      }
+
+      const qty = Number(c.quantity || c.qty || 0);
+
+      if (p && qty > 0) {
+        p.stock = Math.max(0, Number(p.stock || 0) - qty);
+      }
+
+      data.stockPurchases = (data.stockPurchases || []).filter(x => x.id !== cid);
+
+      // Borra también el movimiento contable relacionado a esa compra si existe.
+      data.movements = (data.movements || []).filter(m => {
+        if (m.salonId !== session.salonId) return true;
+        if (m.stockPurchaseId === cid) return false;
+        if (m.sourceKey === `stock-purchase:${cid}`) return false;
+        return true;
+      });
+
+      data.auditLog.push({
+        id:id(),
+        salonId:session.salonId,
+        action:'BORRAR COMPRA STOCK',
+        stockPurchaseId:cid,
+        productName:p?.name || c.productName || '',
+        quantity:qty,
+        reason:String(f.reason || '').trim(),
+        createdAt:new Date().toISOString()
+      });
+
+      save();
+      closeModal();
+      toast('Compra eliminada');
+      renderSalonShell();
+    };
+  };
+
+  // ----------------------------------------------------------
+  // AGREGA BOTONES EN LA VISTA DE STOCK
+  // ----------------------------------------------------------
+  const prevStockV22 = window.renderStockV12;
+
+  if (typeof prevStockV22 === 'function') {
+    window.renderStockV12 = function() {
+      prevStockV22();
+
+      const products = (data.stockProducts || [])
+        .filter(p => p.salonId === session?.salonId);
+
+      const productRows = [...document.querySelectorAll('#content table tbody tr')];
+
+      productRows.forEach((tr, idx) => {
+        const p = products[idx];
+        if (!p) return;
+
+        const td = tr.querySelector('td:last-child');
+        if (!td) return;
+
+        if (!td.querySelector('[data-v22-delete-product]')) {
+          const btn = document.createElement('button');
+          btn.className = 'danger small';
+          btn.setAttribute('data-v22-delete-product','1');
+          btn.textContent = '🗑 Borrar producto';
+          btn.style.marginLeft = '6px';
+          btn.onclick = () => deleteStockProductV22(p.id);
+          td.appendChild(btn);
+        }
+      });
+
+      // Busca la sección de compras y agrega botón borrar compra por fila.
+      const tables = [...document.querySelectorAll('#content table')];
+
+      tables.forEach(table => {
+        const head = String(table.querySelector('thead')?.textContent || '').toLowerCase();
+        if (!head.includes('compra') && !head.includes('cantidad')) return;
+
+        const purchases = (data.stockPurchases || [])
+          .filter(c => c.salonId === session?.salonId)
+          .sort((a,b) => String(b.createdAt || b.date || '').localeCompare(String(a.createdAt || a.date || '')));
+
+        const rows = [...table.querySelectorAll('tbody tr')];
+
+        rows.forEach((tr, idx) => {
+          const c = purchases[idx];
+          if (!c) return;
+
+          let td = tr.querySelector('td:last-child');
+          if (!td) {
+            td = document.createElement('td');
+            tr.appendChild(td);
+          }
+
+          if (!td.querySelector('[data-v22-delete-purchase]')) {
+            const btn = document.createElement('button');
+            btn.className = 'danger small';
+            btn.setAttribute('data-v22-delete-purchase','1');
+            btn.textContent = '🗑 Borrar compra';
+            btn.onclick = () => deleteStockPurchaseV22(c.id);
+            td.appendChild(btn);
+          }
+        });
+      });
+    };
+  }
+
+  setTimeout(() => {
+    try {
+      if (view === 'stock' && session?.role === 'salon' && typeof renderStockV12 === 'function') {
+        renderStockV12();
+      }
+    } catch (_) {}
+  }, 300);
+
+})();
