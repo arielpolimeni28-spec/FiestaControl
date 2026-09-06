@@ -14477,3 +14477,448 @@ setTimeout(repairButtons50,200);
 setInterval(repairButtons50,1200);
 
 })();
+
+
+// ============================================================
+// V51 - STOCK SIMPLE + COMPRAS DESDE PROVEEDORES
+// ============================================================
+(function(){
+'use strict';
+
+const N51=v=>Number(v||0);
+const SID51=()=>{
+  try{return session?.salonId}catch(e){return window.session?.salonId}
+};
+const salon51=()=>{
+  try{return salon()}catch(e){
+    const sid=SID51();
+    return (data?.salons||[]).find(s=>s.id===sid)||{};
+  }
+};
+const products51=()=> (data.stockProducts||[]).filter(p=>p.salonId===SID51());
+const suppliers51=()=> (data.suppliers||[]).filter(s=>s.salonId===SID51());
+const communitySuppliers51=()=> (data.marketSuppliers||[]).filter(s=>s.active!==false);
+
+function stockStatus51(p){
+  const stock=N51(p.stock);
+  const min=N51(p.minStock);
+  if(stock<=0)return {label:'SIN STOCK',cls:'danger'};
+  if(min>0 && stock<=min)return {label:'STOCK BAJO',cls:'warning'};
+  return {label:'OK',cls:'success'};
+}
+function money51(v){
+  try{return money(v)}catch(e){
+    return '$ '+N51(v).toLocaleString('es-AR');
+  }
+}
+function esc51(v){
+  try{return esc(v)}catch(e){
+    return String(v??'').replace(/[&<>"']/g,ch=>({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[ch]));
+  }
+}
+
+// ------------------------------------------------------------
+// STOCK: SOLO PRODUCTOS + EXISTENCIA + ALERTA
+// ------------------------------------------------------------
+window.renderStockV51=function(){
+  const list=products51().slice().sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+
+  setTitle('Stock','Productos y existencias');
+
+  $('#content').innerHTML=`
+    <div class="card">
+      <div class="section-title">
+        <div>
+          <h3>📦 Stock</h3>
+          <small class="muted">Acá solamente se crean productos y se controla la existencia.</small>
+        </div>
+        <button class="primary" onclick="openStockProduct51()">+ Crear producto</button>
+      </div>
+
+      ${list.length?`
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Producto</th>
+                <th>Categoría</th>
+                <th>Stock actual</th>
+                <th>Stock mínimo</th>
+                <th>Estado</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${list.map(p=>{
+                const st=stockStatus51(p);
+                return `
+                <tr>
+                  <td><b>${esc51(p.name)}</b></td>
+                  <td>${esc51(p.category||'')}</td>
+                  <td><b>${N51(p.stock)}</b></td>
+                  <td>${N51(p.minStock)}</td>
+                  <td><span class="pill ${st.cls}">${st.label}</span></td>
+                  <td style="display:flex;gap:6px;flex-wrap:wrap">
+                    <button class="secondary small" onclick="openStockProduct51('${p.id}')">Editar</button>
+                    <button class="ghost small" onclick="deleteStockProduct51('${p.id}')">Borrar</button>
+                  </td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      `:`<div class="empty">Todavía no hay productos cargados.</div>`}
+    </div>
+
+    ${list.some(p=>N51(p.stock)<=0 || (N51(p.minStock)>0 && N51(p.stock)<=N51(p.minStock)))?`
+      <div class="card" style="margin-top:14px">
+        <h3>⚠️ Alertas de stock</h3>
+        ${list.filter(p=>N51(p.stock)<=0 || (N51(p.minStock)>0 && N51(p.stock)<=N51(p.minStock)))
+          .map(p=>`
+            <div class="admin-notice" style="margin-top:8px">
+              <span>${N51(p.stock)<=0?'🚫':'⚠️'}</span>
+              <div>
+                <b>${esc51(p.name)}</b>
+                <small>${N51(p.stock)<=0?'No hay unidades disponibles.':'Stock bajo: quedan '+N51(p.stock)+' unidades. Mínimo configurado: '+N51(p.minStock)+'.'}</small>
+              </div>
+            </div>`).join('')}
+      </div>`:''}
+  `;
+};
+
+window.openStockProduct51=function(pid=''){
+  const p=pid?(data.stockProducts||[]).find(x=>x.id===pid&&x.salonId===SID51()):null;
+
+  showModal(`
+    <div class="modal-title">
+      <div><h2>${p?'Editar':'Crear'} producto</h2><p>Producto del inventario del salón.</p></div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="stockProduct51">
+      <div class="form-grid">
+        <div class="field span2"><label>Producto</label><input name="name" required value="${esc51(p?.name||'')}"></div>
+        <div class="field"><label>Categoría</label><input name="category" value="${esc51(p?.category||'')}"></div>
+        <div class="field"><label>Stock actual</label><input name="stock" type="number" min="0" step="1" value="${N51(p?.stock)}"></div>
+        <div class="field"><label>Stock mínimo de alerta</label><input name="minStock" type="number" min="0" step="1" value="${N51(p?.minStock)}"></div>
+        <div class="field"><label>Costo de referencia</label><input name="costPrice" type="number" min="0" value="${N51(p?.costPrice)}"></div>
+        <div class="field"><label>Precio de venta</label><input name="salePrice" type="number" min="0" value="${N51(p?.salePrice)}"></div>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="primary">Guardar producto</button>
+      </div>
+    </form>
+  `);
+
+  document.querySelector('#stockProduct51').onsubmit=e=>{
+    e.preventDefault();
+    const f=Object.fromEntries(new FormData(e.target));
+    data.stockProducts=data.stockProducts||[];
+
+    const obj={
+      ...(p||{}),
+      id:p?.id||id(),
+      salonId:SID51(),
+      name:String(f.name||'').trim(),
+      category:String(f.category||'').trim(),
+      stock:N51(f.stock),
+      minStock:N51(f.minStock),
+      costPrice:N51(f.costPrice),
+      salePrice:N51(f.salePrice)
+    };
+
+    if(p){
+      const ix=data.stockProducts.findIndex(x=>x.id===p.id);
+      if(ix>=0)data.stockProducts[ix]=obj;
+    }else{
+      data.stockProducts.push(obj);
+    }
+    save(); closeModal(); renderStockV51(); toast('Producto guardado');
+  };
+};
+
+window.deleteStockProduct51=function(pid){
+  const p=(data.stockProducts||[]).find(x=>x.id===pid&&x.salonId===SID51());
+  if(!p)return;
+  if(!confirm(`¿Borrar el producto "${p.name}"?`))return;
+  data.stockProducts=(data.stockProducts||[]).filter(x=>x.id!==pid);
+  save(); renderStockV51(); toast('Producto eliminado');
+};
+
+// ------------------------------------------------------------
+// PROVEEDORES: PROVEEDOR MANUAL / COMUNIDAD + COMPRA DE STOCK
+// ------------------------------------------------------------
+function supplierOptions51(){
+  const own=suppliers51();
+  const community=communitySuppliers51();
+
+  let html='<option value="">Seleccionar proveedor</option>';
+
+  if(own.length){
+    html+='<optgroup label="Mis proveedores">';
+    html+=own.map(s=>`<option value="own:${s.id}">${esc51(s.name||s.businessName||'Proveedor')}</option>`).join('');
+    html+='</optgroup>';
+  }
+
+  if(community.length){
+    html+='<optgroup label="Proveedores de la comunidad">';
+    html+=community.map(s=>`<option value="community:${s.id}">${esc51(s.name||s.businessName||'Proveedor comunidad')}</option>`).join('');
+    html+='</optgroup>';
+  }
+
+  return html;
+}
+
+function productOptions51(){
+  return products51().map(p=>`
+    <option value="${p.id}">${esc51(p.name)} · stock ${N51(p.stock)}</option>
+  `).join('');
+}
+
+window.renderSuppliersV51=function(){
+  const own=suppliers51();
+  const community=communitySuppliers51();
+  const purchases=(data.stockPurchases||[])
+    .filter(x=>x.salonId===SID51())
+    .sort((a,b)=>String(b.createdAt||b.date||'').localeCompare(String(a.createdAt||a.date||'')));
+
+  setTitle('Proveedores','Compras para reponer stock');
+
+  $('#content').innerHTML=`
+    <div class="card">
+      <div class="section-title">
+        <div>
+          <h3>🚚 Proveedores</h3>
+          <small class="muted">Las compras se hacen utilizando los productos ya creados en Stock.</small>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="secondary" onclick="openManualSupplier51()">+ Agregar proveedor manual</button>
+          <button class="primary" onclick="openStockPurchase51()">+ Nueva compra</button>
+        </div>
+      </div>
+
+      ${!products51().length?`
+        <div class="admin-notice">
+          <span>ℹ️</span>
+          <div><b>Primero cargá productos en Stock.</b><small>Después vas a poder seleccionarlos desde una compra a proveedor.</small></div>
+        </div>
+      `:''}
+    </div>
+
+    <div class="grid" style="margin-top:14px">
+      <div class="card">
+        <h3>Mis proveedores</h3>
+        ${own.length?own.map(s=>`
+          <div class="row" style="padding:10px 0;border-bottom:1px solid #eee">
+            <div>
+              <b>${esc51(s.name||s.businessName||'Proveedor')}</b>
+              <small style="display:block">${esc51(s.phone||s.whatsapp||'')} ${s.email?'· '+esc51(s.email):''}</small>
+            </div>
+          </div>`).join(''):'<div class="empty">Sin proveedores manuales.</div>'}
+      </div>
+
+      <div class="card">
+        <h3>Proveedores de la comunidad</h3>
+        ${community.length?community.map(s=>`
+          <div class="row" style="padding:10px 0;border-bottom:1px solid #eee">
+            <div>
+              <b>${esc51(s.name||s.businessName||'Proveedor')}</b>
+              <small style="display:block">${esc51(s.category||s.service||'')}</small>
+            </div>
+          </div>`).join(''):'<div class="empty">No hay proveedores visibles en la comunidad.</div>'}
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h3>Compras de stock</h3>
+      ${purchases.length?`
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr><th>Fecha</th><th>Proveedor</th><th>Producto</th><th>Cantidad</th><th>Total</th><th>Estado</th><th>Entrega</th></tr></thead>
+            <tbody>
+              ${purchases.map(p=>`
+                <tr>
+                  <td>${esc51(p.date||p.createdAt?.slice?.(0,10)||'')}</td>
+                  <td>${esc51(p.supplierName||'')}</td>
+                  <td>${esc51(p.productName||'')}</td>
+                  <td>${N51(p.qty)}</td>
+                  <td>${money51(p.total||0)}</td>
+                  <td>${esc51(p.paymentStatus||'Pendiente')}</td>
+                  <td>${esc51(p.deliveryStatus||'Pendiente de entrega')}</td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>`:'<div class="empty">Todavía no hay compras registradas.</div>'}
+    </div>
+  `;
+};
+
+window.openManualSupplier51=function(){
+  showModal(`
+    <div class="modal-title">
+      <div><h2>Agregar proveedor manual</h2><p>Proveedor propio del salón.</p></div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+    <form id="supplier51">
+      <div class="form-grid">
+        <div class="field span2"><label>Nombre / empresa</label><input name="name" required></div>
+        <div class="field"><label>Teléfono / WhatsApp</label><input name="phone"></div>
+        <div class="field"><label>Email</label><input name="email" type="email"></div>
+        <div class="field span2"><label>Observaciones</label><textarea name="notes"></textarea></div>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="primary">Guardar proveedor</button>
+      </div>
+    </form>
+  `);
+
+  document.querySelector('#supplier51').onsubmit=e=>{
+    e.preventDefault();
+    const f=Object.fromEntries(new FormData(e.target));
+    data.suppliers=data.suppliers||[];
+    data.suppliers.push({
+      id:id(),salonId:SID51(),
+      name:String(f.name||'').trim(),
+      phone:String(f.phone||'').trim(),
+      email:String(f.email||'').trim(),
+      notes:String(f.notes||'').trim(),
+      source:'manual'
+    });
+    save(); closeModal(); renderSuppliersV51(); toast('Proveedor agregado');
+  };
+};
+
+window.openStockPurchase51=function(){
+  const products=products51();
+  if(!products.length){
+    toast('Primero tenés que crear al menos un producto en Stock');
+    view='stock'; renderSalonShell(); return;
+  }
+
+  showModal(`
+    <div class="modal-title">
+      <div><h2>Nueva compra de stock</h2><p>Elegí un producto creado en Stock y un proveedor.</p></div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="purchase51">
+      <div class="form-grid">
+        <div class="field span2">
+          <label>Proveedor</label>
+          <select name="supplier" required>${supplierOptions51()}</select>
+        </div>
+
+        <div class="field span2">
+          <label>Producto de Stock</label>
+          <select name="productId" id="purchaseProduct51" required>
+            <option value="">Seleccionar producto</option>
+            ${productOptions51()}
+          </select>
+        </div>
+
+        <div class="field"><label>Cantidad</label><input name="qty" id="purchaseQty51" type="number" min="1" value="1" required></div>
+        <div class="field"><label>Costo unitario</label><input name="unitCost" id="purchaseCost51" type="number" min="0" value="0" required></div>
+        <div class="field"><label>Total</label><input id="purchaseTotal51" readonly></div>
+        <div class="field"><label>Fecha</label><input name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required></div>
+
+        <div class="field">
+          <label>Estado de pago</label>
+          <select name="paymentStatus"><option>Pendiente</option><option>Pagado</option></select>
+        </div>
+
+        <div class="field">
+          <label>Entrega</label>
+          <select name="deliveryStatus"><option>Pendiente de entrega</option><option>Entregado</option></select>
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="primary">Registrar compra</button>
+      </div>
+    </form>
+  `);
+
+  const prodSel=document.querySelector('#purchaseProduct51');
+  const qty=document.querySelector('#purchaseQty51');
+  const cost=document.querySelector('#purchaseCost51');
+  const total=document.querySelector('#purchaseTotal51');
+
+  function recalc(){
+    const p=(data.stockProducts||[]).find(x=>x.id===prodSel.value);
+    if(p && document.activeElement!==cost) cost.value=N51(p.costPrice);
+    total.value=money51(N51(qty.value)*N51(cost.value));
+  }
+
+  prodSel.addEventListener('change',recalc);
+  qty.addEventListener('input',recalc);
+  cost.addEventListener('input',recalc);
+  recalc();
+
+  document.querySelector('#purchase51').onsubmit=e=>{
+    e.preventDefault();
+    const f=Object.fromEntries(new FormData(e.target));
+    const p=(data.stockProducts||[]).find(x=>x.id===f.productId&&x.salonId===SID51());
+    if(!p)return toast('Producto no encontrado');
+
+    const [source,supplierId]=String(f.supplier||'').split(':');
+    let sup=null;
+    if(source==='own')sup=(data.suppliers||[]).find(x=>x.id===supplierId);
+    if(source==='community')sup=(data.marketSuppliers||[]).find(x=>x.id===supplierId);
+    if(!sup)return toast('Proveedor no encontrado');
+
+    const qtyN=N51(f.qty), unit=N51(f.unitCost), totalN=qtyN*unit;
+    data.stockPurchases=data.stockPurchases||[];
+
+    const purchase={
+      id:id(),salonId:SID51(),
+      productId:p.id,productName:p.name,
+      supplierId:supplierId,
+      supplierSource:source,
+      supplierName:sup.name||sup.businessName||'Proveedor',
+      qty:qtyN,unitCost:unit,total:totalN,
+      date:f.date,
+      paymentStatus:f.paymentStatus,
+      deliveryStatus:f.deliveryStatus,
+      createdAt:new Date().toISOString()
+    };
+    data.stockPurchases.push(purchase);
+
+    // Solo aumenta stock cuando figura entregado.
+    if(f.deliveryStatus==='Entregado'){
+      p.stock=N51(p.stock)+qtyN;
+    }
+
+    // Si está pagado, genera el gasto correspondiente.
+    if(f.paymentStatus==='Pagado'){
+      data.movements=data.movements||[];
+      data.movements.push({
+        id:id(),salonId:SID51(),
+        type:'Gasto',category:'Compra de stock',
+        concept:`Compra ${p.name} · ${purchase.supplierName}`,
+        amount:totalN,
+        movementDate:f.date,
+        createdAt:new Date().toISOString(),
+        sourceKey:`v51:stockpurchase:${purchase.id}`
+      });
+    }
+
+    save(); closeModal(); renderSuppliersV51(); toast('Compra registrada');
+  };
+};
+
+// ------------------------------------------------------------
+// RUTAS FINALES
+// ------------------------------------------------------------
+const route51=renderSalonView;
+renderSalonView=function(){
+  if(view==='stock')return renderStockV51();
+  if(view==='suppliers')return renderSuppliersV51();
+  return route51();
+};
+
+})();
