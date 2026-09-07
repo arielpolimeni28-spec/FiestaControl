@@ -21442,3 +21442,149 @@ window.openProviderProduct54=window.openProviderProduct68;
 window.openProviderProduct53=window.openProviderProduct68;
 
 })();
+
+
+// ============================================================
+// V69 - CORRECCIÓN REAL DE "MIS PRODUCTOS"
+// El render anterior conservaba data-v68-products aunque otra función
+// reemplazara el HTML por tarjetas. Por eso no se reparaba la pantalla.
+// V69 valida un MARCADOR REAL dentro del HTML y vuelve a dibujar la tabla.
+// ============================================================
+(function(){
+'use strict';
+
+const norm69=v=>String(v||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+
+function isProviderPortal69(){
+  const s=(()=>{try{return session||{}}catch(e){return window.session||{}}})();
+  if(s.providerId||s.supplierId||s.marketSupplierId)return true;
+  const r=norm69(s.role);
+  if(['provider','supplier','proveedor','marketsupplier','market_supplier'].includes(r))return true;
+  return norm69(document.body?.innerText||'').includes('portal proveedor');
+}
+
+function isMisProductos69(){
+  const title=norm69(document.querySelector('#title')?.textContent||'');
+  const headings=[...document.querySelectorAll('#content h1,#content h2,#content h3')]
+    .map(x=>norm69(x.textContent||''));
+  return title==='mis productos' || headings.includes('mis productos');
+}
+
+function hasCorrectTable69(){
+  const content=document.querySelector('#content');
+  if(!content)return false;
+  const marker=content.querySelector('#fc-products-table-v69');
+  if(!marker)return false;
+
+  const heads=[...marker.querySelectorAll('th')].map(x=>norm69(x.textContent));
+  return ['foto','producto','categoria','costo','descripcion','visible','acciones']
+    .every(h=>heads.includes(h));
+}
+
+let repairing69=false;
+
+function renderCorrectProducts69(){
+  if(repairing69 || !isProviderPortal69())return;
+  repairing69=true;
+  try{
+    // Usa la función V68 para identificar proveedor y guardar en las
+    // estructuras que ya consume Comunidad.
+    if(typeof window.renderMyProducts68==='function'){
+      window.renderMyProducts68();
+    }
+
+    const content=document.querySelector('#content');
+    if(!content)return;
+
+    // La función V68 ya creó la tabla correcta. Le ponemos un marcador
+    // real que desaparece si cualquier render viejo reemplaza innerHTML.
+    const table=content.querySelector('table.table');
+    if(table){
+      table.id='fc-products-table-v69';
+
+      const card=table.closest('.card') || content.querySelector('.card');
+      const btn=[...content.querySelectorAll('button')]
+        .find(b=>norm69(b.textContent).includes('agregar producto'));
+
+      if(!btn){
+        const section=card?.querySelector('.section-title') || card;
+        if(section){
+          const b=document.createElement('button');
+          b.className='primary';
+          b.textContent='+ Agregar producto';
+          b.onclick=()=>window.openProviderProduct68();
+          section.appendChild(b);
+        }
+      }
+    }
+  } finally {
+    setTimeout(()=>{repairing69=false},80);
+  }
+}
+
+function removeAddProductOutside69(){
+  if(!isProviderPortal69())return;
+  if(isMisProductos69())return;
+
+  [...document.querySelectorAll('button,a,[role="button"]')].forEach(el=>{
+    const t=norm69(el.textContent||'');
+    if(t.includes('agregar producto') || t==='+ producto'){
+      el.remove();
+    }
+  });
+}
+
+function removePedidosMensajes69(){
+  if(!isProviderPortal69())return;
+  [...document.querySelectorAll('button,a,li,[role="button"],.nav-item,.menu-item,.sidebar-item')].forEach(el=>{
+    const t=norm69(el.textContent||'');
+    if(t.includes('pedidos y mensajes')){
+      (el.closest('button,a,li,[role="button"],.nav-item,.menu-item,.sidebar-item')||el).remove();
+    }
+  });
+}
+
+function repair69(){
+  if(!isProviderPortal69())return;
+  removePedidosMensajes69();
+
+  if(isMisProductos69()){
+    if(!hasCorrectTable69()){
+      renderCorrectProducts69();
+    }
+  }else{
+    removeAddProductOutside69();
+  }
+}
+
+// Captura directa del menú. Se ejecuta antes que los onclick viejos.
+document.addEventListener('click',function(ev){
+  if(!isProviderPortal69())return;
+  const item=ev.target.closest('button,a,li,[role="button"],.nav-item,.menu-item,.sidebar-item');
+  if(!item)return;
+
+  const t=norm69(item.textContent||'');
+  if(t==='mis productos'){
+    ev.preventDefault();
+    ev.stopPropagation();
+    ev.stopImmediatePropagation();
+    setTimeout(renderCorrectProducts69,0);
+    return false;
+  }
+},true);
+
+// Si cualquier versión vieja vuelve a poner las tarjetas,
+// el marcador #fc-products-table-v69 desaparece y V69 repara de nuevo.
+const observer69=new MutationObserver(()=>setTimeout(repair69,0));
+observer69.observe(document.documentElement,{childList:true,subtree:true});
+
+setTimeout(repair69,150);
+setInterval(repair69,500);
+
+// Los aliases finales quedan apuntando al formulario/listado correcto.
+window.renderMyProducts69=renderCorrectProducts69;
+if(typeof window.openProviderProduct68==='function'){
+  window.openProviderProduct69=window.openProviderProduct68;
+}
+
+})();
