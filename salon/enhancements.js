@@ -18888,3 +18888,26 @@ setInterval(injectAdminCommunityButton60,1400);
 setInterval(pollAdminMessages60,5000);
 
 })();
+
+// ============================================================
+// V73 - QUITAR "MIS PRODUCTOS" DEL MENÚ DEL PROVEEDOR
+// ============================================================
+(function(){
+'use strict';
+const n73=v=>String(v||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+
+function removeMisProductos73(){
+  const sidebar=document.querySelector('.sidebar');
+  if(!sidebar || !n73(sidebar.innerText).includes('portal proveedor')) return;
+
+  [...sidebar.querySelectorAll('button,a,li,[role="button"],.nav-item,.menu-item,.sidebar-item')].forEach(el=>{
+    if(n73(el.textContent)==='mis productos'){
+      (el.closest('button,a,li,[role="button"],.nav-item,.menu-item,.sidebar-item')||el).remove();
+    }
+  });
+}
+
+setTimeout(removeMisProductos73,100);
+const obs73=new MutationObserver(removeMisProductos73);
+obs73.observe(document.documentElement,{childList:true,subtree:true});
+})();
