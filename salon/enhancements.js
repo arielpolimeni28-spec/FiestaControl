@@ -18890,24 +18890,46 @@ setInterval(pollAdminMessages60,5000);
 })();
 
 // ============================================================
-// V73 - QUITAR "MIS PRODUCTOS" DEL MENÚ DEL PROVEEDOR
+// V74 - ELIMINAR REALMENTE "MIS PRODUCTOS" DEL MENÚ PROVEEDOR
+// Corrige el caso con icono "📦 Mis productos".
 // ============================================================
 (function(){
 'use strict';
-const n73=v=>String(v||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
 
-function removeMisProductos73(){
+const norm74=v=>String(v||'')
+  .toLowerCase()
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g,'')
+  .replace(/[^\p{L}\p{N}\s]/gu,' ')
+  .replace(/\s+/g,' ')
+  .trim();
+
+function removeMisProductos74(){
   const sidebar=document.querySelector('.sidebar');
-  if(!sidebar || !n73(sidebar.innerText).includes('portal proveedor')) return;
+  if(!sidebar)return;
 
-  [...sidebar.querySelectorAll('button,a,li,[role="button"],.nav-item,.menu-item,.sidebar-item')].forEach(el=>{
-    if(n73(el.textContent)==='mis productos'){
-      (el.closest('button,a,li,[role="button"],.nav-item,.menu-item,.sidebar-item')||el).remove();
+  const sideText=norm74(sidebar.innerText||'');
+  if(!sideText.includes('portal proveedor'))return;
+
+  // Busca únicamente dentro de la barra lateral.
+  const nodes=[...sidebar.querySelectorAll('button,a,li,[role="button"],.nav-item,.menu-item,.sidebar-item')];
+
+  nodes.forEach(el=>{
+    const txt=norm74(el.textContent||'');
+    if(txt.includes('mis productos')){
+      const target=el.closest('button,a,li,[role="button"],.nav-item,.menu-item,.sidebar-item')||el;
+      target.remove();
     }
   });
 }
 
-setTimeout(removeMisProductos73,100);
-const obs73=new MutationObserver(removeMisProductos73);
-obs73.observe(document.documentElement,{childList:true,subtree:true});
+removeMisProductos74();
+document.addEventListener('DOMContentLoaded',removeMisProductos74);
+setTimeout(removeMisProductos74,50);
+setTimeout(removeMisProductos74,250);
+setTimeout(removeMisProductos74,800);
+
+const obs74=new MutationObserver(removeMisProductos74);
+obs74.observe(document.documentElement,{childList:true,subtree:true});
+
 })();
