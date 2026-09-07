@@ -20501,3 +20501,156 @@ window.openProviderProduct54=window.openProviderProduct65;
 window.openProviderProduct53=window.openProviderProduct65;
 
 })();
+
+
+// ============================================================
+// V66 - MIS PRODUCTOS FORZADO + BOTÓN AGREGAR SOLO AQUÍ
+// ============================================================
+(function(){
+'use strict';
+
+const norm66=v=>String(v||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+const sess66=()=>{try{return session||{}}catch(e){return window.session||{}}};
+const role66=()=>String(sess66().role||'').toLowerCase();
+
+function isProvider66(){
+  const r=role66();
+  return ['provider','supplier','marketprovider','market_supplier','proveedor'].includes(r) ||
+         !!(sess66().providerId||sess66().supplierId||sess66().marketSupplierId);
+}
+
+function currentPageIsProducts66(){
+  const title=norm66(document.querySelector('#title')?.textContent||'');
+  const h=[...document.querySelectorAll('#content h1,#content h2,#content h3')]
+    .map(x=>norm66(x.textContent));
+  return title==='mis productos' || h.includes('mis productos');
+}
+
+// -----------------------------------------------------------------
+// FUERZA LA PANTALLA CORRECTA SI ALGÚN RENDER VIEJO LA PISA.
+// -----------------------------------------------------------------
+let forcing66=false;
+function forceProductsView66(){
+  if(!isProvider66())return;
+  if(forcing66)return;
+
+  const content=document.querySelector('#content');
+  if(!content)return;
+
+  const text=norm66(content.textContent||'');
+  const title=norm66(document.querySelector('#title')?.textContent||'');
+
+  const wrongNative =
+    title==='mis productos' &&
+    (
+      text.includes('todavia no publicaste productos') ||
+      text.includes('ofrece productos y conectate con salones') ||
+      (
+        !content.querySelector('table') &&
+        !content.querySelector('[data-v66-product-list="1"]')
+      )
+    );
+
+  if(wrongNative){
+    forcing66=true;
+    try{
+      if(typeof window.renderMyProducts65==='function') {
+        window.renderMyProducts65();
+      } else if(typeof window.renderMyProducts64==='function') {
+        window.renderMyProducts64();
+      }
+    }catch(e){
+      console.error('V66 render productos',e);
+    }
+    setTimeout(()=>{forcing66=false},60);
+  }
+}
+
+// -----------------------------------------------------------------
+// SOLO PERMITIR "+ PRODUCTO / + AGREGAR PRODUCTO" EN MIS PRODUCTOS.
+// -----------------------------------------------------------------
+function cleanProductButtons66(){
+  if(!isProvider66())return;
+
+  const inProducts=currentPageIsProducts66();
+
+  [...document.querySelectorAll('button,a,[role="button"]')].forEach(el=>{
+    const txt=norm66(el.textContent||'');
+
+    const isAddProduct =
+      txt==='+ producto' ||
+      txt==='producto' && el.textContent.includes('+') ||
+      txt.includes('agregar producto') ||
+      txt.includes('nuevo producto');
+
+    if(isAddProduct){
+      if(inProducts){
+        el.style.display='';
+      }else{
+        el.remove();
+      }
+    }
+
+    // Este ítem quedó dado de baja definitivamente.
+    if(txt.includes('pedidos y mensajes')){
+      const node=el.closest('button,a,li,[role="button"],.nav-item,.menu-item,.sidebar-item')||el;
+      node.remove();
+    }
+  });
+}
+
+// -----------------------------------------------------------------
+// CAPTURA "MIS PRODUCTOS" Y ABRE SIEMPRE EL LISTADO V65.
+// -----------------------------------------------------------------
+document.addEventListener('click',function(ev){
+  if(!isProvider66())return;
+
+  const node=ev.target.closest('button,a,li,[role="button"],.nav-item,.menu-item,.sidebar-item');
+  if(!node)return;
+
+  const txt=norm66(node.textContent||'');
+
+  if(txt==='mis productos'){
+    ev.preventDefault();
+    ev.stopPropagation();
+    ev.stopImmediatePropagation();
+    setTimeout(()=>{
+      try{
+        if(typeof window.renderMyProducts65==='function') window.renderMyProducts65();
+        else if(typeof window.renderMyProducts64==='function') window.renderMyProducts64();
+      }catch(e){}
+      cleanProductButtons66();
+    },0);
+    return false;
+  }
+
+  if(txt.includes('pedidos y mensajes')){
+    ev.preventDefault();
+    ev.stopPropagation();
+    ev.stopImmediatePropagation();
+    node.remove();
+    return false;
+  }
+},true);
+
+// -----------------------------------------------------------------
+// OBSERVER: repara cualquier re-render viejo.
+// -----------------------------------------------------------------
+const obs66=new MutationObserver(()=>{
+  if(!isProvider66())return;
+  cleanProductButtons66();
+  forceProductsView66();
+});
+obs66.observe(document.documentElement,{childList:true,subtree:true});
+
+setTimeout(()=>{
+  cleanProductButtons66();
+  forceProductsView66();
+},250);
+
+setInterval(()=>{
+  cleanProductButtons66();
+  forceProductsView66();
+},700);
+
+})();
