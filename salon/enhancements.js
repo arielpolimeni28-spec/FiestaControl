@@ -18933,3 +18933,837 @@ const obs74=new MutationObserver(removeMisProductos74);
 obs74.observe(document.documentElement,{childList:true,subtree:true});
 
 })();
+
+// ============================================================
+// V75 - PEDIDOS MULTI-ITEM + NOMBRE DEL SALÓN + REMITO FINAL PDF
+// ============================================================
+(function(){
+'use strict';
+
+const N75=v=>Number(v||0);
+const norm75=v=>String(v||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+const esc75=v=>{
+  try{return esc(v)}catch(_){
+    return String(v??'').replace(/[&<>"']/g,ch=>({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[ch]));
+  }
+};
+const money75=v=>{
+  try{return money(v)}catch(_){return '$ '+N75(v).toLocaleString('es-AR',{minimumFractionDigits:0,maximumFractionDigits:2})}
+};
+const SID75=()=>{
+  try{return session?.salonId}catch(_){return window.session?.salonId}
+};
+const sess75=()=>{
+  try{return session||{}}catch(_){return window.session||{}}
+};
+
+function salon75(salonId=SID75()){
+  return (data.salons||[]).find(s=>String(s.id)===String(salonId))||{};
+}
+function salonName75(salonId=SID75()){
+  const s=salon75(salonId);
+  return String(s.fantasyName||s.businessName||s.name||s.salonName||s.email||'Salón');
+}
+function provider75(){
+  const s=sess75();
+  const vals=[
+    s.providerId,s.supplierId,s.marketSupplierId,s.userId,s.id,
+    s.email,s.userEmail,s.username,s.userName,s.name,s.businessName
+  ].filter(Boolean).map(norm75);
+
+  return (data.marketSuppliers||[]).find(p=>{
+    const keys=[
+      p.id,p.userId,p.providerId,p.supplierId,
+      p.email,p.username,p.userName,p.name,p.businessName,p.fantasyName
+    ].filter(Boolean).map(norm75);
+    return keys.some(k=>vals.includes(k));
+  })||null;
+}
+function providerName75(p){
+  return String(p?.fantasyName||p?.businessName||p?.name||p?.username||p?.email||'Proveedor');
+}
+function ownProviders75(){
+  return (data.suppliers||[]).filter(x=>String(x.salonId)===String(SID75()));
+}
+function stockProducts75(){
+  return (data.stockProducts||[]).filter(x=>String(x.salonId)===String(SID75()));
+}
+function communityProviders75(){
+  return (data.marketSuppliers||[])
+    .filter(p=>p.status!=='Suspendido'&&p.active!==false)
+    .map(p=>{
+      let products=(data.providerProducts||[])
+        .filter(x=>String(x.providerId)===String(p.id)&&x.active!==false&&x.visibleToSalons!==false);
+
+      // Compatibilidad con productos históricos guardados en marketSuppliers[].products
+      if(!products.length && Array.isArray(p.products)){
+        products=p.products.filter(x=>x.active!==false&&x.visibleToSalons!==false);
+      }
+      return {raw:p,id:p.id,display:providerName75(p),products};
+    });
+}
+function events75(){
+  return (data.events||[]).filter(x=>String(x.salonId)===String(SID75())&&x.status!=='Cancelada')
+    .sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
+}
+function getOrder75(idv){
+  return (data.stockPurchases||[]).find(o=>String(o.id)===String(idv));
+}
+function orderStatus75(o){return o.orderStatus||o.status||'Registrado'}
+function paymentStatus75(o){return o.paymentStatus||'Pendiente'}
+function deliveryStatus75(o){return o.deliveryStatus||'Pendiente de entrega'}
+
+function items75(o){
+  if(Array.isArray(o.items)&&o.items.length){
+    return o.items.map(x=>({
+      productId:x.productId||x.id||'',
+      productName:x.productName||x.name||'Producto',
+      productCategory:x.productCategory||x.category||'',
+      productDescription:x.productDescription||x.description||'',
+      productPhoto:x.productPhoto||x.photo||'',
+      qty:N75(x.qty||x.quantity||0),
+      unitCost:N75(x.unitCost??x.price??x.cost??0),
+      total:N75(x.total || N75(x.qty||x.quantity||0)*N75(x.unitCost??x.price??x.cost??0))
+    }));
+  }
+  return [{
+    productId:o.productId||'',
+    productName:o.productName||'Producto',
+    productCategory:o.productCategory||'',
+    productDescription:o.productDescription||'',
+    productPhoto:o.productPhoto||'',
+    qty:N75(o.qty||0),
+    unitCost:N75(o.unitCost||0),
+    total:N75(o.total||N75(o.qty||0)*N75(o.unitCost||0))
+  }];
+}
+function itemsSummary75(o){
+  const a=items75(o);
+  if(a.length===1)return `${a[0].productName} × ${a[0].qty}`;
+  return `${a.length} ítems · ${a.reduce((s,x)=>s+N75(x.qty),0)} unidades`;
+}
+function orderCode75(o){
+  return String(o.orderCode||o.code||('PED-'+String(o.id||'').slice(-8).toUpperCase()));
+}
+
+function addMessage75(orderId,fromType,fromName,text){
+  data.orderMessages=data.orderMessages||[];
+  data.orderMessages.push({
+    id:id(),orderId,fromType,fromName,text:String(text||'').trim(),
+    createdAt:new Date().toISOString()
+  });
+}
+
+function addExpenseOnce75(o){
+  if(o.paymentStatus!=='Pagado'||o.financeExpenseCreated===true)return;
+  data.movements=data.movements||[];
+  const key=`v75:community-order:${o.id}`;
+  const oldKey=`v57:community-order:${o.id}`;
+  const exists=data.movements.some(m=>String(m.sourceKey)===key||String(m.sourceKey)===oldKey);
+  if(!exists){
+    data.movements.push({
+      id:id(),
+      salonId:o.salonId,
+      eventId:o.eventId||'',
+      type:'Gasto',
+      category:o.targetType==='event'?'Compra para fiesta':'Compra de stock',
+      concept:`Pedido ${orderCode75(o)} · ${o.supplierName}`,
+      amount:N75(o.total),
+      movementDate:o.paymentDate||new Date().toISOString().slice(0,10),
+      createdAt:new Date().toISOString(),
+      sourceKey:key
+    });
+  }
+  o.financeExpenseCreated=true;
+}
+
+function addStockItemsOnce75(o){
+  if(o.targetType!=='stock'||o.deliveryStatus!=='Entregado'||o.stockAdded===true)return;
+  data.stockProducts=data.stockProducts||[];
+
+  items75(o).forEach(it=>{
+    let stock=data.stockProducts.find(p=>
+      String(p.salonId)===String(o.salonId) &&
+      (
+        (it.productId && String(p.id)===String(it.productId)) ||
+        norm75(p.name)===norm75(it.productName)
+      )
+    );
+
+    if(!stock){
+      stock={
+        id:id(),
+        salonId:o.salonId,
+        name:it.productName,
+        category:it.productCategory||'Compras',
+        description:it.productDescription||'',
+        photo:it.productPhoto||'',
+        stock:0,
+        minStock:0,
+        costPrice:it.unitCost,
+        active:true,
+        createdAt:new Date().toISOString()
+      };
+      data.stockProducts.push(stock);
+    }
+    stock.stock=N75(stock.stock)+N75(it.qty);
+    stock.costPrice=N75(it.unitCost);
+  });
+
+  o.stockAdded=true;
+  o.stockAddedAt=new Date().toISOString();
+}
+
+// ------------------------------------------------------------
+// SALÓN - NUEVO PEDIDO CON VARIOS ÍTEMS
+// ------------------------------------------------------------
+window.openStockPurchase75=function(preselect=''){
+  const own=ownProviders75();
+  const community=communityProviders75();
+  const events=events75();
+
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>Nueva compra / pedido</h2>
+        <p>Podés incluir varios productos dentro del mismo pedido.</p>
+      </div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="purchase75">
+      <div class="form-grid">
+        <div class="field">
+          <label>Destino</label>
+          <select id="target75" name="targetType">
+            <option value="stock">Para Stock</option>
+            <option value="event">Para una fiesta</option>
+          </select>
+        </div>
+
+        <div class="field" id="eventWrap75" style="display:none">
+          <label>Fiesta</label>
+          <select id="event75" name="eventId">
+            <option value="">Seleccionar fiesta</option>
+            ${events.map(e=>`<option value="${e.id}">${esc75(e.date||'')} · ${esc75(e.eventName||e.child||'Evento')}</option>`).join('')}
+          </select>
+        </div>
+
+        <div class="field span2">
+          <label>Proveedor</label>
+          <select id="supplier75" name="supplier" required>
+            <option value="">Seleccionar proveedor</option>
+            ${own.length?`
+              <optgroup label="Mis proveedores manuales">
+                ${own.map(s=>`<option value="own:${s.id}" ${preselect===`own:${s.id}`?'selected':''}>${esc75(s.name||s.businessName||'Proveedor')}</option>`).join('')}
+              </optgroup>`:''}
+            ${community.length?`
+              <optgroup label="Proveedores de la comunidad">
+                ${community.map(c=>`<option value="community:${c.id}" ${preselect===`community:${c.id}`?'selected':''}>${esc75(c.display)}</option>`).join('')}
+              </optgroup>`:''}
+          </select>
+        </div>
+      </div>
+
+      <div class="card" style="margin:14px 0;padding:14px">
+        <div class="section-title">
+          <div>
+            <h3>Ítems del pedido</h3>
+            <small class="muted">Agregá todos los productos que necesites en un único pedido.</small>
+          </div>
+          <button type="button" class="secondary small" id="addItem75">+ Agregar ítem</button>
+        </div>
+        <div id="items75" style="margin-top:10px"></div>
+        <div style="display:flex;justify-content:flex-end;margin-top:12px;font-size:18px">
+          <b>Total pedido: <span id="grandTotal75">${money75(0)}</span></b>
+        </div>
+      </div>
+
+      <div class="form-grid">
+        <div class="field">
+          <label>Fecha del pedido</label>
+          <input name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required>
+        </div>
+
+        <div class="field span2">
+          <label>Mensaje inicial al proveedor</label>
+          <textarea name="initialMessage" placeholder="Ej.: Necesito entrega para el viernes por la mañana."></textarea>
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button class="primary">Enviar pedido</button>
+      </div>
+    </form>
+  `);
+
+  const target=document.querySelector('#target75');
+  const eventWrap=document.querySelector('#eventWrap75');
+  const eventEl=document.querySelector('#event75');
+  const supplier=document.querySelector('#supplier75');
+  const itemsHost=document.querySelector('#items75');
+  const grand=document.querySelector('#grandTotal75');
+  let rowSeq=0;
+
+  function currentProviderData(){
+    const [source,pid]=String(supplier.value||'').split(':');
+    if(source==='community'){
+      const c=community.find(x=>String(x.id)===String(pid));
+      return {source,pid,products:c?.products||[],provider:c};
+    }
+    if(source==='own'){
+      return {source,pid,products:stockProducts75(),provider:own.find(x=>String(x.id)===String(pid))};
+    }
+    return {source:'',pid:'',products:[],provider:null};
+  }
+
+  function productOptions(){
+    const ctx=currentProviderData();
+    if(!ctx.pid)return '<option value="">Seleccioná primero un proveedor</option>';
+    return '<option value="">Seleccionar producto</option>'+
+      ctx.products.map(p=>`
+        <option value="${esc75(p.id)}">
+          ${esc75(p.name||p.product||'Producto')}${ctx.source==='community'?' · '+money75(p.price??p.cost??0):''}
+        </option>`).join('');
+  }
+
+  function recalc(){
+    let total=0;
+    itemsHost.querySelectorAll('.order-item75').forEach(row=>{
+      const q=N75(row.querySelector('[data-qty]')?.value);
+      const c=N75(row.querySelector('[data-cost]')?.value);
+      const t=q*c;
+      row.querySelector('[data-total]').value=money75(t);
+      total+=t;
+    });
+    grand.textContent=money75(total);
+  }
+
+  function syncRowPrice(row){
+    const ctx=currentProviderData();
+    const prodId=row.querySelector('[data-product]').value;
+    const prod=ctx.products.find(p=>String(p.id)===String(prodId));
+    const cost=row.querySelector('[data-cost]');
+
+    if(ctx.source==='community'){
+      cost.readOnly=true;
+      cost.value=prod?N75(prod.price??prod.cost??0):'';
+    }else{
+      cost.readOnly=false;
+      if(prod && !cost.value)cost.value=N75(prod.costPrice??prod.cost??0);
+    }
+    recalc();
+  }
+
+  function addRow(){
+    if(!supplier.value)return toast('Seleccioná un proveedor primero');
+
+    const idx=++rowSeq;
+    const row=document.createElement('div');
+    row.className='order-item75';
+    row.style.cssText='display:grid;grid-template-columns:minmax(220px,2fr) 90px 130px 130px auto;gap:8px;align-items:end;padding:10px 0;border-bottom:1px solid #eee';
+    row.innerHTML=`
+      <div class="field" style="margin:0">
+        <label>Producto</label>
+        <select data-product required>${productOptions()}</select>
+      </div>
+      <div class="field" style="margin:0">
+        <label>Cant.</label>
+        <input data-qty type="number" min="1" value="1" required>
+      </div>
+      <div class="field" style="margin:0">
+        <label>Precio unit.</label>
+        <input data-cost type="number" min="0" step="0.01" required>
+      </div>
+      <div class="field" style="margin:0">
+        <label>Total</label>
+        <input data-total readonly>
+      </div>
+      <button type="button" class="danger small" data-remove title="Quitar ítem">🗑️</button>
+    `;
+    itemsHost.appendChild(row);
+
+    row.querySelector('[data-product]').onchange=()=>syncRowPrice(row);
+    row.querySelector('[data-qty]').oninput=recalc;
+    row.querySelector('[data-cost]').oninput=recalc;
+    row.querySelector('[data-remove]').onclick=()=>{
+      row.remove();
+      recalc();
+    };
+    syncRowPrice(row);
+  }
+
+  function resetItems(){
+    itemsHost.innerHTML='';
+    rowSeq=0;
+    if(supplier.value)addRow();
+    else recalc();
+  }
+
+  target.onchange=()=>{
+    eventWrap.style.display=target.value==='event'?'':'none';
+    eventEl.required=target.value==='event';
+  };
+  supplier.onchange=resetItems;
+  document.querySelector('#addItem75').onclick=addRow;
+
+  target.onchange();
+  if(preselect){
+    supplier.value=preselect;
+    resetItems();
+  }
+
+  document.querySelector('#purchase75').onsubmit=e=>{
+    e.preventDefault();
+
+    const fd=new FormData(e.target);
+    const [source,supplierId]=String(fd.get('supplier')||'').split(':');
+    if(!supplierId)return toast('Seleccioná un proveedor');
+    if(fd.get('targetType')==='event'&&!fd.get('eventId'))return toast('Seleccioná la fiesta');
+
+    const ctx=currentProviderData();
+    const rows=[...itemsHost.querySelectorAll('.order-item75')];
+    if(!rows.length)return toast('Agregá al menos un ítem al pedido');
+
+    const orderItems=[];
+    const used=new Set();
+
+    for(const row of rows){
+      const productId=row.querySelector('[data-product]').value;
+      const qty=N75(row.querySelector('[data-qty]').value);
+      const unitCost=N75(row.querySelector('[data-cost]').value);
+      const prod=ctx.products.find(p=>String(p.id)===String(productId));
+
+      if(!prod)return toast('Seleccioná un producto en todos los ítems');
+      if(qty<=0)return toast('La cantidad debe ser mayor a cero');
+      if(used.has(String(productId)))return toast('Un producto está repetido. Usá una sola línea y aumentá la cantidad.');
+      used.add(String(productId));
+
+      orderItems.push({
+        productId:prod.id,
+        productName:prod.name||prod.product||'Producto',
+        productCategory:prod.category||'',
+        productDescription:prod.description||'',
+        productPhoto:prod.photo||prod.image||'',
+        qty,
+        unitCost,
+        total:qty*unitCost
+      });
+    }
+
+    const sup=source==='community'
+      ? community.find(x=>String(x.id)===String(supplierId))
+      : own.find(x=>String(x.id)===String(supplierId));
+
+    if(!sup)return toast('Proveedor no encontrado');
+
+    const event=fd.get('targetType')==='event'
+      ? events.find(x=>String(x.id)===String(fd.get('eventId')))
+      : null;
+
+    const total=orderItems.reduce((s,x)=>s+N75(x.total),0);
+    const first=orderItems[0];
+    const oid=id();
+
+    const order={
+      id:oid,
+      orderCode:'PED-'+String(oid).slice(-8).toUpperCase(),
+      salonId:SID75(),
+      salonName:salonName75(),
+      supplierId,
+      supplierSource:source,
+      supplierName:source==='community'?sup.display:(sup.name||sup.businessName||'Proveedor'),
+      targetType:fd.get('targetType'),
+      eventId:event?.id||'',
+      eventName:event?.eventName||event?.child||'',
+      items:orderItems,
+
+      // Compatibilidad con módulos anteriores
+      productId:first.productId,
+      productName:orderItems.length===1?first.productName:`${orderItems.length} ítems`,
+      productCategory:first.productCategory,
+      productDescription:first.productDescription,
+      productPhoto:first.productPhoto,
+      qty:orderItems.reduce((s,x)=>s+N75(x.qty),0),
+      unitCost:orderItems.length===1?first.unitCost:0,
+
+      total,
+      date:fd.get('date'),
+      orderStatus:source==='community'?'Pendiente de aceptación':'Registrado',
+      paymentStatus:'Pendiente',
+      deliveryStatus:'Pendiente de entrega',
+      stockAdded:false,
+      financeExpenseCreated:false,
+      createdAt:new Date().toISOString()
+    };
+
+    data.stockPurchases=data.stockPurchases||[];
+    data.stockPurchases.push(order);
+
+    if(source==='community'){
+      const msg=String(fd.get('initialMessage')||'').trim() ||
+        `Nuevo pedido de ${order.salonName}: ${orderItems.map(x=>`${x.qty} x ${x.productName}`).join(', ')}.`;
+      addMessage75(order.id,'salon',order.salonName,msg);
+    }
+
+    save();
+    closeModal();
+    renderSuppliersV57();
+    toast(source==='community'?'Pedido enviado al proveedor':'Pedido registrado');
+  };
+};
+
+// Reemplaza todos los accesos anteriores a "Nueva compra / pedido"
+window.openStockPurchase57=window.openStockPurchase75;
+window.openStockPurchase56=window.openStockPurchase75;
+window.openStockPurchase55=window.openStockPurchase75;
+window.openStockPurchase54=window.openStockPurchase75;
+window.openStockPurchase53=window.openStockPurchase75;
+window.openPurchaseFromCommunity53=function(providerId){
+  openStockPurchase75(`community:${providerId}`);
+};
+
+// ------------------------------------------------------------
+// PAGO / ENTREGA MULTI-ITEM
+// ------------------------------------------------------------
+window.salonMarkPaid57=function(orderId){
+  const o=getOrder75(orderId);
+  if(!o)return;
+  if(orderStatus75(o)!=='Aceptado')return toast('El proveedor debe aceptar el pedido primero');
+  if(paymentStatus75(o)==='Pagado')return toast('El pedido ya figura pagado');
+  if(!confirm(`¿Confirmar pago de ${money75(o.total)} a ${o.supplierName}?`))return;
+
+  o.paymentStatus='Pagado';
+  o.paymentDate=new Date().toISOString().slice(0,10);
+  addExpenseOnce75(o);
+  addMessage75(o.id,'salon',o.salonName||salonName75(o.salonId),'Pago realizado.');
+  save();
+  renderSuppliersV57();
+  toast('Pago registrado');
+};
+
+window.salonMarkDelivered57=function(orderId){
+  const o=getOrder75(orderId);
+  if(!o)return;
+  if(orderStatus75(o)!=='Aceptado')return toast('El proveedor debe aceptar el pedido primero');
+  if(deliveryStatus75(o)==='Entregado')return toast('El pedido ya figura entregado');
+  if(!confirm(`¿Confirmás que recibiste el pedido de ${o.supplierName}?`))return;
+
+  o.deliveryStatus='Entregado';
+  o.deliveredAt=new Date().toISOString();
+  addStockItemsOnce75(o);
+  addMessage75(o.id,'salon',o.salonName||salonName75(o.salonId),'Pedido recibido y marcado como entregado.');
+  save();
+  renderSuppliersV57();
+  toast(o.targetType==='stock'?'Pedido entregado y stock actualizado':'Pedido entregado');
+};
+
+// ------------------------------------------------------------
+// PDF - REMITO FINAL
+// Se habilita únicamente cuando está PAGADO + ENTREGADO.
+// ------------------------------------------------------------
+function pdfSafe75(v){
+  return String(v??'')
+    .replace(/€/g,'EUR')
+    .replace(/[^\x20-\x7E\xA0-\xFF]/g,' ');
+}
+function pdfEsc75(v){
+  return pdfSafe75(v).replace(/\\/g,'\\\\').replace(/\(/g,'\\(').replace(/\)/g,'\\)');
+}
+function makePdf75(lines){
+  const content=[];
+  content.push('BT');
+  content.push('/F1 11 Tf');
+  content.push('50 790 Td');
+
+  lines.forEach((ln,i)=>{
+    if(i>0)content.push('0 -17 Td');
+    const bold=ln.bold===true;
+    content.push(`/${bold?'F2':'F1'} ${bold?12:10.5} Tf`);
+    content.push(`(${pdfEsc75(ln.text)}) Tj`);
+  });
+  content.push('ET');
+
+  const stream=content.join('\n');
+  const objs=[];
+  objs[1]='<< /Type /Catalog /Pages 2 0 R >>';
+  objs[2]='<< /Type /Pages /Kids [3 0 R] /Count 1 >>';
+  objs[3]='<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>';
+  objs[4]='<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>';
+  objs[5]='<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>';
+  objs[6]=`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`;
+
+  let pdf='%PDF-1.4\n';
+  const offsets=[0];
+  for(let i=1;i<=6;i++){
+    offsets[i]=pdf.length;
+    pdf+=`${i} 0 obj\n${objs[i]}\nendobj\n`;
+  }
+  const xref=pdf.length;
+  pdf+='xref\n0 7\n0000000000 65535 f \n';
+  for(let i=1;i<=6;i++)pdf+=String(offsets[i]).padStart(10,'0')+' 00000 n \n';
+  pdf+=`trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  return pdf;
+}
+
+window.downloadOrderRemito75=function(orderId){
+  const o=getOrder75(orderId);
+  if(!o)return toast('Pedido no encontrado');
+
+  if(paymentStatus75(o)!=='Pagado'||deliveryStatus75(o)!=='Entregado'){
+    return toast('El remito final se habilita cuando el pedido está pagado y entregado');
+  }
+
+  const code=orderCode75(o);
+  const salonName=o.salonName||salonName75(o.salonId);
+  const its=items75(o);
+
+  const lines=[
+    {text:'FIESTACONTROL - REMITO FINAL',bold:true},
+    {text:`Remito: ${code}`},
+    {text:`Fecha del pedido: ${o.date||''}`},
+    {text:`Salon: ${salonName}`},
+    {text:`Proveedor: ${o.supplierName||''}`},
+    {text:`Destino: ${o.targetType==='event'?'Fiesta - '+(o.eventName||''): 'Stock'}`},
+    {text:'------------------------------------------------------------'},
+    {text:'DETALLE',bold:true},
+  ];
+
+  its.forEach((x,i)=>{
+    lines.push({text:`${i+1}. ${x.productName}`});
+    lines.push({text:`   Cantidad: ${x.qty}   Unitario: ${money75(x.unitCost)}   Subtotal: ${money75(x.total)}`});
+  });
+
+  lines.push(
+    {text:'------------------------------------------------------------'},
+    {text:`TOTAL: ${money75(o.total)}`,bold:true},
+    {text:`Pago: ${paymentStatus75(o)}`},
+    {text:`Entrega: ${deliveryStatus75(o)}`},
+    {text:`Entregado: ${o.deliveredAt?new Date(o.deliveredAt).toLocaleString('es-AR'):''}`},
+    {text:''},
+    {text:'Documento generado por FiestaControl.'}
+  );
+
+  const pdf=makePdf75(lines);
+  const bytes=new Uint8Array(pdf.length);
+  for(let i=0;i<pdf.length;i++)bytes[i]=pdf.charCodeAt(i)&255;
+
+  const blob=new Blob([bytes],{type:'application/pdf'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download=`Remito_${code}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1500);
+};
+
+// ------------------------------------------------------------
+// PROVEEDOR - PEDIDOS RECIBIDOS CON NOMBRE DEL SALÓN
+// ------------------------------------------------------------
+window.renderProviderOrders57=function(){
+  const p=provider75();
+  if(!p)return toast('Proveedor no identificado');
+
+  const orders=(data.stockPurchases||[])
+    .filter(o=>o.supplierSource==='community'&&String(o.supplierId)===String(p.id))
+    .sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
+
+  $('#content').innerHTML=`
+    <div class="card">
+      <div class="section-title">
+        <div>
+          <h2>📦 Pedidos recibidos</h2>
+          <small class="muted">Cada pedido identifica el salón que lo realizó.</small>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      ${orders.length?`
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Pedido</th><th>Fecha</th><th>Salón</th><th>Detalle</th><th>Total</th>
+                <th>Estado</th><th>Pago</th><th>Entrega</th><th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${orders.map(o=>`
+                <tr>
+                  <td><b>${esc75(orderCode75(o))}</b></td>
+                  <td>${esc75(o.date||'')}</td>
+                  <td>
+                    <b>${esc75(o.salonName||salonName75(o.salonId))}</b>
+                    ${o.eventName?`<small style="display:block">Fiesta: ${esc75(o.eventName)}</small>`:''}
+                  </td>
+                  <td>
+                    ${items75(o).map(x=>`
+                      <div style="padding:3px 0">
+                        <b>${esc75(x.productName)}</b> × ${x.qty}
+                        <small style="display:block">${money75(x.unitCost)} c/u · ${money75(x.total)}</small>
+                      </div>
+                    `).join('')}
+                  </td>
+                  <td><b>${money75(o.total)}</b></td>
+                  <td><b>${esc75(orderStatus75(o))}</b></td>
+                  <td>${esc75(paymentStatus75(o))}</td>
+                  <td>${esc75(deliveryStatus75(o))}</td>
+                  <td>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap">
+                      ${orderStatus75(o)==='Pendiente de aceptación'?`
+                        <button class="primary small" onclick="providerAcceptOrder57('${o.id}')">Aceptar</button>
+                        <button class="danger small" onclick="providerRejectOrder57('${o.id}')">Rechazar</button>
+                      `:''}
+                      ${orderStatus75(o)==='Aceptado'&&paymentStatus75(o)==='Pagado'&&!o.providerPaymentConfirmed?`
+                        <button class="secondary small" onclick="providerConfirmPayment57('${o.id}')">Confirmar pago recibido</button>
+                      `:''}
+                      <button class="secondary small" onclick="openOrderChat57('${o.id}','provider')">💬 Comunicación</button>
+                      ${paymentStatus75(o)==='Pagado'&&deliveryStatus75(o)==='Entregado'?`
+                        <button class="primary small" onclick="downloadOrderRemito75('${o.id}')">📄 Remito final PDF</button>
+                      `:''}
+                    </div>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `:'<div class="empty">Todavía no recibiste pedidos.</div>'}
+    </div>
+  `;
+};
+
+// ------------------------------------------------------------
+// SALÓN - LISTADO DE PEDIDOS MULTI-ITEM + REMITO PDF
+// ------------------------------------------------------------
+window.renderSuppliersV57=function(){
+  const own=ownProviders75();
+  const community=communityProviders75();
+  const purchases=(data.stockPurchases||[])
+    .filter(o=>String(o.salonId)===String(SID75()))
+    .sort((a,b)=>String(b.createdAt||b.date||'').localeCompare(String(a.createdAt||a.date||'')));
+
+  setTitle('Proveedores','Pedidos, comunidad y stock');
+
+  $('#content').innerHTML=`
+    <div class="card">
+      <div class="section-title">
+        <div>
+          <h3>🚚 Proveedores</h3>
+          <small class="muted">Un pedido puede contener varios productos. El remito final se habilita cuando está pagado y entregado.</small>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="secondary" onclick="openManualSupplier51()">+ Proveedor manual</button>
+          <button class="primary" onclick="openStockPurchase75()">+ Nueva compra / pedido</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h3>Proveedores de la comunidad</h3>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;margin-top:10px">
+        ${community.length?community.map(c=>`
+          <div class="card" style="margin:0">
+            <div style="display:flex;gap:10px;align-items:center">
+              ${c.raw.logo?`<img src="${c.raw.logo}" style="width:54px;height:54px;object-fit:contain;border-radius:10px">`:''}
+              <div>
+                <h3 style="margin:0">${esc75(c.display)}</h3>
+                <small>${esc75(c.raw.address||'')}</small>
+              </div>
+            </div>
+            <div style="margin-top:10px">
+              ${c.products.length?c.products.map(p=>`
+                <div style="display:grid;grid-template-columns:54px 1fr auto;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid #eee">
+                  ${p.photo?`<img src="${p.photo}" style="width:54px;height:54px;object-fit:cover;border-radius:8px">`:'<div></div>'}
+                  <div>
+                    <b>${esc75(p.name||p.product||'Producto')}</b>
+                    <small style="display:block">${esc75(p.description||'')}</small>
+                  </div>
+                  <b>${money75(p.price??p.cost??0)}</b>
+                </div>
+              `).join(''):'<div class="empty">Sin productos visibles.</div>'}
+            </div>
+            <button class="primary small" style="margin-top:10px" onclick="openStockPurchase75('community:${c.id}')">Hacer pedido</button>
+          </div>
+        `).join(''):'<div class="empty">No hay proveedores de la comunidad.</div>'}
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h3>Mis proveedores manuales</h3>
+      ${own.length?own.map(s=>`
+        <div style="padding:8px 0;border-bottom:1px solid #eee">
+          <b>${esc75(s.name||s.businessName||'Proveedor')}</b>
+        </div>
+      `).join(''):'<div class="empty">Sin proveedores manuales.</div>'}
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h3>Pedidos / compras</h3>
+      ${purchases.length?`
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Pedido</th><th>Fecha</th><th>Proveedor</th><th>Ítems</th><th>Destino</th>
+                <th>Total</th><th>Estado</th><th>Pago</th><th>Entrega</th><th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${purchases.map(o=>`
+                <tr>
+                  <td><b>${esc75(orderCode75(o))}</b></td>
+                  <td>${esc75(o.date||'')}</td>
+                  <td>${esc75(o.supplierName||'')}</td>
+                  <td>
+                    ${items75(o).map(x=>`
+                      <div style="padding:3px 0">
+                        <b>${esc75(x.productName)}</b> × ${x.qty}
+                        <small style="display:block">${money75(x.unitCost)} c/u · ${money75(x.total)}</small>
+                      </div>
+                    `).join('')}
+                  </td>
+                  <td>${o.targetType==='event'?`Fiesta: ${esc75(o.eventName||'')}`:'Stock'}</td>
+                  <td><b>${money75(o.total||0)}</b></td>
+                  <td><b>${esc75(orderStatus75(o))}</b></td>
+                  <td>${esc75(paymentStatus75(o))}</td>
+                  <td>${esc75(deliveryStatus75(o))}</td>
+                  <td>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap">
+                      ${o.supplierSource==='community'?`
+                        <button class="secondary small" onclick="openOrderChat57('${o.id}','salon')">💬 Comunicación</button>
+                        ${orderStatus75(o)==='Aceptado'&&paymentStatus75(o)!=='Pagado'?`
+                          <button class="secondary small" onclick="salonMarkPaid57('${o.id}')">💳 Marcar pagado</button>
+                        `:''}
+                        ${orderStatus75(o)==='Aceptado'&&deliveryStatus75(o)!=='Entregado'?`
+                          <button class="primary small" onclick="salonMarkDelivered57('${o.id}')">📦 Marcar entregado</button>
+                        `:''}
+                      `:''}
+                      ${paymentStatus75(o)==='Pagado'&&deliveryStatus75(o)==='Entregado'?`
+                        <button class="primary small" onclick="downloadOrderRemito75('${o.id}')">📄 Remito final PDF</button>
+                      `:''}
+                    </div>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `:'<div class="empty">Todavía no hay pedidos.</div>'}
+    </div>
+  `;
+};
+
+// Mantener aliases que otros módulos ya usan.
+window.renderSuppliersV56=window.renderSuppliersV57;
+window.renderSuppliersV55=window.renderSuppliersV57;
+window.renderSuppliersV54=window.renderSuppliersV57;
+window.renderSuppliersV53=window.renderSuppliersV57;
+
+})();
+
