@@ -20532,3 +20532,191 @@ window.updateCommunityBadge78=updateBadge78;
 
 })();
 
+// ============================================================
+// V82 - ESTADO DE LA FIESTA: MOVIMIENTOS DE ADICIONALES
+// ============================================================
+(function(){
+'use strict';
+
+const n82=v=>Number(v||0);
+const esc82=v=>String(v??'').replace(/[&<>"']/g,ch=>({
+  '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+}[ch]));
+const money82=v=>{
+  try{return money(v)}catch(_){return '$ '+n82(v).toLocaleString('es-AR')}
+};
+function sid82(){
+  try{return session?.salonId}catch(_){return window.session?.salonId}
+}
+function event82(eid){
+  return (data.events||[]).find(e=>String(e.id)===String(eid));
+}
+function salon82(){
+  return (data.salons||[]).find(s=>String(s.id)===String(sid82()))||{};
+}
+function visiblePays82(e){
+  if(typeof window.visiblePayments48==='function'){
+    try{return window.visiblePayments48(e)}catch(_){}
+  }
+  return (data.movements||[]).filter(m=>
+    String(m.eventId)===String(e.id) &&
+    String(m.salonId)===String(sid82()) &&
+    String(m.type||'').toLowerCase()==='ingreso'
+  );
+}
+function additionalMovements82(e){
+  return (data.movements||[])
+    .filter(m=>String(m.eventId)===String(e.id)&&String(m.salonId)===String(sid82()))
+    .filter(m=>{
+      const cat=String(m.category||'').toLowerCase();
+      const con=String(m.concept||'').toLowerCase();
+      const key=String(m.sourceKey||'').toLowerCase();
+      return cat.includes('adicional') || con.includes('adicional') || key.includes('extra:');
+    })
+    .sort((a,b)=>String(a.movementDate||a.createdAt||'').localeCompare(String(b.movementDate||b.createdAt||'')));
+}
+function printWindow82(title,html,autoPrint=true){
+  const w=window.open('','_blank','width=980,height=900');
+  if(!w){alert('El navegador bloqueó la ventana de impresión.');return}
+  w.document.open();
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc82(title)}</title>
+  <style>
+    body{font-family:Arial,sans-serif;color:#111;margin:0;background:#fff}
+    .page{padding:28px;max-width:920px;margin:auto}
+    .actions{padding:12px 28px;background:#f3f4f6;display:flex;gap:8px}
+    button{padding:9px 14px;border:1px solid #bbb;border-radius:8px;background:#fff;cursor:pointer}
+    .head{display:flex;justify-content:space-between;gap:20px;border-bottom:2px solid #111;padding-bottom:14px}
+    .head h1{margin:0;font-size:24px}.right{text-align:right}.muted{font-size:12px;color:#666}
+    h2{font-size:17px;margin:20px 0 8px}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 28px}
+    .row{display:flex;justify-content:space-between;gap:20px;padding:7px 0;border-bottom:1px solid #ddd}
+    .total{font-weight:bold;font-size:18px;border-top:2px solid #111;margin-top:8px}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:8px;border-bottom:1px solid #ddd;text-align:left;font-size:13px;vertical-align:top}
+    .sign{margin-top:50px;display:grid;grid-template-columns:1fr 1fr;gap:60px}
+    .line{border-top:1px solid #111;text-align:center;padding-top:6px;font-size:12px}
+    @media print{.actions{display:none}.page{padding:0}@page{size:A4;margin:14mm}}
+  </style></head><body>
+  <div class="actions"><button onclick="window.print()">🖨 Imprimir / Guardar PDF</button><button onclick="window.close()">Cerrar</button></div>
+  <div class="page">${html}</div></body></html>`);
+  w.document.close();
+  if(autoPrint)setTimeout(()=>{try{w.focus();w.print()}catch(_){}},500);
+}
+
+window.printReservationStatus82=function(eid,autoPrint=true){
+  const e=event82(eid);
+  if(!e)return toast('No se encontró la reserva');
+
+  const s=salon82();
+  const pays=visiblePays82(e);
+  const addMoves=additionalMovements82(e);
+  const total=n82(e.total);
+  const paid=n82(e.paid);
+  const balance=Math.max(0,total-paid);
+  const extras=Array.isArray(e.extras)?e.extras:[];
+
+  const additionalTotal=addMoves.reduce((sum,m)=>sum+n82(m.amount),0);
+
+  const html=`
+    <div class="head">
+      <div>
+        <h1>${esc82(s.name||'FiestaControl')}</h1>
+        <div class="muted">${esc82(s.address||'')}</div>
+        <div class="muted">${esc82(s.phone||'')}${s.email?' · '+esc82(s.email):''}</div>
+      </div>
+      <div class="right">
+        <b>ESTADO DE LA FIESTA</b>
+        <div class="muted">Emitido ${new Date().toLocaleString('es-AR')}</div>
+      </div>
+    </div>
+
+    <h2>Datos del evento</h2>
+    <div class="grid">
+      <div><b>Tipo:</b> ${esc82(e.eventTypeName||'Evento')}</div>
+      <div><b>Fecha:</b> ${esc82(e.date||'')}</div>
+      <div><b>Nombre:</b> ${esc82(e.eventName||e.child||'')}</div>
+      <div><b>Responsable:</b> ${esc82(e.client||'')}</div>
+      <div><b>Horario:</b> ${esc82(e.start||'')} a ${esc82(e.end||'')}</div>
+      <div><b>Estado:</b> ${esc82(e.status||'')}</div>
+      <div><b>Adultos:</b> ${n82(e.adults)}</div>
+      <div><b>Niños:</b> ${n82(e.children)}</div>
+    </div>
+
+    <h2>Adicionales incluidos en la fiesta</h2>
+    ${extras.length?`
+      <table>
+        <thead><tr><th>Adicional</th><th>Detalle</th><th>Importe</th></tr></thead>
+        <tbody>${extras.map(x=>`
+          <tr>
+            <td>${esc82(x.name||'Adicional')}</td>
+            <td>${esc82(x.description||x.detail||'')}</td>
+            <td>${money82(x.price||x.amount||0)}</td>
+          </tr>`).join('')}</tbody>
+      </table>
+    `:'<div class="muted">Sin adicionales generales seleccionados.</div>'}
+
+    <div class="row"><span>Adultos adicionales (${n82(e.extraAdultQty)})</span><b>${money82(e.extraAdultTotal)}</b></div>
+    <div class="row"><span>Niños adicionales (${n82(e.extraChildQty)})</span><b>${money82(e.extraChildTotal)}</b></div>
+    <div class="row"><span>Mozo adicional (${n82(e.extraWaiters)})</span><b>${money82(e.extraWaiterTotal)}</b></div>
+    <div class="row"><span>Cocina adicional (${n82(e.extraKitchen)})</span><b>${money82(e.extraKitchenTotal)}</b></div>
+    <div class="row"><span>Animador adicional (${n82(e.extraAnimators)})</span><b>${money82(e.extraAnimatorTotal)}</b></div>
+    <div class="row"><span>Horas extra (${n82(e.extraHours)})</span><b>${money82(e.extraHourTotal)}</b></div>
+
+    <h2>Movimientos de adicionales</h2>
+    ${addMoves.length?`
+      <table>
+        <thead>
+          <tr><th>Fecha</th><th>Tipo</th><th>Categoría</th><th>Concepto</th><th>Medio</th><th>Importe</th></tr>
+        </thead>
+        <tbody>
+          ${addMoves.map(m=>`
+            <tr>
+              <td>${esc82(m.movementDate||'')}</td>
+              <td>${esc82(m.type||'')}</td>
+              <td>${esc82(m.category||'')}</td>
+              <td>${esc82(m.concept||'')}</td>
+              <td>${esc82(m.method||'')}</td>
+              <td>${money82(m.amount||0)}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+      <div style="text-align:right;margin-top:8px"><b>Total movimientos de adicionales: ${money82(additionalTotal)}</b></div>
+    `:'<div class="muted">No hay movimientos de adicionales registrados para esta fiesta.</div>'}
+
+    <h2>Estado económico</h2>
+    <div class="row"><span>Total de la fiesta</span><b>${money82(total)}</b></div>
+    <div class="row"><span>Total pagado</span><b>${money82(paid)}</b></div>
+    <div class="row total"><span>Saldo pendiente</span><b>${money82(balance)}</b></div>
+
+    <h2>Pagos registrados</h2>
+    ${pays.length?`
+      <table>
+        <thead><tr><th>Fecha</th><th>Concepto</th><th>Medio</th><th>Importe</th></tr></thead>
+        <tbody>${pays.map(m=>`
+          <tr>
+            <td>${esc82(m.movementDate||'')}</td>
+            <td>${esc82(m.concept||'Pago')}</td>
+            <td>${esc82(m.method||'')}</td>
+            <td>${money82(m.amount||0)}</td>
+          </tr>`).join('')}</tbody>
+      </table>
+    `:'<div class="muted">No hay pagos registrados.</div>'}
+
+    <div style="text-align:right;margin-top:10px"><b>Total pagos: ${money82(paid)}</b></div>
+
+    <div class="sign">
+      <div class="line">Firma del salón</div>
+      <div class="line">Firma del cliente</div>
+    </div>
+  `;
+
+  printWindow82(`Estado fiesta - ${e.eventName||e.child||'Evento'}`,html,autoPrint);
+};
+
+window.printReservationStatus49=window.printReservationStatus82;
+window.printReservationStatus48=window.printReservationStatus82;
+window.printReservationStatus46=window.printReservationStatus82;
+window.printReservationStatus=window.printReservationStatus82;
+
+})();
+
