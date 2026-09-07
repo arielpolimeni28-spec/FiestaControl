@@ -20654,3 +20654,360 @@ setInterval(()=>{
 },700);
 
 })();
+
+
+// ============================================================
+// V67 - MIS PRODUCTOS = CATÁLOGO OFICIAL DEL PROVEEDOR
+// Lo que se agrega aquí es lo que ven los salones en Comunidad.
+// ============================================================
+(function(){
+'use strict';
+
+data.providerProducts=data.providerProducts||[];
+data.marketSuppliers=data.marketSuppliers||[];
+
+const norm67=v=>String(v||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+const esc67=v=>{
+  try{return esc(v)}catch(e){
+    return String(v??'').replace(/[&<>"']/g,ch=>({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[ch]));
+  }
+};
+const money67=v=>{
+  try{return money(v)}catch(e){return '$ '+Number(v||0).toLocaleString('es-AR')}
+};
+const sess67=()=>{
+  try{return session||{}}catch(e){return window.session||{}}
+};
+function role67(){return String(sess67().role||'').toLowerCase();}
+
+function provider67(){
+  const s=sess67();
+  const vals=[
+    s.providerId,s.supplierId,s.marketSupplierId,s.userId,s.id,
+    s.email,s.userEmail,s.username,s.userName,s.name,
+    s.business,s.businessName,s.fantasyName
+  ].filter(Boolean).map(norm67);
+
+  return (data.marketSuppliers||[]).find(p=>{
+    const keys=[
+      p.id,p.userId,p.providerId,p.supplierId,p.email,
+      p.username,p.userName,p.name,p.business,p.businessName,
+      p.fantasyName,p.owner
+    ].filter(Boolean).map(norm67);
+    return keys.some(k=>vals.includes(k));
+  })||null;
+}
+function providerName67(p){
+  return String(p?.fantasyName||p?.business||p?.businessName||p?.name||p?.username||p?.email||'Proveedor');
+}
+function belongs67(prod,p){
+  if(!prod||!p)return false;
+  return String(prod.providerId||'')===String(p.id||'') ||
+         String(prod.providerUserId||'')===String(p.userId||p.id||'') ||
+         (!!prod.providerEmail && !!p.email && norm67(prod.providerEmail)===norm67(p.email)) ||
+         (!!prod.providerName && [
+           p.fantasyName,p.business,p.businessName,p.name
+         ].filter(Boolean).map(norm67).includes(norm67(prod.providerName)));
+}
+
+// Une los productos históricos + nuevos sin duplicar.
+function mergedProducts67(p){
+  const map=new Map();
+
+  (Array.isArray(p?.products)?p.products:[]).forEach(x=>{
+    if(!x||!x.id)return;
+    map.set(String(x.id),{
+      id:x.id,
+      providerId:p.id,
+      providerUserId:p.userId||p.id,
+      providerEmail:p.email||'',
+      providerName:providerName67(p),
+      name:x.name||x.product||'Producto',
+      category:x.category||p.category||'',
+      price:Number(x.price||x.cost||0),
+      description:x.description||'',
+      photo:x.photo||x.image||'',
+      visibleToSalons:x.visibleToSalons!==false,
+      active:x.active!==false
+    });
+  });
+
+  (data.providerProducts||[]).filter(x=>belongs67(x,p)).forEach(x=>{
+    const old=map.get(String(x.id))||{};
+    map.set(String(x.id),{...old,...x});
+  });
+
+  return [...map.values()].sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+}
+
+function syncProduct67(p,obj){
+  // Fuente nueva
+  const ix=data.providerProducts.findIndex(x=>String(x.id)===String(obj.id));
+  if(ix>=0)data.providerProducts[ix]={...data.providerProducts[ix],...obj};
+  else data.providerProducts.push(obj);
+
+  // Fuente histórica usada por Comunidad
+  p.products=Array.isArray(p.products)?p.products:[];
+  const px=p.products.findIndex(x=>String(x.id)===String(obj.id));
+  const legacy={
+    id:obj.id,
+    name:obj.name,
+    category:obj.category,
+    price:obj.price,
+    description:obj.description,
+    photo:obj.photo,
+    visibleToSalons:obj.visibleToSalons,
+    active:true
+  };
+  if(px>=0)p.products[px]={...p.products[px],...legacy};
+  else p.products.push(legacy);
+}
+
+// ------------------------------------------------------------
+// AGREGAR / EDITAR PRODUCTO
+// ------------------------------------------------------------
+window.openProviderProduct67=function(productId=''){
+  const p=provider67();
+  if(!p)return toast('Proveedor no identificado');
+
+  const old=productId?mergedProducts67(p).find(x=>String(x.id)===String(productId)):null;
+
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>${old?'Editar producto':'Agregar producto'}</h2>
+        <p>Este producto formará parte del catálogo visible para los salones.</p>
+      </div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="providerProduct67">
+      <div class="form-grid">
+
+        <div class="field span2">
+          <label>Foto del producto</label>
+          <input name="photoFile" type="file" accept="image/*">
+          ${old?.photo?`
+            <div style="margin-top:10px">
+              <img src="${old.photo}" style="width:120px;height:120px;object-fit:cover;border-radius:12px">
+            </div>`:''}
+        </div>
+
+        <div class="field span2">
+          <label>Producto</label>
+          <input name="name" required value="${esc67(old?.name||'')}">
+        </div>
+
+        <div class="field">
+          <label>Categoría</label>
+          <input name="category" required value="${esc67(old?.category||p.category||'')}">
+        </div>
+
+        <div class="field">
+          <label>Costo</label>
+          <input name="price" type="number" min="0" step="0.01" required value="${Number(old?.price||0)}">
+        </div>
+
+        <div class="field span2">
+          <label>Descripción</label>
+          <textarea name="description" required>${esc67(old?.description||'')}</textarea>
+        </div>
+
+        <div class="field span2">
+          <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
+            <input name="visibleToSalons" type="checkbox" ${old?.visibleToSalons===false?'':'checked'}>
+            <span><b>Visible para los salones</b></span>
+          </label>
+        </div>
+
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="primary">Guardar producto</button>
+      </div>
+    </form>
+  `);
+
+  document.querySelector('#providerProduct67').onsubmit=e=>{
+    e.preventDefault();
+    const fd=new FormData(e.target);
+    const file=e.target.querySelector('[name="photoFile"]')?.files?.[0];
+
+    const finish=photo=>{
+      const obj={
+        id:old?.id||id(),
+        providerId:p.id,
+        providerUserId:p.userId||p.id,
+        providerEmail:p.email||'',
+        providerName:providerName67(p),
+        name:String(fd.get('name')||'').trim(),
+        category:String(fd.get('category')||'').trim(),
+        price:Number(fd.get('price')||0),
+        description:String(fd.get('description')||'').trim(),
+        photo:photo||old?.photo||'',
+        visibleToSalons:fd.has('visibleToSalons'),
+        active:true
+      };
+
+      syncProduct67(p,obj);
+      save();
+      closeModal();
+      renderMyProducts67();
+      toast('Producto guardado');
+    };
+
+    if(file){
+      const r=new FileReader();
+      r.onload=()=>finish(String(r.result||''));
+      r.onerror=()=>finish('');
+      r.readAsDataURL(file);
+    }else finish('');
+  };
+};
+
+// ------------------------------------------------------------
+// BORRAR
+// ------------------------------------------------------------
+window.deleteProviderProduct67=function(productId){
+  const p=provider67();
+  if(!p)return toast('Proveedor no identificado');
+
+  const prod=mergedProducts67(p).find(x=>String(x.id)===String(productId));
+  if(!prod)return toast('Producto no encontrado');
+
+  if(!confirm(`¿Borrar "${prod.name}"?`))return;
+
+  data.providerProducts=(data.providerProducts||[]).filter(x=>String(x.id)!==String(productId));
+  p.products=(Array.isArray(p.products)?p.products:[]).filter(x=>String(x.id)!==String(productId));
+
+  save();
+  renderMyProducts67();
+  toast('Producto eliminado');
+};
+
+// ------------------------------------------------------------
+// MIS PRODUCTOS: LISTADO EXACTO
+// ------------------------------------------------------------
+window.renderMyProducts67=function(){
+  const p=provider67();
+  if(!p)return toast('Proveedor no identificado');
+
+  const products=mergedProducts67(p);
+  const content=document.querySelector('#content');
+  if(!content)return;
+
+  try{
+    if(typeof setTitle==='function')setTitle('Mis productos','Catálogo del proveedor visible para los salones.');
+  }catch(e){}
+
+  content.dataset.v67Products='1';
+
+  content.innerHTML=`
+    <div class="card">
+      <div class="section-title">
+        <div>
+          <h2>Mis productos</h2>
+          <small class="muted">Todo producto cargado acá forma parte de tu catálogo de proveedor.</small>
+        </div>
+        <button class="primary" onclick="openProviderProduct67()">+ Agregar producto</button>
+      </div>
+
+      ${products.length?`
+        <div class="table-wrap" style="margin-top:16px">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Foto</th>
+                <th>Producto</th>
+                <th>Categoría</th>
+                <th>Costo</th>
+                <th>Descripción</th>
+                <th>Visible</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${products.map(x=>`
+                <tr>
+                  <td>
+                    ${x.photo
+                      ? `<img src="${x.photo}" style="width:58px;height:58px;object-fit:cover;border-radius:9px">`
+                      : `<div style="width:58px;height:58px;background:#f2f3f7;border-radius:9px;display:flex;align-items:center;justify-content:center">📦</div>`
+                    }
+                  </td>
+                  <td><b>${esc67(x.name||'')}</b></td>
+                  <td>${esc67(x.category||'')}</td>
+                  <td><b>${money67(x.price||0)}</b></td>
+                  <td style="min-width:220px">${esc67(x.description||'')}</td>
+                  <td>${x.visibleToSalons!==false?'✅ Sí':'🚫 No'}</td>
+                  <td>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap">
+                      <button class="secondary small" onclick="openProviderProduct67('${x.id}')">✏️ Editar</button>
+                      <button class="danger small" onclick="deleteProviderProduct67('${x.id}')">🗑️ Borrar</button>
+                    </div>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `:'<div class="empty" style="margin-top:16px">Todavía no hay productos cargados.</div>'}
+    </div>
+  `;
+};
+
+// ------------------------------------------------------------
+// SALÓN: PROVEEDORES DE COMUNIDAD LEEN ESTE MISMO CATÁLOGO
+// ------------------------------------------------------------
+function salonCommunityProviders67(){
+  return (data.marketSuppliers||[])
+    .filter(p=>p.status!=='Suspendido'&&p.active!==false)
+    .map(p=>({
+      raw:p,
+      id:p.id,
+      display:providerName67(p),
+      products:mergedProducts67(p).filter(x=>x.active!==false&&x.visibleToSalons!==false)
+    }));
+}
+
+// Reemplazar las funciones de comunidad usadas por versiones previas.
+window.communityProviders57=salonCommunityProviders67;
+window.communityProviders55=salonCommunityProviders67;
+window.communityProviders54=salonCommunityProviders67;
+
+// Compatibilidad con renders anteriores.
+window.renderMyProducts66=window.renderMyProducts67;
+window.renderMyProducts65=window.renderMyProducts67;
+window.renderMyProducts64=window.renderMyProducts67;
+window.renderMyProducts63=window.renderMyProducts67;
+window.renderMyProducts62=window.renderMyProducts67;
+window.renderMyProducts61=window.renderMyProducts67;
+
+window.openProviderProduct66=window.openProviderProduct67;
+window.openProviderProduct65=window.openProviderProduct67;
+window.openProviderProduct64=window.openProviderProduct67;
+window.openProviderProduct56=window.openProviderProduct67;
+window.openProviderProduct55=window.openProviderProduct67;
+window.openProviderProduct54=window.openProviderProduct67;
+window.openProviderProduct53=window.openProviderProduct67;
+
+window.deleteProviderProduct64=window.deleteProviderProduct67;
+window.deleteProviderProduct59=window.deleteProviderProduct67;
+
+// Menú: Mis productos siempre abre esta vista.
+document.addEventListener('click',function(ev){
+  if(!['provider','supplier','proveedor'].includes(role67()))return;
+  const node=ev.target.closest('button,a,li,[role="button"],.nav-item,.menu-item,.sidebar-item');
+  if(!node)return;
+  if(norm67(node.textContent)==='mis productos'){
+    ev.preventDefault();
+    ev.stopPropagation();
+    ev.stopImmediatePropagation();
+    setTimeout(renderMyProducts67,0);
+  }
+},true);
+
+})();
