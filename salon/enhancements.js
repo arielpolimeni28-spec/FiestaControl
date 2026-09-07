@@ -19767,3 +19767,487 @@ window.renderSuppliersV53=window.renderSuppliersV57;
 
 })();
 
+// ============================================================
+// V76 - CONFIRMACIÓN DE PAGO + ENTREGA + REMITO PDF DETALLADO
+// ============================================================
+(function(){
+'use strict';
+
+const N76=v=>Number(v||0);
+const norm76=v=>String(v||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+const esc76=v=>{
+  try{return esc(v)}catch(_){
+    return String(v??'').replace(/[&<>"']/g,ch=>({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[ch]));
+  }
+};
+const money76=v=>{
+  try{return money(v)}catch(_){return '$ '+N76(v).toLocaleString('es-AR',{minimumFractionDigits:0,maximumFractionDigits:2})}
+};
+const today76=()=>new Date().toISOString().slice(0,10);
+
+function getOrder76(orderId){
+  return (data.stockPurchases||[]).find(o=>String(o.id)===String(orderId));
+}
+function orderStatus76(o){return o?.orderStatus||o?.status||'Registrado'}
+function paymentStatus76(o){return o?.paymentStatus||'Pendiente'}
+function deliveryStatus76(o){return o?.deliveryStatus||'Pendiente de entrega'}
+function orderCode76(o){
+  return String(o?.orderCode||o?.code||('PED-'+String(o?.id||'').slice(-8).toUpperCase()));
+}
+function salonName76(o){
+  if(o?.salonName)return o.salonName;
+  const s=(data.salons||[]).find(x=>String(x.id)===String(o?.salonId));
+  return String(s?.fantasyName||s?.businessName||s?.name||s?.salonName||s?.email||'Salón');
+}
+function items76(o){
+  if(Array.isArray(o?.items)&&o.items.length){
+    return o.items.map(x=>({
+      productId:x.productId||x.id||'',
+      productName:x.productName||x.name||'Producto',
+      productCategory:x.productCategory||x.category||'',
+      productDescription:x.productDescription||x.description||'',
+      productPhoto:x.productPhoto||x.photo||'',
+      qty:N76(x.qty||x.quantity||0),
+      unitCost:N76(x.unitCost??x.price??x.cost??0),
+      total:N76(x.total || N76(x.qty||x.quantity||0)*N76(x.unitCost??x.price??x.cost??0))
+    }));
+  }
+  return [{
+    productId:o?.productId||'',
+    productName:o?.productName||'Producto',
+    productCategory:o?.productCategory||'',
+    productDescription:o?.productDescription||'',
+    productPhoto:o?.productPhoto||'',
+    qty:N76(o?.qty||0),
+    unitCost:N76(o?.unitCost||0),
+    total:N76(o?.total||N76(o?.qty||0)*N76(o?.unitCost||0))
+  }];
+}
+function addMessage76(orderId,fromType,fromName,text){
+  data.orderMessages=data.orderMessages||[];
+  data.orderMessages.push({
+    id:id(),orderId,fromType,fromName,
+    text:String(text||'').trim(),
+    createdAt:new Date().toISOString()
+  });
+}
+function ensurePaymentOrderNumber76(o){
+  if(o.paymentOrderNumber)return o.paymentOrderNumber;
+  const now=new Date();
+  const yyyy=now.getFullYear();
+  const mm=String(now.getMonth()+1).padStart(2,'0');
+  const dd=String(now.getDate()).padStart(2,'0');
+  const rnd=String(Math.floor(Math.random()*10000)).padStart(4,'0');
+  o.paymentOrderNumber=`OP-${yyyy}${mm}${dd}-${rnd}`;
+  return o.paymentOrderNumber;
+}
+
+function refreshSalonOrders76(){
+  if(typeof window.renderSuppliersV57==='function')window.renderSuppliersV57();
+}
+function refreshProviderOrders76(){
+  if(typeof window.renderProviderOrders57==='function')window.renderProviderOrders57();
+}
+
+// ------------------------------------------------------------
+// PAGO - POPUP CON FORMA, FECHA Y NÚMERO DE ORDEN DE PAGO
+// ------------------------------------------------------------
+window.salonMarkPaid57=function(orderId){
+  const o=getOrder76(orderId);
+  if(!o)return toast('Pedido no encontrado');
+  if(orderStatus76(o)!=='Aceptado')return toast('El proveedor debe aceptar el pedido primero');
+  if(paymentStatus76(o)==='Pagado')return toast('El pedido ya figura pagado');
+
+  const op=ensurePaymentOrderNumber76(o);
+
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>Confirmar pago</h2>
+        <p>${esc76(orderCode76(o))} · ${esc76(o.supplierName||'Proveedor')}</p>
+      </div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="payment76">
+      <div class="form-grid">
+        <div class="field">
+          <label>Forma de pago</label>
+          <select name="paymentMethod" required>
+            <option value="">Seleccionar</option>
+            <option>Transferencia bancaria</option>
+            <option>Mercado Pago</option>
+            <option>Efectivo</option>
+            <option>Tarjeta de débito</option>
+            <option>Tarjeta de crédito</option>
+            <option>Cheque</option>
+            <option>Otro</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Fecha de pago</label>
+          <input name="paymentDate" type="date" value="${today76()}" required>
+        </div>
+
+        <div class="field">
+          <label>Número de orden de pago</label>
+          <input name="paymentOrderNumber" value="${esc76(op)}" readonly>
+        </div>
+
+        <div class="field">
+          <label>Importe</label>
+          <input value="${esc76(money76(o.total||0))}" readonly>
+        </div>
+
+        <div class="field span2">
+          <label>Referencia / comprobante</label>
+          <input name="paymentReference" placeholder="Ej.: N° transferencia, operación, recibo, etc.">
+        </div>
+
+        <div class="field span2">
+          <label>Observaciones del pago</label>
+          <textarea name="paymentNotes" placeholder="Opcional"></textarea>
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="primary">Confirmar pago</button>
+      </div>
+    </form>
+  `);
+
+  document.querySelector('#payment76').onsubmit=e=>{
+    e.preventDefault();
+    const fd=new FormData(e.target);
+
+    o.paymentStatus='Pagado';
+    o.paymentDate=String(fd.get('paymentDate')||today76());
+    o.paymentMethod=String(fd.get('paymentMethod')||'');
+    o.paymentOrderNumber=String(fd.get('paymentOrderNumber')||op);
+    o.paymentReference=String(fd.get('paymentReference')||'').trim();
+    o.paymentNotes=String(fd.get('paymentNotes')||'').trim();
+    o.paymentConfirmedAt=new Date().toISOString();
+
+    // Compatibilidad con lógica financiera anterior
+    if(typeof addExpenseOnce75==='function'){
+      try{addExpenseOnce75(o)}catch(_){}
+    }else{
+      data.movements=data.movements||[];
+      const key=`v76:community-order:${o.id}`;
+      if(!data.movements.some(m=>String(m.sourceKey)===key)){
+        data.movements.push({
+          id:id(),
+          salonId:o.salonId,
+          eventId:o.eventId||'',
+          type:'Gasto',
+          category:o.targetType==='event'?'Compra para fiesta':'Compra de stock',
+          concept:`Pago ${o.paymentOrderNumber} · ${o.supplierName}`,
+          amount:N76(o.total),
+          movementDate:o.paymentDate,
+          createdAt:new Date().toISOString(),
+          sourceKey:key
+        });
+      }
+      o.financeExpenseCreated=true;
+    }
+
+    addMessage76(
+      o.id,
+      'salon',
+      salonName76(o),
+      `Pago confirmado. Forma: ${o.paymentMethod}. Fecha: ${o.paymentDate}. Orden de pago: ${o.paymentOrderNumber}${o.paymentReference?'. Ref.: '+o.paymentReference:''}.`
+    );
+
+    save();
+    closeModal();
+    refreshSalonOrders76();
+    toast(`Pago registrado · ${o.paymentOrderNumber}`);
+  };
+};
+
+// ------------------------------------------------------------
+// ENTREGA - POPUP CON FECHA DE ENTREGA
+// ------------------------------------------------------------
+window.salonMarkDelivered57=function(orderId){
+  const o=getOrder76(orderId);
+  if(!o)return toast('Pedido no encontrado');
+  if(orderStatus76(o)!=='Aceptado')return toast('El proveedor debe aceptar el pedido primero');
+  if(deliveryStatus76(o)==='Entregado')return toast('El pedido ya figura entregado');
+
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>Confirmar entrega</h2>
+        <p>${esc76(orderCode76(o))} · ${esc76(o.supplierName||'Proveedor')}</p>
+      </div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="delivery76">
+      <div class="form-grid">
+        <div class="field">
+          <label>Fecha de entrega</label>
+          <input name="deliveryDate" type="date" value="${today76()}" required>
+        </div>
+
+        <div class="field">
+          <label>Recibido por</label>
+          <input name="receivedBy" placeholder="Nombre de quien recibió">
+        </div>
+
+        <div class="field span2">
+          <label>Observaciones de la entrega</label>
+          <textarea name="deliveryNotes" placeholder="Ej.: Entrega completa, sin faltantes."></textarea>
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="primary">Confirmar entrega</button>
+      </div>
+    </form>
+  `);
+
+  document.querySelector('#delivery76').onsubmit=e=>{
+    e.preventDefault();
+    const fd=new FormData(e.target);
+
+    o.deliveryStatus='Entregado';
+    o.deliveryDate=String(fd.get('deliveryDate')||today76());
+    o.deliveredAt=new Date().toISOString();
+    o.receivedBy=String(fd.get('receivedBy')||'').trim();
+    o.deliveryNotes=String(fd.get('deliveryNotes')||'').trim();
+
+    // Suma stock multi-item una sola vez
+    if(o.targetType==='stock' && o.stockAdded!==true){
+      data.stockProducts=data.stockProducts||[];
+      items76(o).forEach(it=>{
+        let stock=data.stockProducts.find(p=>
+          String(p.salonId)===String(o.salonId) &&
+          (
+            (it.productId && String(p.id)===String(it.productId)) ||
+            norm76(p.name)===norm76(it.productName)
+          )
+        );
+
+        if(!stock){
+          stock={
+            id:id(),
+            salonId:o.salonId,
+            name:it.productName,
+            category:it.productCategory||'Compras',
+            description:it.productDescription||'',
+            photo:it.productPhoto||'',
+            stock:0,
+            minStock:0,
+            costPrice:it.unitCost,
+            active:true,
+            createdAt:new Date().toISOString()
+          };
+          data.stockProducts.push(stock);
+        }
+
+        stock.stock=N76(stock.stock)+N76(it.qty);
+        stock.costPrice=N76(it.unitCost);
+      });
+      o.stockAdded=true;
+      o.stockAddedAt=new Date().toISOString();
+    }
+
+    addMessage76(
+      o.id,
+      'salon',
+      salonName76(o),
+      `Entrega confirmada. Fecha: ${o.deliveryDate}${o.receivedBy?'. Recibido por: '+o.receivedBy:''}.`
+    );
+
+    save();
+    closeModal();
+    refreshSalonOrders76();
+    toast('Entrega registrada');
+  };
+};
+
+// ------------------------------------------------------------
+// PDF DETALLADO
+// ------------------------------------------------------------
+function pdfSafe76(v){
+  return String(v??'')
+    .replace(/€/g,'EUR')
+    .replace(/[^\x20-\x7E\xA0-\xFF]/g,' ');
+}
+function pdfEsc76(v){
+  return pdfSafe76(v).replace(/\\/g,'\\\\').replace(/\(/g,'\\(').replace(/\)/g,'\\)');
+}
+function wrap76(text,max=86){
+  const words=pdfSafe76(text).split(/\s+/).filter(Boolean);
+  const out=[];
+  let line='';
+  words.forEach(w=>{
+    const test=line?line+' '+w:w;
+    if(test.length>max && line){out.push(line); line=w}
+    else line=test;
+  });
+  if(line)out.push(line);
+  return out.length?out:[''];
+}
+function buildPdf76(lines){
+  const perPage=42;
+  const pages=[];
+  for(let i=0;i<lines.length;i+=perPage)pages.push(lines.slice(i,i+perPage));
+
+  const objs={};
+  const pageIds=[];
+  let nextId=3;
+
+  const font1=nextId++, font2=nextId++;
+  objs[font1]='<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>';
+  objs[font2]='<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>';
+
+  pages.forEach((pageLines,pageIndex)=>{
+    const pageId=nextId++;
+    const contentId=nextId++;
+    pageIds.push(pageId);
+
+    const content=['BT','50 800 Td'];
+    pageLines.forEach((ln,i)=>{
+      if(i>0)content.push('0 -17 Td');
+      content.push(`/${ln.bold?'F2':'F1'} ${ln.bold?12:10} Tf`);
+      content.push(`(${pdfEsc76(ln.text)}) Tj`);
+    });
+    content.push('ET');
+
+    const stream=content.join('\n');
+    objs[contentId]=`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`;
+    objs[pageId]=`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 ${font1} 0 R /F2 ${font2} 0 R >> >> /Contents ${contentId} 0 R >>`;
+  });
+
+  objs[1]='<< /Type /Catalog /Pages 2 0 R >>';
+  objs[2]=`<< /Type /Pages /Kids [${pageIds.map(x=>x+' 0 R').join(' ')}] /Count ${pageIds.length} >>`;
+
+  const maxId=Math.max(...Object.keys(objs).map(Number));
+  let pdf='%PDF-1.4\n';
+  const offsets=[0];
+  for(let i=1;i<=maxId;i++){
+    offsets[i]=pdf.length;
+    pdf+=`${i} 0 obj\n${objs[i]||'<<>>'}\nendobj\n`;
+  }
+  const xref=pdf.length;
+  pdf+=`xref\n0 ${maxId+1}\n0000000000 65535 f \n`;
+  for(let i=1;i<=maxId;i++)pdf+=String(offsets[i]).padStart(10,'0')+' 00000 n \n';
+  pdf+=`trailer\n<< /Size ${maxId+1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  return pdf;
+}
+
+window.downloadOrderRemito75=function(orderId){
+  const o=getOrder76(orderId);
+  if(!o)return toast('Pedido no encontrado');
+
+  if(paymentStatus76(o)!=='Pagado'||deliveryStatus76(o)!=='Entregado'){
+    return toast('El remito final se habilita cuando el pedido está pagado y entregado');
+  }
+
+  const salon=(data.salons||[]).find(s=>String(s.id)===String(o.salonId))||{};
+  const provider=(data.marketSuppliers||[]).find(p=>String(p.id)===String(o.supplierId))||{};
+  const its=items76(o);
+  const messages=(data.orderMessages||[])
+    .filter(m=>String(m.orderId)===String(o.id))
+    .sort((a,b)=>String(a.createdAt||'').localeCompare(String(b.createdAt||'')));
+
+  const lines=[];
+  const push=(text,bold=false)=>wrap76(text).forEach((t,i)=>lines.push({text:t,bold:bold&&i===0}));
+
+  push('FIESTACONTROL - REMITO FINAL',true);
+  push('Documento de cierre de pedido',true);
+  push(' ');
+  push(`Pedido: ${orderCode76(o)}`,true);
+  push(`Fecha del pedido: ${o.date||''}`);
+  push(`Estado del pedido: ${orderStatus76(o)}`);
+  push(' ');
+  push('DATOS DEL SALON',true);
+  push(`Salon: ${salonName76(o)}`);
+  if(salon.address)push(`Direccion: ${salon.address}`);
+  if(salon.phone)push(`Telefono: ${salon.phone}`);
+  if(salon.email)push(`Email: ${salon.email}`);
+  push(' ');
+  push('DATOS DEL PROVEEDOR',true);
+  push(`Proveedor: ${o.supplierName||provider.fantasyName||provider.businessName||provider.name||''}`);
+  if(provider.address)push(`Direccion: ${provider.address}`);
+  if(provider.phone)push(`Telefono: ${provider.phone}`);
+  if(provider.email)push(`Email: ${provider.email}`);
+  push(' ');
+  push('DESTINO DEL PEDIDO',true);
+  push(o.targetType==='event'
+    ? `Fiesta: ${o.eventName||''} · ID evento: ${o.eventId||''}`
+    : 'Destino: Stock del salon');
+  push(' ');
+  push('DETALLE DE ITEMS',true);
+
+  its.forEach((x,i)=>{
+    push(`${i+1}. ${x.productName}`,true);
+    if(x.productCategory)push(`   Categoria: ${x.productCategory}`);
+    if(x.productDescription)push(`   Descripcion: ${x.productDescription}`);
+    push(`   Cantidad: ${x.qty}`);
+    push(`   Precio unitario: ${money76(x.unitCost)}`);
+    push(`   Subtotal: ${money76(x.total)}`);
+  });
+
+  push(' ');
+  push(`TOTAL DEL PEDIDO: ${money76(o.total||0)}`,true);
+  push(' ');
+  push('DATOS DEL PAGO',true);
+  push(`Estado: ${paymentStatus76(o)}`);
+  push(`Fecha de pago: ${o.paymentDate||''}`);
+  push(`Forma de pago: ${o.paymentMethod||'No informada'}`);
+  push(`Orden de pago: ${o.paymentOrderNumber||'No informada'}`);
+  if(o.paymentReference)push(`Referencia / comprobante: ${o.paymentReference}`);
+  if(o.paymentNotes)push(`Observaciones del pago: ${o.paymentNotes}`);
+  push(' ');
+  push('DATOS DE LA ENTREGA',true);
+  push(`Estado: ${deliveryStatus76(o)}`);
+  push(`Fecha de entrega: ${o.deliveryDate||''}`);
+  if(o.receivedBy)push(`Recibido por: ${o.receivedBy}`);
+  if(o.deliveryNotes)push(`Observaciones de la entrega: ${o.deliveryNotes}`);
+  push(' ');
+  push('TRAZABILIDAD DEL PEDIDO',true);
+  push(`Creado: ${o.createdAt?new Date(o.createdAt).toLocaleString('es-AR'):''}`);
+  if(o.paymentConfirmedAt)push(`Pago confirmado en sistema: ${new Date(o.paymentConfirmedAt).toLocaleString('es-AR')}`);
+  if(o.deliveredAt)push(`Entrega confirmada en sistema: ${new Date(o.deliveredAt).toLocaleString('es-AR')}`);
+  if(o.providerPaymentConfirmedAt)push(`Proveedor confirmo recepcion del pago: ${new Date(o.providerPaymentConfirmedAt).toLocaleString('es-AR')}`);
+
+  if(messages.length){
+    push(' ');
+    push('HISTORIAL DE COMUNICACION',true);
+    messages.forEach(m=>{
+      const dt=m.createdAt?new Date(m.createdAt).toLocaleString('es-AR'):'';
+      push(`${dt} - ${m.fromName||m.fromType||''}: ${m.text||''}`);
+    });
+  }
+
+  push(' ');
+  push('Este remito fue generado automaticamente por FiestaControl.');
+  push('Documento de referencia interna entre salon y proveedor.');
+
+  const pdf=buildPdf76(lines);
+  const bytes=new Uint8Array(pdf.length);
+  for(let i=0;i<pdf.length;i++)bytes[i]=pdf.charCodeAt(i)&255;
+
+  const blob=new Blob([bytes],{type:'application/pdf'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download=`Remito_Final_${orderCode76(o)}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1500);
+};
+
+window.downloadOrderRemito76=window.downloadOrderRemito75;
+
+})();
+
