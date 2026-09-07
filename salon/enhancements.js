@@ -20251,3 +20251,243 @@ window.downloadOrderRemito76=window.downloadOrderRemito75;
 
 })();
 
+// ============================================================
+// V77 - MENSAJES DE COMUNIDAD ADMIN VISIBLES PARA SALONES Y PROVEEDORES
+// ============================================================
+(function(){
+'use strict';
+
+const norm77=v=>String(v||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+const esc77=v=>{
+  try{return esc(v)}catch(_){
+    return String(v??'').replace(/[&<>"']/g,ch=>({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[ch]));
+  }
+};
+
+function sess77(){try{return session||{}}catch(_){return window.session||{}}}
+function currentRole77(){
+  const s=sess77();
+  return norm77(s.role||s.userRole||s.type||s.userType||'');
+}
+function currentAudience77(){
+  const r=currentRole77();
+  if(r.includes('provider')||r.includes('proveedor'))return 'provider';
+  if(r.includes('salon'))return 'salon';
+
+  const body=norm77(document.body?.innerText||'');
+  if(body.includes('portal proveedor'))return 'provider';
+  if(body.includes('portal salon'))return 'salon';
+  return '';
+}
+function currentUserKey77(){
+  const s=sess77();
+  return String(s.email||s.userEmail||s.username||s.userName||s.id||'anonymous');
+}
+function ensureStore77(){
+  data.communityMessages=data.communityMessages||[];
+  data.communityMessageReads=data.communityMessageReads||[];
+}
+function adminMessage77(m){
+  const author=norm77(m.authorEmail||m.email||m.createdByEmail||m.createdBy||m.author||m.from||'');
+  return author==='admin@' || author.startsWith('admin@') || norm77(m.source)==='admin' || norm77(m.role)==='admin';
+}
+function visibleMessages77(){
+  ensureStore77();
+  const audience=currentAudience77();
+  if(!audience)return [];
+
+  return data.communityMessages
+    .filter(m=>m.active!==false)
+    .filter(adminMessage77)
+    .filter(m=>{
+      const aud=m.audience||m.target||m.to||'all';
+      const a=norm77(Array.isArray(aud)?aud.join(','):aud);
+      return !a || a==='all' || a.includes('todos') || a.includes('all') ||
+             (audience==='salon' && (a.includes('salon')||a.includes('salones'))) ||
+             (audience==='provider' && (a.includes('provider')||a.includes('proveedor')));
+    })
+    .sort((a,b)=>String(b.createdAt||b.date||'').localeCompare(String(a.createdAt||a.date||'')));
+}
+function isRead77(messageId){
+  const user=currentUserKey77();
+  ensureStore77();
+  return data.communityMessageReads.some(r=>String(r.messageId)===String(messageId)&&String(r.userKey)===user);
+}
+function markRead77(messageId){
+  ensureStore77();
+  const user=currentUserKey77();
+  if(!isRead77(messageId)){
+    data.communityMessageReads.push({
+      id:id(),
+      messageId,
+      userKey:user,
+      readAt:new Date().toISOString()
+    });
+    save();
+  }
+}
+function unreadCount77(){
+  return visibleMessages77().filter(m=>!isRead77(m.id)).length;
+}
+function fmtDate77(v){
+  if(!v)return '';
+  try{return new Date(v).toLocaleString('es-AR')}catch(_){return String(v)}
+}
+
+window.openCommunityMessages77=function(){
+  const msgs=visibleMessages77();
+
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>Mensajes de la comunidad</h2>
+        <p>Comunicaciones enviadas por la administración.</p>
+      </div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <div style="display:grid;gap:12px;max-height:65vh;overflow:auto;padding-right:4px">
+      ${msgs.length?msgs.map(m=>`
+        <article class="card" style="margin:0;border:${isRead77(m.id)?'1px solid #e5e7eb':'2px solid #6d5dfc'}">
+          <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
+            <div style="min-width:0">
+              <h3 style="margin:0 0 6px">${esc77(m.title||m.subject||'Mensaje de administración')}</h3>
+              <small class="muted">${esc77(fmtDate77(m.createdAt||m.date||''))}</small>
+            </div>
+            ${!isRead77(m.id)?'<span style="font-size:12px;font-weight:700">NUEVO</span>':''}
+          </div>
+          <div style="margin-top:10px;white-space:pre-wrap;line-height:1.45">
+            ${esc77(m.message||m.body||m.text||m.content||'')}
+          </div>
+          <div style="margin-top:12px">
+            <button type="button" class="secondary small" data-read77="${esc77(m.id)}">
+              ${isRead77(m.id)?'✓ Leído':'Marcar como leído'}
+            </button>
+          </div>
+        </article>
+      `).join(''):'<div class="empty">No hay mensajes de administración.</div>'}
+    </div>
+  `);
+
+  document.querySelectorAll('[data-read77]').forEach(btn=>{
+    btn.onclick=()=>{
+      markRead77(btn.dataset.read77);
+      openCommunityMessages77();
+      updateCommunityBadge77();
+    };
+  });
+};
+
+function updateCommunityBadge77(){
+  const count=unreadCount77();
+  const candidates=[...document.querySelectorAll('button,a,li,[role="button"],.nav-item,.menu-item,.sidebar-item')];
+  const item=candidates.find(el=>norm77(el.textContent).includes('comunidad'));
+  if(!item)return;
+
+  let badge=item.querySelector('.fc-v77-community-badge');
+  if(count>0){
+    if(!badge){
+      badge=document.createElement('span');
+      badge.className='fc-v77-community-badge';
+      badge.style.cssText='margin-left:8px;min-width:20px;height:20px;padding:0 6px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;background:#ef4444;color:white';
+      item.appendChild(badge);
+    }
+    badge.textContent=String(count);
+    item.title=`${count} mensaje${count===1?'':'s'} nuevo${count===1?'':'s'}`;
+  }else if(badge){
+    badge.remove();
+  }
+}
+
+function showUnreadPopup77(){
+  const unread=visibleMessages77().filter(m=>!isRead77(m.id));
+  if(!unread.length)return;
+
+  const top=unread[0];
+  const key=`fc_v77_popup_${currentUserKey77()}_${top.id}`;
+  if(sessionStorage.getItem(key))return;
+  sessionStorage.setItem(key,'1');
+
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>${esc77(top.title||top.subject||'Nuevo mensaje de la comunidad')}</h2>
+        <p>Mensaje de administración</p>
+      </div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <div style="white-space:pre-wrap;line-height:1.5;margin:10px 0 16px">
+      ${esc77(top.message||top.body||top.text||top.content||'')}
+    </div>
+
+    <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+      <small class="muted">${esc77(fmtDate77(top.createdAt||top.date||''))}</small>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button type="button" class="ghost" id="later77">Ver después</button>
+        <button type="button" class="secondary" id="all77">Ver todos</button>
+        <button type="button" class="primary" id="read77">Marcar leído</button>
+      </div>
+    </div>
+  `);
+
+  document.querySelector('#later77').onclick=()=>closeModal();
+  document.querySelector('#all77').onclick=()=>openCommunityMessages77();
+  document.querySelector('#read77').onclick=()=>{
+    markRead77(top.id);
+    closeModal();
+    updateCommunityBadge77();
+  };
+}
+
+document.addEventListener('click',ev=>{
+  const audience=currentAudience77();
+  if(!audience)return;
+
+  const item=ev.target.closest('button,a,li,[role="button"],.nav-item,.menu-item,.sidebar-item');
+  if(!item)return;
+  const txt=norm77(item.textContent);
+
+  if(txt.includes('comunidad')){
+    setTimeout(()=>{
+      const content=document.querySelector('#content');
+      if(!content)return;
+
+      if(!content.querySelector('#fc-v77-admin-messages')){
+        const card=document.createElement('div');
+        card.id='fc-v77-admin-messages';
+        card.className='card';
+        card.style.marginBottom='14px';
+        const count=unreadCount77();
+        card.innerHTML=`
+          <div class="section-title">
+            <div>
+              <h3>📢 Mensajes de administración</h3>
+              <small class="muted">${count?`${count} mensaje${count===1?'':'s'} sin leer`:'No tenés mensajes pendientes'}</small>
+            </div>
+            <button type="button" class="primary" id="openMsgs77">Ver mensajes</button>
+          </div>
+        `;
+        content.prepend(card);
+        card.querySelector('#openMsgs77').onclick=openCommunityMessages77;
+      }
+    },120);
+  }
+},true);
+
+function init77(){
+  ensureStore77();
+  updateCommunityBadge77();
+  setTimeout(updateCommunityBadge77,500);
+  setTimeout(showUnreadPopup77,700);
+
+  const obs=new MutationObserver(()=>updateCommunityBadge77());
+  obs.observe(document.documentElement,{childList:true,subtree:true});
+}
+setTimeout(init77,200);
+
+window.updateCommunityBadge77=updateCommunityBadge77;
+})();
+
