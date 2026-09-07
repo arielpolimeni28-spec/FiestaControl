@@ -20524,8 +20524,8 @@ function init78(){
   refreshAdminMessages78();
 }
 
-setTimeout(init78,250);
-setInterval(refreshAdminMessages78,5000);
+// V84: init78 desactivado para evitar badges/tarjetas antiguas
+// V84: desactivado; la sincronización de Comunidad queda exclusivamente a cargo de admin_messages_fix_v84.js
 
 window.renderAdminCommunityMessages78=renderAdminCard78;
 window.updateCommunityBadge78=updateBadge78;
