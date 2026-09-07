@@ -21011,3 +21011,434 @@ document.addEventListener('click',function(ev){
 },true);
 
 })();
+
+
+// ============================================================
+// V68 - FIX REAL PORTAL PROVEEDOR
+// Detecta el portal por sesión Y por interfaz, no depende de role='provider'.
+// "Mis productos" usa marketSuppliers[].products como fuente principal.
+// ============================================================
+(function(){
+'use strict';
+
+data.marketSuppliers=data.marketSuppliers||[];
+data.providerProducts=data.providerProducts||[];
+
+const norm68=v=>String(v||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+const esc68=v=>{
+  try{return esc(v)}catch(e){
+    return String(v??'').replace(/[&<>"']/g,ch=>({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[ch]));
+  }
+};
+const money68=v=>{
+  try{return money(v)}catch(e){return '$ '+Number(v||0).toLocaleString('es-AR')}
+};
+const sess68=()=>{try{return session||{}}catch(e){return window.session||{}}};
+
+function providerPortal68(){
+  const s=sess68();
+  const r=norm68(s.role);
+  if(['provider','supplier','marketsupplier','market_supplier','market-supplier','proveedor'].includes(r))return true;
+  if(s.marketSupplierId||s.providerId||s.supplierId)return true;
+
+  // Respaldo visual: si la interfaz dice Portal proveedor, es proveedor.
+  const body=norm68(document.body?.innerText||'');
+  return body.includes('portal proveedor');
+}
+
+function provider68(){
+  const s=sess68();
+  const list=data.marketSuppliers||[];
+
+  // 1) IDs de sesión.
+  const ids=[
+    s.marketSupplierId,s.providerId,s.supplierId,s.userId,s.id
+  ].filter(Boolean).map(String);
+
+  let p=list.find(x=>ids.includes(String(x.id)));
+  if(p)return p;
+
+  // 2) Email, que en el portal aparece abajo a la izquierda.
+  const email=norm68(s.email||s.userEmail);
+  if(email){
+    p=list.find(x=>norm68(x.email)===email);
+    if(p)return p;
+  }
+
+  // 3) Nombre/fantasía.
+  const names=[
+    s.name,s.business,s.businessName,s.fantasyName,s.providerName,s.username
+  ].filter(Boolean).map(norm68);
+
+  p=list.find(x=>[
+    x.business,x.businessName,x.fantasyName,x.name,x.username,x.owner
+  ].filter(Boolean).map(norm68).some(n=>names.includes(n)));
+  if(p)return p;
+
+  // 4) Tomar email/nombre visibles de la propia sidebar.
+  const sidebarText=norm68(document.querySelector('.sidebar')?.innerText||'');
+  p=list.find(x=>
+    (x.email && sidebarText.includes(norm68(x.email))) ||
+    (x.business && sidebarText.includes(norm68(x.business))) ||
+    (x.fantasyName && sidebarText.includes(norm68(x.fantasyName)))
+  );
+
+  return p||null;
+}
+
+function providerName68(p){
+  return String(p?.fantasyName||p?.business||p?.businessName||p?.name||p?.username||p?.email||'Proveedor');
+}
+
+// Fuente principal REAL: products dentro del proveedor.
+// Se suma providerProducts solo para compatibilidad.
+function products68(p){
+  if(!p)return [];
+  p.products=Array.isArray(p.products)?p.products:[];
+  const map=new Map();
+
+  p.products.forEach(x=>{
+    if(!x||!x.id)return;
+    map.set(String(x.id),{
+      id:x.id,
+      name:x.name||x.product||'Producto',
+      category:x.category||p.category||'',
+      price:Number(x.price||x.cost||0),
+      description:x.description||'',
+      photo:x.photo||x.image||'',
+      visibleToSalons:x.visibleToSalons!==false,
+      active:x.active!==false
+    });
+  });
+
+  (data.providerProducts||[])
+    .filter(x=>
+      String(x.providerId||'')===String(p.id||'') ||
+      (!!x.providerEmail&&!!p.email&&norm68(x.providerEmail)===norm68(p.email))
+    )
+    .forEach(x=>{
+      const prev=map.get(String(x.id))||{};
+      map.set(String(x.id),{...prev,...x});
+    });
+
+  return [...map.values()].sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+}
+
+function saveProduct68(p,obj){
+  p.products=Array.isArray(p.products)?p.products:[];
+  let i=p.products.findIndex(x=>String(x.id)===String(obj.id));
+  const core={
+    id:obj.id,
+    name:obj.name,
+    category:obj.category,
+    price:obj.price,
+    description:obj.description,
+    photo:obj.photo,
+    visibleToSalons:obj.visibleToSalons,
+    active:true
+  };
+  if(i>=0)p.products[i]={...p.products[i],...core};
+  else p.products.push(core);
+
+  let j=data.providerProducts.findIndex(x=>String(x.id)===String(obj.id));
+  const ext={
+    ...obj,
+    providerId:p.id,
+    providerEmail:p.email||'',
+    providerName:providerName68(p)
+  };
+  if(j>=0)data.providerProducts[j]={...data.providerProducts[j],...ext};
+  else data.providerProducts.push(ext);
+}
+
+// ------------------------------------------------------------
+// FORMULARIO EXACTO
+// Foto | Producto | Categoría | Costo | Descripción | Visible
+// ------------------------------------------------------------
+window.openProviderProduct68=function(productId=''){
+  const p=provider68();
+  if(!p)return toast('No se pudo identificar el proveedor');
+
+  const old=productId?products68(p).find(x=>String(x.id)===String(productId)):null;
+
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>${old?'Editar producto':'Agregar producto'}</h2>
+        <p>${esc68(providerName68(p))}</p>
+      </div>
+      <button class="ghost small" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="product68">
+      <div class="form-grid">
+        <div class="field span2">
+          <label>Foto del producto</label>
+          <input name="photo" type="file" accept="image/*">
+          ${old?.photo?`<img src="${old.photo}" style="display:block;margin-top:10px;width:120px;height:120px;object-fit:cover;border-radius:12px">`:''}
+        </div>
+
+        <div class="field span2">
+          <label>Producto</label>
+          <input name="name" required value="${esc68(old?.name||'')}">
+        </div>
+
+        <div class="field">
+          <label>Categoría</label>
+          <input name="category" required value="${esc68(old?.category||p.category||'')}">
+        </div>
+
+        <div class="field">
+          <label>Costo</label>
+          <input name="price" type="number" min="0" step="0.01" required value="${Number(old?.price||0)}">
+        </div>
+
+        <div class="field span2">
+          <label>Descripción</label>
+          <textarea name="description" required>${esc68(old?.description||'')}</textarea>
+        </div>
+
+        <div class="field span2">
+          <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
+            <input name="visible" type="checkbox" ${old?.visibleToSalons===false?'':'checked'}>
+            <span><b>Visible para los salones</b></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="primary">Guardar producto</button>
+      </div>
+    </form>
+  `);
+
+  document.querySelector('#product68').onsubmit=e=>{
+    e.preventDefault();
+    const fd=new FormData(e.target);
+    const file=e.target.querySelector('[name="photo"]')?.files?.[0];
+
+    const finish=photo=>{
+      const obj={
+        id:old?.id||id(),
+        name:String(fd.get('name')||'').trim(),
+        category:String(fd.get('category')||'').trim(),
+        price:Number(fd.get('price')||0),
+        description:String(fd.get('description')||'').trim(),
+        photo:photo||old?.photo||'',
+        visibleToSalons:fd.has('visible'),
+        active:true
+      };
+      saveProduct68(p,obj);
+      save();
+      closeModal();
+      renderMyProducts68();
+      toast('Producto guardado');
+    };
+
+    if(file){
+      const r=new FileReader();
+      r.onload=()=>finish(String(r.result||''));
+      r.onerror=()=>finish('');
+      r.readAsDataURL(file);
+    }else finish('');
+  };
+};
+
+window.deleteProviderProduct68=function(productId){
+  const p=provider68();
+  if(!p)return;
+  const prod=products68(p).find(x=>String(x.id)===String(productId));
+  if(!prod)return toast('Producto no encontrado');
+  if(!confirm(`¿Borrar "${prod.name}"?`))return;
+
+  p.products=(p.products||[]).filter(x=>String(x.id)!==String(productId));
+  data.providerProducts=(data.providerProducts||[]).filter(x=>String(x.id)!==String(productId));
+  save();
+  renderMyProducts68();
+  toast('Producto eliminado');
+};
+
+// ------------------------------------------------------------
+// MIS PRODUCTOS EN MODO LISTADO
+// ------------------------------------------------------------
+window.renderMyProducts68=function(){
+  const p=provider68();
+  if(!p)return toast('No se pudo identificar el proveedor');
+
+  const list=products68(p);
+  const content=document.querySelector('#content');
+  if(!content)return;
+
+  try{ if(typeof setTitle==='function') setTitle('Mis productos','Catálogo del proveedor'); }catch(e){}
+
+  content.setAttribute('data-v68-products','1');
+  content.innerHTML=`
+    <div class="card">
+      <div class="section-title">
+        <div>
+          <h2>Mis productos</h2>
+          <small class="muted">Estos son los productos que los salones pueden ver como proveedor de la comunidad.</small>
+        </div>
+        <button class="primary" onclick="openProviderProduct68()">+ Agregar producto</button>
+      </div>
+
+      ${list.length?`
+        <div class="table-wrap" style="margin-top:14px">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Foto</th>
+                <th>Producto</th>
+                <th>Categoría</th>
+                <th>Costo</th>
+                <th>Descripción</th>
+                <th>Visible</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${list.map(x=>`
+                <tr>
+                  <td>
+                    ${x.photo
+                      ? `<img src="${x.photo}" style="width:58px;height:58px;object-fit:cover;border-radius:9px">`
+                      : `<div style="width:58px;height:58px;border-radius:9px;background:#f2f3f7;display:flex;align-items:center;justify-content:center">📦</div>`
+                    }
+                  </td>
+                  <td><b>${esc68(x.name)}</b></td>
+                  <td>${esc68(x.category||'')}</td>
+                  <td><b>${money68(x.price||0)}</b></td>
+                  <td style="min-width:220px">${esc68(x.description||'')}</td>
+                  <td>${x.visibleToSalons!==false?'✅ Sí':'🚫 No'}</td>
+                  <td>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap">
+                      <button class="secondary small" onclick="openProviderProduct68('${x.id}')">✏️ Editar</button>
+                      <button class="danger small" onclick="deleteProviderProduct68('${x.id}')">🗑️ Borrar</button>
+                    </div>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `:'<div class="empty" style="margin-top:14px">Todavía no hay productos cargados.</div>'}
+    </div>
+  `;
+};
+
+// ------------------------------------------------------------
+// SALÓN: fuente de catálogo de Comunidad = productos del proveedor
+// ------------------------------------------------------------
+function communityProviders68(){
+  return (data.marketSuppliers||[])
+    .filter(p=>p.status!=='Suspendido'&&p.active!==false)
+    .map(p=>({
+      raw:p,
+      id:p.id,
+      display:providerName68(p),
+      products:products68(p).filter(x=>x.active!==false&&x.visibleToSalons!==false)
+    }));
+}
+window.communityProviders57=communityProviders68;
+window.communityProviders55=communityProviders68;
+window.communityProviders54=communityProviders68;
+
+// ------------------------------------------------------------
+// NAVEGACIÓN ROBUSTA
+// No depende del nombre exacto del role de la sesión.
+// ------------------------------------------------------------
+function removePedidosMensajes68(){
+  if(!providerPortal68())return;
+  [...document.querySelectorAll('button,a,li,[role="button"],.nav-item,.menu-item,.sidebar-item')].forEach(el=>{
+    const t=norm68(el.textContent);
+    if(t.includes('pedidos y mensajes')){
+      const n=el.closest('button,a,li,[role="button"],.nav-item,.menu-item,.sidebar-item')||el;
+      n.remove();
+    }
+  });
+}
+
+function bindMenu68(){
+  if(!providerPortal68())return;
+
+  [...document.querySelectorAll('button,a,li,[role="button"],.nav-item,.menu-item,.sidebar-item')].forEach(el=>{
+    if(norm68(el.textContent)==='mis productos' && el.dataset.v68!=='1'){
+      el.dataset.v68='1';
+      el.addEventListener('click',ev=>{
+        ev.preventDefault();
+        ev.stopPropagation();
+        ev.stopImmediatePropagation();
+        setTimeout(renderMyProducts68,0);
+      },true);
+    }
+  });
+}
+
+document.addEventListener('click',ev=>{
+  if(!providerPortal68())return;
+  const el=ev.target.closest('button,a,li,[role="button"],.nav-item,.menu-item,.sidebar-item');
+  if(!el)return;
+  const t=norm68(el.textContent);
+  if(t==='mis productos'){
+    ev.preventDefault();
+    ev.stopPropagation();
+    ev.stopImmediatePropagation();
+    setTimeout(renderMyProducts68,0);
+  }
+  if(t.includes('pedidos y mensajes')){
+    ev.preventDefault();
+    ev.stopPropagation();
+    ev.stopImmediatePropagation();
+    el.remove();
+  }
+},true);
+
+const obs68=new MutationObserver(()=>{
+  removePedidosMensajes68();
+  bindMenu68();
+
+  // Si la pantalla nativa "Mis productos" aparece vacía, la sustituye.
+  if(providerPortal68()){
+    const title=norm68(document.querySelector('#title')?.textContent||'');
+    const c=document.querySelector('#content');
+    if(c && title==='mis productos' && c.getAttribute('data-v68-products')!=='1'){
+      setTimeout(renderMyProducts68,0);
+    }
+  }
+});
+obs68.observe(document.documentElement,{childList:true,subtree:true});
+
+setTimeout(()=>{
+  removePedidosMensajes68();
+  bindMenu68();
+  const t=norm68(document.querySelector('#title')?.textContent||'');
+  if(providerPortal68() && t==='mis productos') renderMyProducts68();
+},300);
+
+setInterval(()=>{
+  removePedidosMensajes68();
+  bindMenu68();
+},900);
+
+// aliases
+window.renderMyProducts67=window.renderMyProducts68;
+window.renderMyProducts66=window.renderMyProducts68;
+window.renderMyProducts65=window.renderMyProducts68;
+window.renderMyProducts64=window.renderMyProducts68;
+window.renderMyProducts63=window.renderMyProducts68;
+window.renderMyProducts62=window.renderMyProducts68;
+window.renderMyProducts61=window.renderMyProducts68;
+
+window.openProviderProduct67=window.openProviderProduct68;
+window.openProviderProduct66=window.openProviderProduct68;
+window.openProviderProduct65=window.openProviderProduct68;
+window.openProviderProduct64=window.openProviderProduct68;
+window.openProviderProduct56=window.openProviderProduct68;
+window.openProviderProduct55=window.openProviderProduct68;
+window.openProviderProduct54=window.openProviderProduct68;
+window.openProviderProduct53=window.openProviderProduct68;
+
+})();
