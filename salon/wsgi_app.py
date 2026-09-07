@@ -224,7 +224,27 @@ def enviar_confirmacion_email(evento, salon):
     _send_email(email_config, destinatario, subject, text_body, html_body)
 
 
+
+def _ensure_community_reset_v85():
+    """
+    Reset global y único de Comunidad.
+    Se ejecuta del lado del servidor, por lo que no depende del navegador
+    ni del usuario que abra primero la aplicación.
+    """
+    st = server.get_state()
+    if st.get("communityResetV85") is True:
+        return
+
+    st["adminCommunityMessages"] = []
+    st["communityMessages"] = []
+    st["communityMessageReads"] = []
+    st["communityResetV85"] = True
+    st["communityResetAtV85"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    server.put_state(st)
+
+
 def application(environ, start_response):
+    _ensure_community_reset_v85()
     method = environ.get("REQUEST_METHOD", "GET").upper()
     path = unquote(environ.get("PATH_INFO", "/"))
 
