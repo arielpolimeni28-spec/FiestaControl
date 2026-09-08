@@ -20840,3 +20840,355 @@ window.renderPaymentDashboardV86=renderPaymentDashboard86;
 
 })();
 
+// ============================================================
+// V87 - FIX TABLERO FINANZAS + PROMOCIONES DESTACADAS DE SALONES
+// ============================================================
+(function(){
+'use strict';
+
+const esc87=v=>String(v??'').replace(/[&<>"']/g,ch=>({
+  '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+}[ch]));
+
+function salon87(){
+  const sid=session?.salonId;
+  return (data.salons||[]).find(s=>String(s.id)===String(sid));
+}
+
+// ------------------------------------------------------------
+// 1) FIX REAL DEL TABLERO DE MEDIOS DE PAGO
+// El render final de Finanzas pasa por wrappers posteriores,
+// por eso V86 no siempre llegaba a ejecutarse.
+// ------------------------------------------------------------
+function renderPaymentDashboard87(){
+  const content=document.querySelector('#content');
+  if(!content || view!=='finance')return;
+
+  content.querySelector('#v11-finance-dashboard')?.remove();
+  content.querySelector('#v86-payment-dashboard')?.remove();
+  content.querySelector('#v87-payment-dashboard')?.remove();
+
+  const sid=session?.salonId;
+  const movements=(data.movements||[]).filter(m=>
+    String(m.salonId)===String(sid) &&
+    ['Ingreso','Cobro'].includes(String(m.type||'')) &&
+    Number(m.amount||0)>0
+  );
+
+  const totals={
+    'Efectivo':0,
+    'Transferencia':0,
+    'Mercado Pago':0,
+    'Tarjeta':0,
+    'Otro':0,
+    'Sin especificar':0
+  };
+
+  const methodName=v=>{
+    const s=String(v||'').trim().toLowerCase();
+    if(!s)return 'Sin especificar';
+    if(s.includes('efect'))return 'Efectivo';
+    if(s.includes('transfer'))return 'Transferencia';
+    if(s.includes('mercado')||s==='mp')return 'Mercado Pago';
+    if(s.includes('tarjet')||s.includes('debito')||s.includes('débito')||s.includes('credito')||s.includes('crédito'))return 'Tarjeta';
+    if(s.includes('otro'))return 'Otro';
+    return 'Otro';
+  };
+
+  movements.forEach(m=>{
+    totals[methodName(m.method||m.paymentMethod)]+=Number(m.amount||0);
+  });
+
+  const total=Object.values(totals).reduce((a,b)=>a+b,0);
+  const fmt=v=>{
+    try{return money(v)}catch(_){return '$ '+Number(v||0).toLocaleString('es-AR')}
+  };
+
+  const rows=[
+    ['💵','Efectivo',totals['Efectivo']],
+    ['🏦','Transferencia',totals['Transferencia']],
+    ['📱','Mercado Pago',totals['Mercado Pago']],
+    ['💳','Tarjeta',totals['Tarjeta']],
+    ['➕','Otro',totals['Otro']]
+  ];
+  if(totals['Sin especificar']>0) rows.push(['❔','Sin especificar',totals['Sin especificar']]);
+
+  const board=document.createElement('div');
+  board.id='v87-payment-dashboard';
+  board.className='card';
+  board.style.cssText='margin-bottom:16px;padding:14px 16px';
+  board.innerHTML=`
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+      <div>
+        <h3 style="margin:0">📊 Ingresos por medio de pago</h3>
+        <small class="muted">Suma automática según el medio elegido en Finanzas.</small>
+      </div>
+      <div style="text-align:right">
+        <small class="muted">TOTAL INGRESADO</small>
+        <strong style="display:block;font-size:21px">${fmt(total)}</strong>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px">
+      ${rows.map(([icon,label,value])=>`
+        <div style="border:1px solid #e5e7eb;border-radius:11px;padding:10px 12px;background:#fff">
+          <small style="display:block;margin-bottom:5px">${icon} ${label}</small>
+          <strong style="font-size:17px">${fmt(value)}</strong>
+        </div>
+      `).join('')}
+    </div>`;
+  content.prepend(board);
+}
+
+const prevSalonView87=renderSalonView;
+renderSalonView=function(){
+  const result=prevSalonView87();
+  if(view==='finance'){
+    setTimeout(renderPaymentDashboard87,0);
+    setTimeout(renderPaymentDashboard87,100);
+  }
+  if(view==='profile'){
+    setTimeout(renderPromoPanel87,0);
+    setTimeout(renderPromoPanel87,100);
+  }
+  return result;
+};
+window.renderPaymentDashboard87=renderPaymentDashboard87;
+
+// ------------------------------------------------------------
+// 2) PROMOCIÓN DESTACADA DEL SALÓN
+// Se administra desde "Mi salón".
+// ------------------------------------------------------------
+function promoIsActive87(s){
+  if(!s || s.status!=='Aprobado' || s.publicProfileEnabled===false || s.publicPromoActive!==true)return false;
+  if(s.publicPromoValidUntil){
+    const today=new Date();
+    today.setHours(0,0,0,0);
+    const until=new Date(String(s.publicPromoValidUntil)+'T23:59:59');
+    if(until<today)return false;
+  }
+  return true;
+}
+
+function renderPromoPanel87(){
+  if(view!=='profile')return;
+  const content=document.querySelector('#content');
+  const s=salon87();
+  if(!content||!s)return;
+
+  content.querySelector('#v87-promo-panel')?.remove();
+
+  const box=document.createElement('div');
+  box.id='v87-promo-panel';
+  box.className='card';
+  box.style.cssText='margin-top:16px;padding:16px';
+  box.innerHTML=`
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap">
+      <div>
+        <h3 style="margin:0 0 4px">⭐ Promoción destacada</h3>
+        <small class="muted">Publicala para que aparezca destacada cuando un cliente entra en “Ver salones”.</small>
+      </div>
+      <span style="font-size:12px;font-weight:800;padding:6px 10px;border-radius:999px;background:${promoIsActive87(s)?'#ecfdf5':'#f3f4f6'}">
+        ${promoIsActive87(s)?'ACTIVA':'INACTIVA'}
+      </span>
+    </div>
+
+    ${s.publicPromoImage?`
+      <div style="margin-top:12px;border-radius:12px;overflow:hidden;max-width:420px">
+        <img src="${s.publicPromoImage}" alt="Promoción" style="width:100%;max-height:190px;object-fit:cover;display:block">
+      </div>`:''}
+
+    ${s.publicPromoTitle?`
+      <div style="margin-top:12px">
+        <b style="font-size:18px">${esc87(s.publicPromoTitle)}</b>
+        ${s.publicPromoPrice?`<strong style="display:block;margin-top:4px">${esc87(s.publicPromoPrice)}</strong>`:''}
+        ${s.publicPromoText?`<p style="margin:6px 0 0">${esc87(s.publicPromoText)}</p>`:''}
+        ${s.publicPromoValidUntil?`<small class="muted">Válida hasta ${esc87(s.publicPromoValidUntil)}</small>`:''}
+      </div>`:''}
+
+    <div style="margin-top:14px">
+      <button class="primary" type="button" onclick="openSalonPromo87()">
+        ${s.publicPromoTitle?'Editar promoción':'Crear promoción'}
+      </button>
+    </div>`;
+
+  content.appendChild(box);
+}
+
+window.openSalonPromo87=function(){
+  const s=salon87();
+  if(!s)return;
+
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>⭐ Promoción destacada</h2>
+        <p>Se mostrará públicamente en “Ver salones”.</p>
+      </div>
+      <button class="ghost small" type="button" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="v87-promo-form">
+      <div class="form-grid">
+        <div class="field span2">
+          <label>Título de la promoción</label>
+          <input name="title" required maxlength="80" value="${esc87(s.publicPromoTitle||'')}" placeholder="Ej: Fiesta completa de domingo">
+        </div>
+
+        <div class="field">
+          <label>Precio / beneficio</label>
+          <input name="price" maxlength="60" value="${esc87(s.publicPromoPrice||'')}" placeholder="Ej: $350.000 / 20% OFF">
+        </div>
+
+        <div class="field">
+          <label>Válida hasta</label>
+          <input name="validUntil" type="date" value="${esc87(s.publicPromoValidUntil||'')}">
+        </div>
+
+        <div class="field span2">
+          <label>Detalle</label>
+          <textarea name="text" maxlength="350" placeholder="Contá qué incluye la promoción">${esc87(s.publicPromoText||'')}</textarea>
+        </div>
+
+        <div class="field span2">
+          <label>Imagen de la promoción</label>
+          <input id="v87-promo-image" type="file" accept="image/*">
+          ${s.publicPromoImage?`<img id="v87-promo-preview" src="${s.publicPromoImage}" style="display:block;margin-top:8px;width:100%;max-width:360px;max-height:180px;object-fit:cover;border-radius:10px">`:'<img id="v87-promo-preview" style="display:none;margin-top:8px;width:100%;max-width:360px;max-height:180px;object-fit:cover;border-radius:10px">'}
+        </div>
+
+        <div class="field span2">
+          <label style="display:flex;gap:9px;align-items:center">
+            <input name="active" type="checkbox" ${s.publicPromoActive===true?'checked':''}>
+            <span><b>Mostrar como destacada</b><br><small>La verán los clientes en “Ver salones”.</small></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="form-actions">
+        ${s.publicPromoTitle?'<button type="button" class="danger" id="v87-delete-promo">Eliminar promoción</button>':''}
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="primary">Guardar promoción</button>
+      </div>
+    </form>`);
+
+  let newImage=s.publicPromoImage||'';
+  const file=document.querySelector('#v87-promo-image');
+  if(file){
+    file.onchange=e=>{
+      const f=e.target.files?.[0];
+      if(!f)return;
+      const reader=new FileReader();
+      reader.onload=()=>{
+        newImage=reader.result;
+        const p=document.querySelector('#v87-promo-preview');
+        if(p){p.src=newImage;p.style.display='block'}
+      };
+      reader.readAsDataURL(f);
+    };
+  }
+
+  const del=document.querySelector('#v87-delete-promo');
+  if(del){
+    del.onclick=()=>{
+      if(!confirm('¿Eliminar esta promoción destacada?'))return;
+      s.publicPromoTitle='';
+      s.publicPromoText='';
+      s.publicPromoPrice='';
+      s.publicPromoImage='';
+      s.publicPromoValidUntil='';
+      s.publicPromoActive=false;
+      save();
+      closeModal();
+      renderSalonShell();
+      toast('Promoción eliminada');
+    };
+  }
+
+  document.querySelector('#v87-promo-form').onsubmit=e=>{
+    e.preventDefault();
+    const fd=new FormData(e.target);
+    s.publicPromoTitle=String(fd.get('title')||'').trim();
+    s.publicPromoPrice=String(fd.get('price')||'').trim();
+    s.publicPromoText=String(fd.get('text')||'').trim();
+    s.publicPromoValidUntil=String(fd.get('validUntil')||'');
+    s.publicPromoActive=e.target.elements.active.checked;
+    s.publicPromoImage=newImage;
+    s.publicPromoUpdatedAt=new Date().toISOString();
+    save();
+    closeModal();
+    renderSalonShell();
+    toast('Promoción guardada');
+  };
+};
+
+// ------------------------------------------------------------
+// 3) DESTACADOS EN LA PANTALLA PÚBLICA "VER SALONES"
+// ------------------------------------------------------------
+function injectFeaturedPromos87(){
+  const results=document.querySelector('#v27-results');
+  if(!results)return;
+
+  document.querySelector('#v87-featured-promos')?.remove();
+
+  const promos=(data.salons||[])
+    .filter(promoIsActive87)
+    .sort((a,b)=>String(b.publicPromoUpdatedAt||'').localeCompare(String(a.publicPromoUpdatedAt||'')));
+
+  if(!promos.length)return;
+
+  const sec=document.createElement('section');
+  sec.id='v87-featured-promos';
+  sec.style.cssText='margin:18px 0 22px';
+  sec.innerHTML=`
+    <div style="display:flex;align-items:end;justify-content:space-between;gap:12px;margin-bottom:10px">
+      <div>
+        <span style="font-size:11px;font-weight:900;letter-spacing:.08em">DESTACADOS</span>
+        <h2 style="margin:3px 0 0">⭐ Promociones de salones</h2>
+      </div>
+      <small class="muted">Ofertas publicadas directamente por cada salón</small>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px">
+      ${promos.map(s=>`
+        <article class="card" style="padding:0;overflow:hidden;border:2px solid rgba(114,87,255,.18)">
+          ${s.publicPromoImage
+            ? `<img src="${s.publicPromoImage}" alt="${esc87(s.publicPromoTitle||s.name)}" style="width:100%;height:165px;object-fit:cover;display:block">`
+            : `<div style="height:105px;display:flex;align-items:center;justify-content:center;font-size:42px;background:#f5f3ff">🎉</div>`}
+          <div style="padding:14px">
+            <span style="display:inline-block;font-size:10px;font-weight:900;padding:5px 8px;border-radius:999px;background:#f3e8ff">⭐ DESTACADO</span>
+            <h3 style="margin:8px 0 2px">${esc87(s.publicPromoTitle||'Promoción especial')}</h3>
+            <b style="display:block">${esc87(s.name||'Salón')}</b>
+            ${s.zone?`<small class="muted">📍 ${esc87(s.zone)}</small>`:''}
+            ${s.publicPromoPrice?`<div style="font-size:19px;font-weight:900;margin-top:8px">${esc87(s.publicPromoPrice)}</div>`:''}
+            ${s.publicPromoText?`<p style="margin:7px 0 0">${esc87(s.publicPromoText)}</p>`:''}
+            ${s.publicPromoValidUntil?`<small class="muted" style="display:block;margin-top:7px">Válida hasta ${esc87(s.publicPromoValidUntil)}</small>`:''}
+            <button class="primary w100" style="margin-top:12px" onclick="renderPublicSalonPage('${esc87(s.id)}')">Ver salón →</button>
+          </div>
+        </article>
+      `).join('')}
+    </div>`;
+
+  results.parentElement.insertBefore(sec,results);
+}
+
+if(typeof window.renderPublicSalonDirectory==='function'){
+  const prevDirectory87=window.renderPublicSalonDirectory;
+  window.renderPublicSalonDirectory=function(){
+    const r=prevDirectory87();
+    setTimeout(injectFeaturedPromos87,0);
+    return r;
+  };
+}
+
+const oldRenderAuth87=window.renderAuth;
+if(typeof oldRenderAuth87==='function'){
+  window.renderAuth=function(mode='home'){
+    const r=oldRenderAuth87(mode);
+    if(mode==='availability')setTimeout(injectFeaturedPromos87,0);
+    return r;
+  };
+}
+
+window.injectFeaturedPromos87=injectFeaturedPromos87;
+
+})();
+
