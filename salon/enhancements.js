@@ -22138,3 +22138,357 @@ window.injectHomePromos90=injectHomePromos90;
 
 })();
 
+// ============================================================
+// V92 - FINANZAS: MOVIMIENTOS PERSISTENTES SIN DESAPARECER
+// ============================================================
+(function(){
+'use strict';
+
+const sid92=()=>session?.salonId;
+const n92=v=>Number(v||0);
+const esc92=v=>String(v??'').replace(/[&<>"']/g,ch=>({
+  '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+}[ch]));
+const fmt92=v=>{
+  try{return money(n92(v))}catch(_){return '$ '+n92(v).toLocaleString('es-AR')}
+};
+
+function salonMovements92(){
+  data.movements=data.movements||[];
+  return data.movements.filter(m=>String(m.salonId)===String(sid92()));
+}
+
+function isIncome92(m){
+  const t=String(m?.type||'').toLowerCase();
+  return t==='ingreso'||t==='cobro';
+}
+function isExpense92(m){
+  const t=String(m?.type||'').toLowerCase();
+  return t==='gasto'||t==='egreso';
+}
+
+function method92(v){
+  const s=String(v||'').trim().toLowerCase();
+  if(!s)return 'Sin especificar';
+  if(s.includes('efect'))return 'Efectivo';
+  if(s.includes('transfer'))return 'Transferencia';
+  if(s.includes('mercado')||s==='mp')return 'Mercado Pago';
+  if(s.includes('tarjet')||s.includes('debito')||s.includes('débito')||s.includes('credito')||s.includes('crédito'))return 'Tarjeta';
+  return 'Otro';
+}
+
+function figures92(){
+  const all=salonMovements92();
+  const income=all.filter(isIncome92).reduce((s,m)=>s+n92(m.amount),0);
+  const expense=all.filter(isExpense92).reduce((s,m)=>s+n92(m.amount),0);
+  const methods={'Efectivo':0,'Transferencia':0,'Mercado Pago':0,'Tarjeta':0,'Otro':0,'Sin especificar':0};
+  all.filter(isIncome92).forEach(m=>{
+    methods[method92(m.method||m.paymentMethod)]+=n92(m.amount);
+  });
+  return {all,income,expense,balance:income-expense,methods};
+}
+
+// -----------------------------------------------------------------
+// Guardado robusto: espera confirmación del PUT antes de volver a pintar.
+// Así evitamos que un refresco/poll posterior cargue una versión vieja
+// del servidor y "borre" visualmente el egreso recién creado.
+// -----------------------------------------------------------------
+async function saveConfirmed92(){
+  if(typeof save!=='function')return;
+  save();
+
+  try{
+    if(typeof fcSaveQueue!=='undefined' && fcSaveQueue?.then){
+      await fcSaveQueue;
+      return;
+    }
+  }catch(_){}
+
+  // Fallback: da tiempo al guardado normal.
+  await new Promise(r=>setTimeout(r,500));
+}
+
+async function createMovement92(type){
+  const isExpense=String(type).toLowerCase()==='gasto'||String(type).toLowerCase()==='egreso';
+
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>${isExpense?'Registrar egreso':'Ingresar dinero'}</h2>
+        <p>${isExpense?'Salida manual de dinero del salón':'Entrada manual de dinero al salón'}</p>
+      </div>
+      <button class="ghost small" type="button" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="money92">
+      <div class="form-grid">
+        <div class="field">
+          <label>Motivo</label>
+          <select name="category">
+            ${isExpense?`
+              <option>Compra general</option>
+              <option>Servicio</option>
+              <option>Pago a proveedor</option>
+              <option>Gasto operativo</option>
+              <option>Otro egreso</option>
+            `:`
+              <option>Monto inicial</option>
+              <option>Aporte del salón</option>
+              <option>Cobro general</option>
+              <option>Otro ingreso</option>
+            `}
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Importe</label>
+          <input name="amount" type="number" min="1" step="0.01" required>
+        </div>
+
+        <div class="field">
+          <label>Medio de pago</label>
+          <select name="method" required>
+            <option>Efectivo</option>
+            <option>Transferencia</option>
+            <option>Mercado Pago</option>
+            <option>Tarjeta</option>
+            <option>Otro</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Fecha</label>
+          <input name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required>
+        </div>
+
+        <div class="field span2">
+          <label>Detalle / observación</label>
+          <input name="detail" placeholder="Detalle del movimiento">
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="${isExpense?'danger':'primary'}">${isExpense?'Registrar egreso':'Registrar ingreso'}</button>
+      </div>
+    </form>
+  `);
+
+  document.querySelector('#money92').onsubmit=async e=>{
+    e.preventDefault();
+    const f=Object.fromEntries(new FormData(e.target));
+    const amount=n92(f.amount);
+    if(amount<=0)return toast('Ingresá un importe válido');
+
+    const movementId=id();
+
+    data.movements=data.movements||[];
+    data.movements.push({
+      id:movementId,
+      salonId:sid92(),
+      type:isExpense?'Gasto':'Ingreso',
+      category:String(f.category||'Movimiento manual'),
+      concept:String(f.detail||'').trim()
+        ? `${String(f.category||'Movimiento manual')} · ${String(f.detail).trim()}`
+        : String(f.category||'Movimiento manual'),
+      amount,
+      method:String(f.method||''),
+      movementDate:String(f.date||new Date().toISOString().slice(0,10)),
+      manualMovement:true,
+      sourceKey:`v92:manual:${movementId}`,
+      createdAt:new Date().toISOString()
+    });
+
+    closeModal();
+    toast(isExpense?'Guardando egreso...':'Guardando ingreso...');
+
+    // Primero pintamos localmente para respuesta inmediata.
+    paintFinance92();
+
+    // Después esperamos confirmación real del servidor.
+    await saveConfirmed92();
+
+    // Relee el estado del servidor y conserva el movimiento nuevo si
+    // alguna versión antigua responde con una instantánea desactualizada.
+    try{
+      const res=await fetch('/api/data',{cache:'no-store'});
+      if(res.ok){
+        const remoteRaw=await res.json();
+        const remote=remoteRaw?.data||remoteRaw;
+        const remoteMovements=Array.isArray(remote?.movements)?remote.movements:[];
+        const exists=remoteMovements.some(m=>String(m.id)===String(movementId));
+
+        if(exists){
+          data.movements=remoteMovements;
+        }else{
+          // El servidor todavía no lo devolvió: NO lo borramos.
+          // Volvemos a guardar el estado local para garantizar persistencia.
+          await saveConfirmed92();
+        }
+      }
+    }catch(_){}
+
+    toast(isExpense?'Egreso registrado':'Ingreso registrado');
+    view='finance';
+    renderSalonShell();
+  };
+}
+
+window.openManualMoneyV92=createMovement92;
+
+// -----------------------------------------------------------------
+// UI de Finanzas basada siempre en data.movements persistidos.
+// -----------------------------------------------------------------
+function paintFinance92(){
+  if(view!=='finance')return;
+  const content=document.querySelector('#content');
+  if(!content)return;
+
+  const f=figures92();
+
+  content.querySelector('#v11-finance-dashboard')?.remove();
+  content.querySelector('#v86-payment-dashboard')?.remove();
+  content.querySelector('#v87-payment-dashboard')?.remove();
+  content.querySelector('#v88-payment-dashboard')?.remove();
+  content.querySelector('#v92-payment-dashboard')?.remove();
+
+  const board=document.createElement('div');
+  board.id='v92-payment-dashboard';
+  board.className='card';
+  board.style.cssText='margin-bottom:16px;padding:14px 16px';
+
+  const cards=[
+    ['💵','Efectivo',f.methods['Efectivo']],
+    ['🏦','Transferencia',f.methods['Transferencia']],
+    ['📱','Mercado Pago',f.methods['Mercado Pago']],
+    ['💳','Tarjeta',f.methods['Tarjeta']],
+    ['➕','Otro',f.methods['Otro']]
+  ];
+  if(f.methods['Sin especificar']>0)cards.push(['❔','Sin especificar',f.methods['Sin especificar']]);
+
+  board.innerHTML=`
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+      <div>
+        <h3 style="margin:0">📊 Ingresos por medio de pago</h3>
+        <small class="muted">Incluye cobros de fiestas e ingresos manuales registrados en Finanzas.</small>
+      </div>
+      <div style="text-align:right">
+        <small class="muted">TOTAL DE INGRESOS</small>
+        <strong style="display:block;font-size:21px">${fmt92(f.income)}</strong>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px">
+      ${cards.map(([icon,label,value])=>`
+        <div style="border:1px solid #e5e7eb;border-radius:11px;padding:10px 12px;background:#fff">
+          <small style="display:block;margin-bottom:5px">${icon} ${label}</small>
+          <strong style="font-size:17px">${fmt92(value)}</strong>
+        </div>
+      `).join('')}
+    </div>
+  `;
+  content.prepend(board);
+
+  content.querySelectorAll('.card.stat').forEach(card=>{
+    const label=String(card.querySelector('small')?.textContent||'').trim().toLowerCase();
+    const strong=card.querySelector('strong');
+    if(!strong)return;
+    if(label==='total ingresado')strong.textContent=fmt92(f.income);
+    if(label==='total egresos')strong.textContent=fmt92(f.expense);
+    if(label==='resultado de caja')strong.textContent=fmt92(f.balance);
+  });
+
+  let general=[...content.querySelectorAll('.card')].find(c=>
+    String(c.querySelector('h3')?.textContent||'').toLowerCase().includes('movimientos generales')
+  );
+
+  if(!general){
+    general=document.createElement('div');
+    general.className='card';
+    general.style.marginTop='16px';
+    content.appendChild(general);
+  }
+
+  general.innerHTML=`
+    <div class="section-title">
+      <div>
+        <h3>Movimientos generales</h3>
+        <small class="muted">Todos los ingresos y egresos registrados en la contabilidad del salón.</small>
+      </div>
+    </div>
+    ${f.all.length?`
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr><th>Fecha</th><th>Tipo</th><th>Categoría</th><th>Concepto</th><th>Importe</th><th>Medio</th></tr>
+          </thead>
+          <tbody>
+            ${f.all.slice().reverse().map(m=>`
+              <tr>
+                <td>${esc92(m.movementDate||String(m.createdAt||'').slice(0,10))}</td>
+                <td>${esc92(m.type||'')}</td>
+                <td>${esc92(m.category||'')}</td>
+                <td>${esc92(m.concept||'')}</td>
+                <td><b>${fmt92(m.amount||0)}</b></td>
+                <td>${esc92(m.method||m.paymentMethod||'')}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `:'<div class="empty">Sin movimientos contables.</div>'}
+  `;
+
+  document.querySelectorAll('button').forEach(btn=>{
+    const t=String(btn.textContent||'').toLowerCase();
+    if(t.includes('ingresar dinero'))btn.onclick=()=>createMovement92('Ingreso');
+    if(t.includes('registrar egreso'))btn.onclick=()=>createMovement92('Gasto');
+  });
+}
+
+// -----------------------------------------------------------------
+// Evita que polling/merge viejo reemplace data.movements con una lista
+// anterior mientras hay un guardado pendiente.
+// -----------------------------------------------------------------
+let lastLocalMovements92=[];
+let movementFingerprint92='';
+
+function snapshotMovements92(){
+  const list=salonMovements92();
+  const fp=JSON.stringify(list.map(m=>[m.id,m.amount,m.type,m.createdAt]));
+  if(fp!==movementFingerprint92){
+    movementFingerprint92=fp;
+    lastLocalMovements92=list.map(m=>({...m}));
+  }
+}
+
+setInterval(()=>{
+  snapshotMovements92();
+
+  if(typeof fcSavePending!=='undefined' && fcSavePending>0){
+    // Mientras se está guardando, mantenemos la instantánea local.
+    data.movements=data.movements||[];
+
+    const others=data.movements.filter(m=>String(m.salonId)!==String(sid92()));
+    const currentIds=new Set(data.movements.filter(m=>String(m.salonId)===String(sid92())).map(m=>String(m.id)));
+
+    lastLocalMovements92.forEach(m=>{
+      if(!currentIds.has(String(m.id))) data.movements.push({...m});
+    });
+  }
+},300);
+
+const route92=renderSalonView;
+renderSalonView=function(){
+  const r=route92();
+  if(view==='finance'){
+    setTimeout(()=>{snapshotMovements92();paintFinance92()},0);
+    setTimeout(()=>{snapshotMovements92();paintFinance92()},150);
+  }
+  return r;
+};
+
+window.paintFinance92=paintFinance92;
+
+})();
+
