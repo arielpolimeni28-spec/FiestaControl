@@ -378,6 +378,134 @@ def _finance_reset_v93(req):
     return server.get_state()
 
 
+
+def _atomic_state_v94(mutator):
+    """
+    Modifica el estado dentro del mismo LOCK y de la misma transacción SQLite.
+    Evita que otro PUT con una copia vieja pise un movimiento recién guardado.
+    """
+    with server.LOCK:
+        c = server.db_connect()
+        row = c.execute('SELECT data FROM app_state WHERE id=1').fetchone()
+        st = json.loads(row[0]) if row else json.loads(json.dumps(server.SEED))
+        result = mutator(st)
+        raw = json.dumps(st, ensure_ascii=False, separators=(',', ':'))
+        c.execute('UPDATE app_state SET data=?, updated=? WHERE id=1', (raw, time.time()))
+        c.commit()
+        c.close()
+        return result, st
+
+
+def _finance_action_v94(req):
+    action = str((req or {}).get("action") or "")
+    salon_id = str((req or {}).get("salonId") or "")
+    if not salon_id:
+        raise ValueError("Falta el salón")
+
+    def mutate(st):
+        st.setdefault("movements", [])
+        if action == "add":
+            m = (req or {}).get("movement") or {}
+            if not isinstance(m, dict) or not m.get("id"):
+                raise ValueError("Movimiento inválido")
+            if str(m.get("salonId") or "") != salon_id:
+                raise ValueError("Movimiento de otro salón")
+            if not any(str(x.get("id")) == str(m.get("id")) for x in st["movements"] if isinstance(x, dict)):
+                st["movements"].append(m)
+            return {"movementId": m.get("id")}
+
+        if action == "reset":
+            st["movements"] = [
+                m for m in st.get("movements", [])
+                if str((m or {}).get("salonId") or "") != salon_id
+            ]
+            st["providerPayments"] = [
+                x for x in st.get("providerPayments", [])
+                if str((x or {}).get("salonId") or "") != salon_id
+            ]
+            st["servicePayments"] = [
+                x for x in st.get("servicePayments", [])
+                if str((x or {}).get("salonId") or "") != salon_id
+            ]
+
+            for e in st.get("events", []):
+                if str((e or {}).get("salonId") or "") == salon_id:
+                    e["deposit"] = 0
+                    e["depositMethod"] = ""
+                    e["depositDate"] = ""
+                    e["paid"] = 0
+                    try:
+                        e["balance"] = float(e.get("total") or 0)
+                    except Exception:
+                        e["balance"] = e.get("total") or 0
+
+            for p in st.get("stockPurchases", []):
+                if str((p or {}).get("salonId") or "") == salon_id:
+                    p["paymentStatus"] = "Pendiente"
+                    p["paymentMethod"] = ""
+                    p["paymentReference"] = ""
+                    p["paymentDate"] = ""
+                    p["paidAt"] = None
+                    p["paidAmount"] = 0
+                    p["amountPaid"] = 0
+                    p["financeExpenseCreated"] = False
+
+            for o in st.get("orders", []):
+                if str((o or {}).get("salonId") or "") == salon_id:
+                    o["paymentStatus"] = "Pendiente"
+                    o["paymentMethod"] = ""
+                    o["paymentReference"] = ""
+                    o["paymentDate"] = ""
+                    o["paidAt"] = None
+                    o["paid"] = 0
+                    o["paidAmount"] = 0
+                    o["amountPaid"] = 0
+                    o["financeExpenseCreated"] = False
+
+            return {"reset": True}
+
+        raise ValueError("Acción financiera inválida")
+
+    _, st = _atomic_state_v94(mutate)
+    return st
+
+
+def _promo_action_v94(req):
+    action = str((req or {}).get("action") or "")
+    salon_id = str((req or {}).get("salonId") or "")
+    if not salon_id:
+        raise ValueError("Falta el salón")
+
+    def mutate(st):
+        salon = next((s for s in st.get("salons", []) if str(s.get("id")) == salon_id), None)
+        if not salon:
+            raise ValueError("Salón inexistente")
+
+        if action == "permission":
+            salon["featuredPromoEnabled"] = bool((req or {}).get("enabled"))
+            if not salon["featuredPromoEnabled"]:
+                salon["featuredPromoActive"] = False
+            return {"enabled": salon["featuredPromoEnabled"]}
+
+        if action == "save":
+            if salon.get("featuredPromoEnabled") is not True:
+                raise ValueError("La promoción destacada no está habilitada")
+            promo = (req or {}).get("promo") or {}
+            salon["featuredPromoTitle"] = str(promo.get("title") or "").strip()
+            salon["featuredPromoPrice"] = str(promo.get("price") or "").strip()
+            salon["featuredPromoText"] = str(promo.get("text") or "").strip()
+            salon["featuredPromoImage"] = str(promo.get("image") or "")
+            salon["featuredPromoValidUntil"] = str(promo.get("validUntil") or "")
+            salon["featuredPromoActive"] = bool(promo.get("active"))
+            salon["featuredPromoUpdatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+            return {"saved": True}
+
+        raise ValueError("Acción de promoción inválida")
+
+    _, st = _atomic_state_v94(mutate)
+    return st
+
+
 def application(environ, start_response):
     _ensure_community_reset_v85()
     method = environ.get("REQUEST_METHOD", "GET").upper()
@@ -426,6 +554,14 @@ def application(environ, start_response):
 
         if method == "POST":
             req = leer_json(environ)
+
+            if path == "/api/finance-v94":
+                state = _finance_action_v94(req)
+                return json_response(start_response, {"ok": True, "state": state})
+
+            if path == "/api/promo-v94":
+                state = _promo_action_v94(req)
+                return json_response(start_response, {"ok": True, "state": state})
 
             if path == "/api/movement":
                 state = _append_movement_v93(req)
