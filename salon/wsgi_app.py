@@ -243,6 +243,141 @@ def _ensure_community_reset_v85():
     server.put_state(st)
 
 
+
+def _movement_timestamp(m):
+    return str((m or {}).get("createdAt") or (m or {}).get("movementDate") or "")
+
+
+def _merge_state_protecting_movements(incoming):
+    """
+    Protege movimientos financieros frente a PUT /api/data con copias viejas.
+    La UI histórica guarda el estado completo; una pestaña/refresco atrasado podía
+    reemplazar 'movements' y hacer desaparecer un egreso recién creado.
+    """
+    current = server.get_state()
+    if not isinstance(incoming, dict):
+        incoming = {}
+
+    merged = dict(incoming)
+    current_movements = current.get("movements") or []
+    incoming_movements = incoming.get("movements") or []
+
+    # Epoch de reset por salón. Evita que un PUT viejo resucite movimientos
+    # anteriores a un "Poner movimientos en $0".
+    epochs = current.get("financeMovementResetAtV93") or {}
+    if not isinstance(epochs, dict):
+        epochs = {}
+
+    by_id = {}
+
+    def allowed_after_reset(m):
+        sid = str((m or {}).get("salonId") or "")
+        epoch = str(epochs.get(sid) or "")
+        if not epoch:
+            return True
+        ts = _movement_timestamp(m)
+        return bool(ts and ts > epoch)
+
+    for m in current_movements:
+        if isinstance(m, dict) and m.get("id") and allowed_after_reset(m):
+            by_id[str(m["id"])] = m
+
+    for m in incoming_movements:
+        if isinstance(m, dict) and m.get("id") and allowed_after_reset(m):
+            # La versión entrante puede actualizar campos del mismo movimiento,
+            # pero nunca eliminar movimientos que el servidor ya confirmó.
+            by_id[str(m["id"])] = m
+
+    merged["movements"] = list(by_id.values())
+    merged["financeMovementResetAtV93"] = epochs
+    return merged
+
+
+def _append_movement_v93(req):
+    st = server.get_state()
+    movement = (req or {}).get("movement") or {}
+    if not isinstance(movement, dict):
+        raise ValueError("Movimiento inválido")
+
+    salon_id = str(movement.get("salonId") or "")
+    movement_id = str(movement.get("id") or "")
+    if not salon_id or not movement_id:
+        raise ValueError("Faltan datos del movimiento")
+
+    st["movements"] = st.get("movements") or []
+    if not any(str(x.get("id")) == movement_id for x in st["movements"] if isinstance(x, dict)):
+        st["movements"].append(movement)
+
+    server.put_state(st)
+    return server.get_state()
+
+
+def _finance_reset_v93(req):
+    st = server.get_state()
+    salon_id = str((req or {}).get("salonId") or "")
+    if not salon_id:
+        raise ValueError("Falta el salón")
+
+    reset_at = time.strftime("%Y-%m-%dT%H:%M:%S")
+    epochs = st.get("financeMovementResetAtV93") or {}
+    if not isinstance(epochs, dict):
+        epochs = {}
+    epochs[salon_id] = reset_at
+    st["financeMovementResetAtV93"] = epochs
+
+    st["movements"] = [
+        m for m in (st.get("movements") or [])
+        if str((m or {}).get("salonId") or "") != salon_id
+    ]
+    st["providerPayments"] = [
+        m for m in (st.get("providerPayments") or [])
+        if str((m or {}).get("salonId") or "") != salon_id
+    ]
+    st["servicePayments"] = [
+        m for m in (st.get("servicePayments") or [])
+        if str((m or {}).get("salonId") or "") != salon_id
+    ]
+
+    for e in st.get("events") or []:
+        if str((e or {}).get("salonId") or "") == salon_id:
+            e["deposit"] = 0
+            e["depositMethod"] = ""
+            e["depositDate"] = ""
+            e["paid"] = 0
+            try:
+                e["balance"] = float(e.get("total") or 0)
+            except Exception:
+                e["balance"] = e.get("total") or 0
+
+    for p in st.get("stockPurchases") or []:
+        if str((p or {}).get("salonId") or "") == salon_id:
+            p["paymentStatus"] = "Pendiente"
+            p["paymentMethod"] = ""
+            p["paymentReference"] = ""
+            p["reference"] = ""
+            p["paymentDate"] = ""
+            p["paidAt"] = None
+            p["paidAmount"] = 0
+            p["amountPaid"] = 0
+            p["financeExpenseCreated"] = False
+
+    for o in st.get("orders") or []:
+        if str((o or {}).get("salonId") or "") == salon_id:
+            o["paymentStatus"] = "Pendiente"
+            o["paymentId"] = None
+            o["paymentMethod"] = ""
+            o["paymentReference"] = ""
+            o["paymentDate"] = ""
+            o["paidAt"] = None
+            o["paid"] = 0
+            o["paidAmount"] = 0
+            o["amountPaid"] = 0
+            o["financeExpenseCreated"] = False
+
+    server.put_state(st)
+    return server.get_state()
+
+
 def application(environ, start_response):
     _ensure_community_reset_v85()
     method = environ.get("REQUEST_METHOD", "GET").upper()
@@ -291,6 +426,14 @@ def application(environ, start_response):
 
         if method == "POST":
             req = leer_json(environ)
+
+            if path == "/api/movement":
+                state = _append_movement_v93(req)
+                return json_response(start_response, {"ok": True, "state": state})
+
+            if path == "/api/finance-reset":
+                state = _finance_reset_v93(req)
+                return json_response(start_response, {"ok": True, "state": state})
 
             if path == "/api/register":
                 item = server.register_entity(req.get("kind"), req.get("data") or {})
@@ -424,7 +567,8 @@ def application(environ, start_response):
                 return json_response(start_response, {"ok": True, "sentAt": sent_at})
 
         if method == "PUT" and path == "/api/data":
-            server.put_state(leer_json(environ))
+            incoming = leer_json(environ)
+            server.put_state(_merge_state_protecting_movements(incoming))
             return json_response(start_response, {"ok": True})
 
         if method == "GET":
