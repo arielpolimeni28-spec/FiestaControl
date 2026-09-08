@@ -21192,3 +21192,453 @@ window.injectFeaturedPromos87=injectFeaturedPromos87;
 
 })();
 
+// ============================================================
+// V88 - FINANZAS: INGRESOS VISIBLES + RESET CONTABLE TOTAL
+// ============================================================
+(function(){
+'use strict';
+
+const sid88=()=>session?.salonId;
+const n88=v=>Number(v||0);
+const esc88=v=>String(v??'').replace(/[&<>"']/g,ch=>({
+  '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+}[ch]));
+const fmt88=v=>{
+  try{return money(n88(v))}catch(_){return '$ '+n88(v).toLocaleString('es-AR')}
+};
+const mov88=()=> (data.movements||[]).filter(m=>String(m.salonId)===String(sid88()));
+
+function isIncome88(m){
+  const t=String(m?.type||'').toLowerCase();
+  return t==='ingreso'||t==='cobro';
+}
+function isExpense88(m){
+  const t=String(m?.type||'').toLowerCase();
+  return t==='gasto'||t==='egreso';
+}
+
+function paymentMethod88(v){
+  const s=String(v||'').trim().toLowerCase();
+  if(!s)return 'Sin especificar';
+  if(s.includes('efect'))return 'Efectivo';
+  if(s.includes('transfer'))return 'Transferencia';
+  if(s.includes('mercado')||s==='mp')return 'Mercado Pago';
+  if(s.includes('tarjet')||s.includes('debito')||s.includes('débito')||s.includes('credito')||s.includes('crédito'))return 'Tarjeta';
+  return 'Otro';
+}
+
+function figures88(){
+  const all=mov88();
+  const income=all.filter(isIncome88).reduce((s,m)=>s+n88(m.amount),0);
+  const expense=all.filter(isExpense88).reduce((s,m)=>s+n88(m.amount),0);
+  const methods={
+    'Efectivo':0,
+    'Transferencia':0,
+    'Mercado Pago':0,
+    'Tarjeta':0,
+    'Otro':0,
+    'Sin especificar':0
+  };
+  all.filter(isIncome88).forEach(m=>{
+    methods[paymentMethod88(m.method||m.paymentMethod)]+=n88(m.amount);
+  });
+  return {all,income,expense,balance:income-expense,methods};
+}
+
+// ------------------------------------------------------------
+// INGRESAR / EGRESAR DINERO
+// Guarda en data.movements y vuelve a Finanzas para que se vea
+// inmediatamente en tablero, totales y movimientos generales.
+// ------------------------------------------------------------
+window.openManualMoneyV88=function(type='Ingreso'){
+  const isExpense=String(type).toLowerCase()==='gasto'||String(type).toLowerCase()==='egreso';
+
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>${isExpense?'Registrar egreso':'Ingresar dinero'}</h2>
+        <p>${isExpense?'Salida manual de dinero del salón':'Entrada manual de dinero al salón'}</p>
+      </div>
+      <button class="ghost small" type="button" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="money88">
+      <div class="form-grid">
+        <div class="field">
+          <label>Motivo</label>
+          <select name="category">
+            ${isExpense?`
+              <option>Compra general</option>
+              <option>Servicio</option>
+              <option>Pago a proveedor</option>
+              <option>Gasto operativo</option>
+              <option>Otro egreso</option>
+            `:`
+              <option>Monto inicial</option>
+              <option>Aporte del salón</option>
+              <option>Cobro general</option>
+              <option>Otro ingreso</option>
+            `}
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Importe</label>
+          <input name="amount" type="number" min="1" step="0.01" required>
+        </div>
+
+        <div class="field">
+          <label>Medio de pago</label>
+          <select name="method" required>
+            <option>Efectivo</option>
+            <option>Transferencia</option>
+            <option>Mercado Pago</option>
+            <option>Tarjeta</option>
+            <option>Otro</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Fecha</label>
+          <input name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required>
+        </div>
+
+        <div class="field span2">
+          <label>Detalle / observación</label>
+          <input name="detail" placeholder="Detalle del movimiento">
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="${isExpense?'danger':'primary'}">${isExpense?'Registrar egreso':'Registrar ingreso'}</button>
+      </div>
+    </form>
+  `);
+
+  document.querySelector('#money88').onsubmit=e=>{
+    e.preventDefault();
+    const f=Object.fromEntries(new FormData(e.target));
+    const amount=n88(f.amount);
+    if(amount<=0)return toast('Ingresá un importe válido');
+
+    data.movements=data.movements||[];
+    data.movements.push({
+      id:id(),
+      salonId:sid88(),
+      type:isExpense?'Gasto':'Ingreso',
+      category:String(f.category||'Movimiento manual'),
+      concept:String(f.detail||'').trim()
+        ? `${String(f.category||'Movimiento manual')} · ${String(f.detail).trim()}`
+        : String(f.category||'Movimiento manual'),
+      amount,
+      method:String(f.method||''),
+      movementDate:String(f.date||new Date().toISOString().slice(0,10)),
+      manualMovement:true,
+      sourceKey:`v88:manual:${id()}`,
+      createdAt:new Date().toISOString()
+    });
+
+    save();
+    closeModal();
+    toast(isExpense?'Egreso registrado':'Ingreso registrado');
+
+    view='finance';
+    // Espera el guardado y vuelve a dibujar desde la ruta final.
+    setTimeout(()=>renderSalonShell(),80);
+  };
+};
+
+// ------------------------------------------------------------
+// TABLERO + MOVIMIENTOS GENERALES
+// Corrige "Total ingresado": usa TODAS las entradas reales,
+// incluyendo dinero ingresado manualmente.
+// ------------------------------------------------------------
+function paintFinance88(){
+  if(view!=='finance')return;
+  const content=document.querySelector('#content');
+  if(!content)return;
+
+  const f=figures88();
+
+  // Quita tableros anteriores y deja uno solo.
+  content.querySelector('#v11-finance-dashboard')?.remove();
+  content.querySelector('#v86-payment-dashboard')?.remove();
+  content.querySelector('#v87-payment-dashboard')?.remove();
+  content.querySelector('#v88-payment-dashboard')?.remove();
+
+  const board=document.createElement('div');
+  board.id='v88-payment-dashboard';
+  board.className='card';
+  board.style.cssText='margin-bottom:16px;padding:14px 16px';
+
+  const cards=[
+    ['💵','Efectivo',f.methods['Efectivo']],
+    ['🏦','Transferencia',f.methods['Transferencia']],
+    ['📱','Mercado Pago',f.methods['Mercado Pago']],
+    ['💳','Tarjeta',f.methods['Tarjeta']],
+    ['➕','Otro',f.methods['Otro']]
+  ];
+  if(f.methods['Sin especificar']>0)cards.push(['❔','Sin especificar',f.methods['Sin especificar']]);
+
+  board.innerHTML=`
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+      <div>
+        <h3 style="margin:0">📊 Ingresos por medio de pago</h3>
+        <small class="muted">Incluye cobros de fiestas e ingresos manuales registrados en Finanzas.</small>
+      </div>
+      <div style="text-align:right">
+        <small class="muted">TOTAL DE INGRESOS</small>
+        <strong style="display:block;font-size:21px">${fmt88(f.income)}</strong>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px">
+      ${cards.map(([icon,label,value])=>`
+        <div style="border:1px solid #e5e7eb;border-radius:11px;padding:10px 12px;background:#fff">
+          <small style="display:block;margin-bottom:5px">${icon} ${label}</small>
+          <strong style="font-size:17px">${fmt88(value)}</strong>
+        </div>
+      `).join('')}
+    </div>
+  `;
+
+  content.prepend(board);
+
+  // Corrige las tarjetas existentes del render histórico.
+  content.querySelectorAll('.card.stat').forEach(card=>{
+    const label=String(card.querySelector('small')?.textContent||'').trim().toLowerCase();
+    const strong=card.querySelector('strong');
+    if(!strong)return;
+    if(label==='total ingresado')strong.textContent=fmt88(f.income);
+    if(label==='total egresos')strong.textContent=fmt88(f.expense);
+    if(label==='resultado de caja')strong.textContent=fmt88(f.balance);
+  });
+
+  // Asegura que exista y muestre la contabilidad general completa.
+  let general=[...content.querySelectorAll('.card')].find(c=>
+    String(c.querySelector('h3')?.textContent||'').toLowerCase().includes('movimientos generales')
+  );
+
+  if(!general){
+    general=document.createElement('div');
+    general.className='card';
+    general.style.marginTop='16px';
+    content.appendChild(general);
+  }
+
+  general.innerHTML=`
+    <div class="section-title">
+      <div>
+        <h3>Movimientos generales</h3>
+        <small class="muted">Todos los ingresos y egresos registrados en la contabilidad del salón.</small>
+      </div>
+    </div>
+    ${f.all.length?`
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr><th>Fecha</th><th>Tipo</th><th>Categoría</th><th>Concepto</th><th>Importe</th><th>Medio</th></tr>
+          </thead>
+          <tbody>
+            ${f.all.slice().reverse().map(m=>`
+              <tr>
+                <td>${esc88(m.movementDate||String(m.createdAt||'').slice(0,10))}</td>
+                <td>${esc88(m.type||'')}</td>
+                <td>${esc88(m.category||'')}</td>
+                <td>${esc88(m.concept||'')}</td>
+                <td><b>${fmt88(m.amount||0)}</b></td>
+                <td>${esc88(m.method||m.paymentMethod||'')}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `:'<div class="empty">Sin movimientos contables.</div>'}
+  `;
+
+  // Repara botones para que usen V88.
+  const income=document.querySelector('#income36') ||
+    [...document.querySelectorAll('button')].find(b=>String(b.textContent||'').includes('Ingresar dinero'));
+  if(income)income.onclick=()=>openManualMoneyV88('Ingreso');
+
+  const expense=document.querySelector('#expense36') ||
+    [...document.querySelectorAll('button')].find(b=>String(b.textContent||'').includes('Registrar egreso'));
+  if(expense)expense.onclick=()=>openManualMoneyV88('Gasto');
+}
+
+// ------------------------------------------------------------
+// RESET CONTABLE TOTAL
+// NO borra salones, proveedores ni compras.
+// Sí elimina TODA huella monetaria del salón y deja compras/pedidos
+// existentes como NO PAGADOS.
+// ------------------------------------------------------------
+function resetMoneyData88(){
+  const sid=sid88();
+
+  data.movements=(data.movements||[]).filter(x=>String(x.salonId)!==String(sid));
+  data.providerPayments=(data.providerPayments||[]).filter(x=>String(x.salonId)!==String(sid));
+  data.servicePayments=(data.servicePayments||[]).filter(x=>String(x.salonId)!==String(sid));
+
+  // Reservas: conservan el contrato, pero cobranza vuelve a cero.
+  (data.events||[]).forEach(e=>{
+    if(String(e.salonId)!==String(sid))return;
+    e.deposit=0;
+    e.depositMethod='';
+    e.depositDate='';
+    e.paid=0;
+    e.balance=n88(e.total);
+  });
+
+  // Compras a proveedores: se conservan, pero SIN pago/egreso contable.
+  (data.stockPurchases||[]).forEach(p=>{
+    if(String(p.salonId)!==String(sid))return;
+    p.paymentStatus='Pendiente';
+    p.paymentMethod='';
+    p.paymentReference='';
+    p.reference='';
+    p.paymentDate='';
+    p.paidAt=null;
+    p.paidAmount=0;
+    p.amountPaid=0;
+    p.financeExpenseCreated=false;
+
+    // No altera si fue entregado ni el stock ya recibido.
+    // Solo deja la parte monetaria en cero.
+  });
+
+  // Pedidos históricos del salón también quedan sin pago.
+  (data.orders||[]).forEach(o=>{
+    if(String(o.salonId)!==String(sid))return;
+    o.paymentStatus='Pendiente';
+    o.paymentId=null;
+    o.paymentMethod='';
+    o.paymentReference='';
+    o.paymentDate='';
+    o.paidAt=null;
+    o.paid=0;
+    o.paidAmount=0;
+    o.amountPaid=0;
+    o.financeExpenseCreated=false;
+  });
+
+  // Proveedores propios: saldos contables a cero, sin borrar proveedor.
+  (data.suppliers||[]).forEach(p=>{
+    if(String(p.salonId)!==String(sid))return;
+    p.balance=0;
+    p.paid=0;
+    p.totalPaid=0;
+    p.totalPending=0;
+  });
+
+  // Baselines/resets contables anteriores no deben reconstruir montos.
+  if(Array.isArray(data.financeResets)){
+    data.financeResets=data.financeResets.filter(r=>String(r.salonId)!==String(sid));
+  }
+  if(Array.isArray(data.accountingEpochs)){
+    data.accountingEpochs=data.accountingEpochs.filter(r=>String(r.salonId)!==String(sid));
+  }
+}
+
+window.zeroMoney88=function(){
+  const s=(data.salons||[]).find(x=>String(x.id)===String(sid88()));
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>💰 Poner movimientos en $0</h2>
+        <p>Deja en cero toda la contabilidad general del salón.</p>
+      </div>
+      <button class="ghost small" type="button" onclick="closeModal()">✕</button>
+    </div>
+
+    <div class="admin-notice attention">
+      <span>⚠️</span>
+      <div>
+        <b>Se pondrán en cero todos los movimientos de dinero.</b>
+        <small>
+          Ingresos, egresos, cobros, señas, pagos a proveedores,
+          compras pagadas y saldos contables. No se borran salones,
+          proveedores, fiestas, productos ni pedidos.
+        </small>
+      </div>
+    </div>
+
+    <form id="zero88" style="margin-top:14px">
+      <div class="field">
+        <label>Contraseña del salón</label>
+        <input name="password" type="password" required>
+      </div>
+      <div class="field">
+        <label>Motivo</label>
+        <input name="reason" required placeholder="Ej.: comenzar contabilidad desde cero">
+      </div>
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="danger">Poner toda la contabilidad en $0</button>
+      </div>
+    </form>
+  `);
+
+  document.querySelector('#zero88').onsubmit=e=>{
+    e.preventDefault();
+    const f=Object.fromEntries(new FormData(e.target));
+    const expected=String(s?.password||s?.pass||'');
+    if(expected && String(f.password)!==expected)return toast('Contraseña incorrecta');
+
+    resetMoneyData88();
+
+    data.auditLog=data.auditLog||[];
+    data.auditLog.push({
+      id:id(),
+      salonId:sid88(),
+      type:'RESET_MONEY_V88',
+      reason:String(f.reason||''),
+      createdAt:new Date().toISOString()
+    });
+
+    save();
+    closeModal();
+    toast('Toda la contabilidad quedó en $0');
+
+    // Segunda aplicación para impedir que una capa vieja reconstruya importes.
+    setTimeout(()=>{
+      resetMoneyData88();
+      save();
+      view='finance';
+      renderSalonShell();
+    },300);
+  };
+};
+
+// El código anterior llama zeroMoney52 desde el botón. Lo reemplazamos.
+window.zeroMoney52=window.zeroMoney88;
+window.quickZeroMoneyV38=window.zeroMoney88;
+
+function repairFinanceButtons88(){
+  if(view!=='finance')return;
+  document.querySelectorAll('button').forEach(btn=>{
+    const t=String(btn.textContent||'').toLowerCase();
+    if(t.includes('ingresar dinero'))btn.onclick=()=>openManualMoneyV88('Ingreso');
+    if(t.includes('registrar egreso'))btn.onclick=()=>openManualMoneyV88('Gasto');
+    if(t.includes('poner movimientos en $0')){
+      btn.onclick=()=>zeroMoney88();
+      btn.setAttribute('onclick','zeroMoney88()');
+    }
+  });
+}
+
+const route88=renderSalonView;
+renderSalonView=function(){
+  const r=route88();
+  if(view==='finance'){
+    setTimeout(()=>{paintFinance88();repairFinanceButtons88()},0);
+    setTimeout(()=>{paintFinance88();repairFinanceButtons88()},120);
+  }
+  return r;
+};
+
+window.paintFinance88=paintFinance88;
+window.resetMoneyData88=resetMoneyData88;
+
+})();
+
