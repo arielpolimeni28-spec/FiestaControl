@@ -21642,3 +21642,351 @@ window.resetMoneyData88=resetMoneyData88;
 
 })();
 
+// ============================================================
+// V89 - PROMOS DESTACADAS PAGAS, HABILITADAS POR ADMIN
+// ============================================================
+(function(){
+'use strict';
+
+const esc89=v=>String(v??'').replace(/[&<>"']/g,ch=>({
+  '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+}[ch]));
+
+function currentSalon89(){
+  return (data.salons||[]).find(s=>String(s.id)===String(session?.salonId));
+}
+
+function promoEligible89(s){
+  if(!s)return false;
+  if(s.status!=='Aprobado')return false;
+  if(s.publicProfileEnabled===false)return false;
+  if(s.featuredPromoEnabled!==true)return false;
+  if(s.featuredPromoActive!==true)return false;
+  if(!s.featuredPromoTitle)return false;
+
+  if(s.featuredPromoValidUntil){
+    const end=new Date(String(s.featuredPromoValidUntil)+'T23:59:59');
+    if(end < new Date()) return false;
+  }
+  return true;
+}
+
+// ------------------------------------------------------------
+// ADMIN GENERAL: habilitar/deshabilitar publicación destacada
+// ------------------------------------------------------------
+window.toggleFeaturedPromoPermission89=function(sid){
+  const s=(data.salons||[]).find(x=>String(x.id)===String(sid));
+  if(!s)return;
+  s.featuredPromoEnabled = !s.featuredPromoEnabled;
+  if(!s.featuredPromoEnabled) s.featuredPromoActive=false;
+  save();
+  superSalons();
+  toast(s.featuredPromoEnabled?'Promoción destacada habilitada':'Promoción destacada deshabilitada');
+};
+
+const prevSuperSalons89=window.superSalons || superSalons;
+superSalons=function(){
+  prevSuperSalons89();
+
+  setTimeout(()=>{
+    const content=document.querySelector('#content');
+    if(!content)return;
+
+    const rows=[...content.querySelectorAll('tbody tr')];
+    rows.forEach(tr=>{
+      const name=tr.querySelector('td b')?.textContent?.trim();
+      if(!name)return;
+      const s=(data.salons||[]).find(x=>x.name===name);
+      if(!s)return;
+
+      const actionCell=tr.querySelector('td.actions') || tr.lastElementChild;
+      if(!actionCell || actionCell.querySelector('.v89-featured-btn'))return;
+
+      const btn=document.createElement('button');
+      btn.className=`${s.featuredPromoEnabled?'danger':'secondary'} small v89-featured-btn`;
+      btn.style.marginLeft='6px';
+      btn.textContent=s.featuredPromoEnabled?'Quitar destacado':'Habilitar destacado';
+      btn.onclick=()=>toggleFeaturedPromoPermission89(s.id);
+      actionCell.appendChild(btn);
+    });
+
+    if(!document.querySelector('#v89-admin-featured-note')){
+      const note=document.createElement('div');
+      note.id='v89-admin-featured-note';
+      note.className='card';
+      note.style.cssText='margin-bottom:14px;padding:14px 16px';
+      note.innerHTML=`
+        <div class="section-title">
+          <div>
+            <h3>⭐ Publicaciones destacadas pagas</h3>
+            <small class="muted">
+              El administrador habilita esta opción solamente a los salones que contrataron la promoción.
+            </small>
+          </div>
+        </div>`;
+      content.prepend(note);
+    }
+  },0);
+};
+window.superSalons=superSalons;
+
+// ------------------------------------------------------------
+// SALÓN: panel de promo solamente si el admin la habilitó
+// ------------------------------------------------------------
+function renderFeaturedPromoPanel89(){
+  if(view!=='profile')return;
+  const content=document.querySelector('#content');
+  const s=currentSalon89();
+  if(!content||!s)return;
+
+  content.querySelector('#v87-promo-panel')?.remove();
+  content.querySelector('#v89-featured-panel')?.remove();
+
+  const box=document.createElement('div');
+  box.id='v89-featured-panel';
+  box.className='card';
+  box.style.cssText='margin-top:16px;padding:16px';
+
+  if(s.featuredPromoEnabled!==true){
+    box.innerHTML=`
+      <div class="section-title">
+        <div>
+          <h3>⭐ Publicación destacada</h3>
+          <small class="muted">Promoción paga administrada por FiestaControl.</small>
+        </div>
+      </div>
+      <div class="admin-notice">
+        <span>🔒</span>
+        <div>
+          <b>Opción no habilitada</b>
+          <small>Consultá con el administrador de FiestaControl para contratar una publicación destacada.</small>
+        </div>
+      </div>`;
+    content.appendChild(box);
+    return;
+  }
+
+  box.innerHTML=`
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap">
+      <div>
+        <h3 style="margin:0 0 4px">⭐ Publicación destacada</h3>
+        <small class="muted">Tu salón está habilitado para publicar una promoción destacada paga.</small>
+      </div>
+      <span style="font-size:12px;font-weight:800;padding:6px 10px;border-radius:999px;background:${promoEligible89(s)?'#ecfdf5':'#f3f4f6'}">
+        ${promoEligible89(s)?'PUBLICADA':'HABILITADA'}
+      </span>
+    </div>
+
+    ${s.featuredPromoImage?`
+      <div style="margin-top:12px;border-radius:14px;overflow:hidden;max-width:460px">
+        <img src="${s.featuredPromoImage}" style="width:100%;max-height:210px;object-fit:cover;display:block">
+      </div>`:''}
+
+    ${s.featuredPromoTitle?`
+      <div style="margin-top:12px">
+        <b style="font-size:18px">${esc89(s.featuredPromoTitle)}</b>
+        ${s.featuredPromoPrice?`<strong style="display:block;margin-top:4px">${esc89(s.featuredPromoPrice)}</strong>`:''}
+        ${s.featuredPromoText?`<p style="margin:6px 0 0">${esc89(s.featuredPromoText)}</p>`:''}
+        ${s.featuredPromoValidUntil?`<small class="muted">Vigente hasta ${esc89(s.featuredPromoValidUntil)}</small>`:''}
+      </div>`:''}
+
+    <div style="margin-top:14px">
+      <button class="primary" onclick="openFeaturedPromo89()">
+        ${s.featuredPromoTitle?'Editar publicación':'Cargar publicación'}
+      </button>
+    </div>`;
+
+  content.appendChild(box);
+}
+window.renderFeaturedPromoPanel89=renderFeaturedPromoPanel89;
+
+window.openFeaturedPromo89=function(){
+  const s=currentSalon89();
+  if(!s || s.featuredPromoEnabled!==true){
+    return toast('Esta opción debe ser habilitada por el administrador');
+  }
+
+  showModal(`
+    <div class="modal-title">
+      <div>
+        <h2>⭐ Publicación destacada</h2>
+        <p>Esta promoción aparecerá en la pantalla principal de FiestaControl.</p>
+      </div>
+      <button class="ghost small" type="button" onclick="closeModal()">✕</button>
+    </div>
+
+    <form id="promo89">
+      <div class="form-grid">
+        <div class="field span2">
+          <label>Título llamativo</label>
+          <input name="title" maxlength="80" required value="${esc89(s.featuredPromoTitle||'')}" placeholder="Ej.: 20% OFF en fiestas de domingo">
+        </div>
+
+        <div class="field">
+          <label>Precio / beneficio</label>
+          <input name="price" maxlength="60" value="${esc89(s.featuredPromoPrice||'')}" placeholder="Ej.: Desde $450.000">
+        </div>
+
+        <div class="field">
+          <label>Vigente hasta</label>
+          <input name="validUntil" type="date" value="${esc89(s.featuredPromoValidUntil||'')}">
+        </div>
+
+        <div class="field span2">
+          <label>Texto de venta</label>
+          <textarea name="text" maxlength="350" placeholder="Contá qué incluye y por qué conviene reservar">${esc89(s.featuredPromoText||'')}</textarea>
+        </div>
+
+        <div class="field span2">
+          <label>Imagen principal</label>
+          <input id="promo89img" type="file" accept="image/*">
+          ${s.featuredPromoImage
+            ? `<img id="promo89preview" src="${s.featuredPromoImage}" style="display:block;margin-top:8px;width:100%;max-width:420px;max-height:220px;object-fit:cover;border-radius:12px">`
+            : `<img id="promo89preview" style="display:none;margin-top:8px;width:100%;max-width:420px;max-height:220px;object-fit:cover;border-radius:12px">`
+          }
+        </div>
+
+        <div class="field span2">
+          <label style="display:flex;align-items:center;gap:9px">
+            <input name="active" type="checkbox" ${s.featuredPromoActive===true?'checked':''}>
+            <span><b>Publicar ahora</b><br><small>La publicación debe estar habilitada por el administrador.</small></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="ghost" onclick="closeModal()">Cancelar</button>
+        <button class="primary">Guardar publicación</button>
+      </div>
+    </form>`);
+
+  let img=s.featuredPromoImage||'';
+  const input=document.querySelector('#promo89img');
+  input.onchange=e=>{
+    const f=e.target.files?.[0];
+    if(!f)return;
+    const r=new FileReader();
+    r.onload=()=>{
+      img=r.result;
+      const p=document.querySelector('#promo89preview');
+      p.src=img;
+      p.style.display='block';
+    };
+    r.readAsDataURL(f);
+  };
+
+  document.querySelector('#promo89').onsubmit=e=>{
+    e.preventDefault();
+    const fd=new FormData(e.target);
+    s.featuredPromoTitle=String(fd.get('title')||'').trim();
+    s.featuredPromoPrice=String(fd.get('price')||'').trim();
+    s.featuredPromoText=String(fd.get('text')||'').trim();
+    s.featuredPromoValidUntil=String(fd.get('validUntil')||'');
+    s.featuredPromoImage=img;
+    s.featuredPromoActive=e.target.elements.active.checked && s.featuredPromoEnabled===true;
+    s.featuredPromoUpdatedAt=new Date().toISOString();
+    save();
+    closeModal();
+    renderSalonShell();
+    toast('Publicación destacada guardada');
+  };
+};
+
+// ------------------------------------------------------------
+// PANTALLA PRINCIPAL: bloque grande y llamativo de promociones
+// ------------------------------------------------------------
+function featuredSection89(){
+  const list=(data.salons||[])
+    .filter(promoEligible89)
+    .sort((a,b)=>String(b.featuredPromoUpdatedAt||'').localeCompare(String(a.featuredPromoUpdatedAt||'')));
+
+  if(!list.length)return '';
+
+  return `
+    <section class="v89-featured" style="margin-top:18px">
+      <div class="card" style="padding:18px;background:linear-gradient(135deg,#fff7ed,#f5f3ff);border:1px solid #ede9fe">
+        <div style="display:flex;justify-content:space-between;align-items:end;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+          <div>
+            <span style="font-size:11px;font-weight:900;letter-spacing:.08em">⭐ PROMOS DESTACADAS</span>
+            <h2 style="margin:4px 0 0">Ofertas especiales de nuestros salones</h2>
+          </div>
+          <small class="muted">Publicaciones promocionadas</small>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px">
+          ${list.slice(0,6).map(s=>`
+            <article class="card" style="padding:0;overflow:hidden;border:2px solid rgba(114,87,255,.16);box-shadow:0 10px 30px rgba(30,41,59,.08)">
+              ${s.featuredPromoImage
+                ? `<img src="${s.featuredPromoImage}" alt="${esc89(s.featuredPromoTitle)}" style="width:100%;height:180px;object-fit:cover;display:block">`
+                : `<div style="height:130px;display:flex;align-items:center;justify-content:center;font-size:52px;background:#ede9fe">🎉</div>`}
+              <div style="padding:14px">
+                <span style="display:inline-block;font-size:10px;font-weight:900;padding:5px 8px;border-radius:999px;background:#fee2e2">DESTACADO</span>
+                <h3 style="margin:8px 0 3px">${esc89(s.featuredPromoTitle)}</h3>
+                <b>${esc89(s.name||'Salón')}</b>
+                ${s.zone?`<small class="muted" style="display:block;margin-top:3px">📍 ${esc89(s.zone)}</small>`:''}
+                ${s.featuredPromoPrice?`<div style="font-size:20px;font-weight:900;margin-top:9px">${esc89(s.featuredPromoPrice)}</div>`:''}
+                ${s.featuredPromoText?`<p style="margin:8px 0 0;line-height:1.45">${esc89(s.featuredPromoText)}</p>`:''}
+                ${s.featuredPromoValidUntil?`<small class="muted" style="display:block;margin-top:8px">Vigente hasta ${esc89(s.featuredPromoValidUntil)}</small>`:''}
+                <button class="primary w100" style="margin-top:12px" onclick="renderPublicSalonPage('${esc89(s.id)}')">Ver salón</button>
+              </div>
+            </article>
+          `).join('')}
+        </div>
+      </div>
+    </section>`;
+}
+
+const prevHome89=window.renderPublicHome;
+renderPublicHome=function(){
+  prevHome89();
+
+  setTimeout(()=>{
+    const home=document.querySelector('.fc-home');
+    if(!home)return;
+    home.querySelector('.v89-featured')?.remove();
+
+    const features=home.querySelector('.fc-home-features');
+    const wrap=document.createElement('div');
+    wrap.innerHTML=featuredSection89();
+    const section=wrap.firstElementChild;
+    if(section){
+      if(features) home.insertBefore(section,features);
+      else home.appendChild(section);
+    }
+  },0);
+};
+window.renderPublicHome=renderPublicHome;
+
+// También al entrar a "Ver salones", arriba del listado.
+const prevDir89=window.renderPublicSalonDirectory;
+if(typeof prevDir89==='function'){
+  window.renderPublicSalonDirectory=function(){
+    const r=prevDir89();
+    setTimeout(()=>{
+      const results=document.querySelector('#v27-results');
+      if(!results)return;
+      document.querySelector('#v89-directory-featured')?.remove();
+      const html=featuredSection89();
+      if(!html)return;
+      const wrap=document.createElement('div');
+      wrap.id='v89-directory-featured';
+      wrap.innerHTML=html;
+      results.parentElement.insertBefore(wrap,results);
+    },0);
+    return r;
+  };
+}
+
+// Asegura que Mi salón muestre el panel final V89
+const route89=renderSalonView;
+renderSalonView=function(){
+  const r=route89();
+  if(view==='profile'){
+    setTimeout(renderFeaturedPromoPanel89,0);
+    setTimeout(renderFeaturedPromoPanel89,100);
+  }
+  return r;
+};
+
+})();
+
