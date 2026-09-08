@@ -1,6 +1,1244 @@
 <!doctype html>
 <html lang="es"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>FiestaControl · V102</title><link rel="stylesheet" href="style.css?v=102"/></head>
+<title>FiestaControl · V111</title><link rel="stylesheet" href="style.css?v=110"/></head>
 <body><div id="app"></div><dialog id="modal"><div id="modal-body"></div></dialog><div id="toast" class="toast"></div>
-<script src="/api/bootstrap.js?v=102"></script><script src="app.js?v=102"></script><script src="enhancements.js?v=102"></script>
-<script src="admin_messages_fix_v85.js?v=100"></script><script src="fiestacontrol_v102.js?v=102"></script></body></html>
+<script src="/api/bootstrap.js?v=110"></script><script src="app.js?v=110"></script><script src="enhancements.js?v=110"></script>
+<script>
+
+(function(){
+'use strict';
+
+/* ==========================================================
+   FIESTACONTROL V110 - NÚCLEO INTEGRAL
+   - Un solo render final de Finanzas
+   - Movimientos manuales asociados opcionalmente a una fiesta
+   - Revisión de cobros/señas/saldos antes de mostrar contabilidad
+   - Tablero por medio de pago
+   - Publicidad destacada visible en la portada pública
+   - Apariencia pública más festiva + música opcional
+   ========================================================== */
+
+const fc110Q=(s,r=document)=>r.querySelector(s);
+const fc110QA=(s,r=document)=>Array.from(r.querySelectorAll(s));
+const fc110N=v=>Number(v||0);
+const fc110Sid=()=>session?.salonId;
+const fc110Esc=v=>String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const fc110Money=v=>{
+  try{return money(fc110N(v))}
+  catch(_){return '$ '+fc110N(v).toLocaleString('es-AR')}
+};
+const fc110Norm=v=>String(v||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+
+function fc110Toast(msg){
+  try{toast(msg)}catch(_){alert(msg)}
+}
+function fc110Modal(html){
+  const d=fc110Q('#modal'), b=fc110Q('#modal-body');
+  if(!d||!b){alert('No se encontró la ventana del sistema.');return false}
+  b.innerHTML=html;
+  try{ if(!d.open)d.showModal(); }catch(_){d.setAttribute('open','open')}
+  return true;
+}
+function fc110Close(){
+  const d=fc110Q('#modal');
+  if(!d)return;
+  try{d.close()}catch(_){d.removeAttribute('open')}
+}
+async function fc110GetState(){
+  const r=await fetch('/api/data',{cache:'no-store'});
+  if(!r.ok)throw new Error('No se pudo leer la base de datos');
+  const j=await r.json();
+  return j?.data||j;
+}
+function fc110UseState(st){
+  if(!st||typeof st!=='object')return;
+  Object.keys(data).forEach(k=>delete data[k]);
+  Object.assign(data,st);
+}
+async function fc110PutState(st){
+  const r=await fetch('/api/data',{
+    method:'PUT',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(st),
+    cache:'no-store'
+  });
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok||j.ok===false)throw new Error(j.error||'No se pudo guardar en el servidor');
+  return j;
+}
+async function fc110Post(url,body){
+  const r=await fetch(url,{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(body),
+    cache:'no-store'
+  });
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok||j.ok===false)throw new Error(j.error||('HTTP '+r.status));
+  if(j.state)fc110UseState(j.state);
+  return j;
+}
+
+/* ==========================
+   CONTABILIDAD Y RESERVAS
+   ========================== */
+
+function fc110SalonEvents(){
+  return (data.events||[]).filter(e=>String(e.salonId)===String(fc110Sid()) && e.status!=='Cancelada');
+}
+function fc110SalonMovements(){
+  return (data.movements||[]).filter(m=>String(m.salonId)===String(fc110Sid()));
+}
+function fc110IsIncome(m){
+  const t=fc110Norm(m?.type), c=fc110Norm(m?.category);
+  return t==='ingreso'||t==='cobro'||c.includes('cobro')||c.includes('sena');
+}
+function fc110IsExpense(m){
+  const t=fc110Norm(m?.type);
+  return t==='gasto'||t==='egreso';
+}
+function fc110IsDeposit(m){
+  const c=fc110Norm(m?.category), x=fc110Norm(m?.concept), k=String(m?.sourceKey||'').toLowerCase();
+  return c.includes('sena')||x.includes('sena')||k.includes('deposit');
+}
+function fc110EventPayments(e){
+  const all=fc110SalonMovements().filter(m=>String(m.eventId||'')===String(e.id) && fc110IsIncome(m));
+  const seen=new Set();
+  return all.filter(m=>{
+    const key=String(m.sourceKey||m.id||[
+      fc110N(m.amount),fc110Norm(m.method),m.movementDate||'',fc110Norm(m.concept)
+    ].join('|'));
+    if(seen.has(key))return false;
+    seen.add(key);return true;
+  });
+}
+function fc110EventFigures(e){
+  const base=fc110N(e.basePrice);
+  const extras=fc110N(e.extrasTotal);
+  const stock=fc110N(e.stockItemsTotal);
+  const staffClient=fc110N(e.staffClientChargeTotal);
+  const computed=base+extras+stock+staffClient;
+  const total=computed>0?computed:fc110N(e.total);
+
+  const pays=fc110EventPayments(e);
+  let paid=pays.reduce((s,m)=>s+fc110N(m.amount),0);
+
+  // Si no hay movimientos históricos pero sí paid/seña, no se pierde el dato.
+  if(paid<=0)paid=fc110N(e.paid||e.deposit);
+  paid=Math.min(Math.max(0,paid),Math.max(total,paid));
+  const balance=Math.max(0,total-paid);
+
+  return {base,extras,stock,staffClient,total,paid,balance,pays};
+}
+
+/* Revisión conservadora: no borra movimientos del usuario.
+   Corrige total/paid/balance y genera una seña SOLO si falta por completo. */
+function fc110AuditAccounting(saveChanges=false){
+  data.movements=Array.isArray(data.movements)?data.movements:[];
+  let changes=0, warnings=[];
+
+  for(const e of fc110SalonEvents()){
+    // Reutilizar la normalización V47 cuando existe porque ya conoce datos históricos.
+    try{
+      if(typeof window.normalizeAllPayments47==='function'){
+        // Se ejecuta una vez por auditoría, no en loop visual.
+      }
+    }catch(_){}
+
+    const existingDeposit=data.movements.some(m=>
+      String(m.salonId)===String(fc110Sid()) &&
+      String(m.eventId||'')===String(e.id) &&
+      fc110IsDeposit(m)
+    );
+    const dep=fc110N(e.deposit);
+    if(dep>0 && !existingDeposit){
+      data.movements.push({
+        id:'dep110_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
+        salonId:fc110Sid(),
+        eventId:e.id,
+        sourceKey:'v110:deposit:'+e.id,
+        type:'Ingreso',
+        category:'Seña',
+        concept:'Seña de reserva '+(e.eventName||e.child||e.client||''),
+        amount:dep,
+        method:e.depositMethod||'No especificado',
+        movementDate:e.depositDate||String(e.createdAt||'').slice(0,10)||new Date().toISOString().slice(0,10),
+        createdAt:new Date().toISOString()
+      });
+      changes++;
+    }
+
+    const f=fc110EventFigures(e);
+    if(fc110N(e.total)!==f.total){e.total=f.total;changes++}
+    if(fc110N(e.paid)!==f.paid){e.paid=f.paid;changes++}
+    if(fc110N(e.balance)!==f.balance){e.balance=f.balance;changes++}
+
+    if(f.paid>f.total && f.total>0)warnings.push('Cobrado por encima del total: '+(e.eventName||e.child||e.client||e.id));
+  }
+
+  // Compras pagadas de proveedor: un solo egreso por compra.
+  for(const p of (data.stockPurchases||[])){
+    if(String(p.salonId)!==String(fc110Sid()))continue;
+    const status=fc110Norm(p.paymentStatus);
+    const paid=status.includes('pag')||fc110N(p.paidAmount)>0||fc110N(p.amountPaid)>0;
+    if(!paid)continue;
+    const key='v110:purchase:'+p.id;
+    const exists=data.movements.some(m=>String(m.sourceKey||'')===key);
+    if(exists)continue;
+    const amount=fc110N(p.paidAmount||p.amountPaid||p.total||p.totalAmount);
+    if(amount>0){
+      data.movements.push({
+        id:'exp110_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
+        salonId:fc110Sid(),
+        sourceKey:key,
+        type:'Gasto',
+        category:'Compra a proveedor',
+        concept:p.productName||p.detail||'Compra a proveedor',
+        amount,
+        method:p.paymentMethod||'No especificado',
+        movementDate:String(p.paymentDate||p.paidAt||new Date().toISOString()).slice(0,10),
+        createdAt:new Date().toISOString()
+      });
+      changes++;
+    }
+  }
+
+  if(saveChanges && changes){
+    try{save()}catch(_){}
+  }
+  return {changes,warnings};
+}
+
+async function fc110SaveMovement(movement){
+  // Primero endpoint atómico existente.
+  try{
+    const out=await fc110Post('/api/finance-v94',{
+      action:'add',salonId:fc110Sid(),movement
+    });
+    if((out.state?.movements||[]).some(x=>String(x.id)===String(movement.id))){
+      return out.state;
+    }
+  }catch(err){
+    console.warn('V110 endpoint financiero:',err);
+  }
+
+  // Fallback seguro sobre el estado más nuevo.
+  const st=await fc110GetState();
+  st.movements=Array.isArray(st.movements)?st.movements:[];
+  if(!st.movements.some(x=>String(x.id)===String(movement.id)))st.movements.push(movement);
+  await fc110PutState(st);
+  const verify=await fc110GetState();
+  if(!(verify.movements||[]).some(x=>String(x.id)===String(movement.id))){
+    throw new Error('El servidor no confirmó el movimiento');
+  }
+  fc110UseState(verify);
+  return verify;
+}
+
+function fc110OpenManualMovement(expense=false){
+  const events=fc110SalonEvents().slice().sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
+  if(!fc110Modal(`
+    <div class="modal-title">
+      <div><h2>${expense?'Registrar egreso':'Ingresar dinero'}</h2>
+      <p>${expense?'Salida de dinero del salón':'Entrada de dinero al salón'}</p></div>
+      <button type="button" class="ghost small" id="fc110-close">✕</button>
+    </div>
+    <form id="fc110-money-form">
+      <div class="form-grid">
+        <div class="field"><label>Concepto</label>
+          <select name="category">
+            ${expense
+              ? '<option>Compra general</option><option>Servicio</option><option>Pago a proveedor</option><option>Gasto operativo</option><option>Personal</option><option>Otro egreso</option>'
+              : '<option>Monto inicial</option><option>Cobro general</option><option>Aporte del salón</option><option>Otro ingreso</option>'}
+          </select>
+        </div>
+        <div class="field"><label>Importe</label><input name="amount" type="number" min="1" step="0.01" required></div>
+        <div class="field"><label>Medio de pago</label>
+          <select name="method"><option>Efectivo</option><option>Transferencia</option><option>Mercado Pago</option><option>Tarjeta</option><option>Otro</option></select>
+        </div>
+        <div class="field"><label>Fecha</label><input name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required></div>
+        <div class="field span2"><label>Asociar a una fiesta (opcional)</label>
+          <select name="eventId"><option value="">Movimiento general del salón</option>
+            ${events.map(e=>`<option value="${fc110Esc(e.id)}">${fc110Esc(e.date||'')} · ${fc110Esc(e.eventName||e.child||e.client||'Fiesta')}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field span2"><label>Detalle</label><input name="detail" maxlength="180"></div>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="ghost" id="fc110-cancel">Cancelar</button>
+        <button type="submit" class="${expense?'danger':'primary'}">${expense?'Guardar egreso':'Guardar ingreso'}</button>
+      </div>
+    </form>`))return;
+
+  fc110Q('#fc110-close').onclick=fc110Close;
+  fc110Q('#fc110-cancel').onclick=fc110Close;
+  const form=fc110Q('#fc110-money-form');
+  form.onsubmit=async ev=>{
+    ev.preventDefault();
+    const fd=new FormData(form), amount=fc110N(fd.get('amount'));
+    if(amount<=0)return fc110Toast('Ingresá un importe válido');
+    const movement={
+      id:'mov110_'+Date.now()+'_'+Math.random().toString(36).slice(2,8),
+      salonId:fc110Sid(),
+      eventId:String(fd.get('eventId')||''),
+      sourceKey:'v110:manual:'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
+      type:expense?'Gasto':'Ingreso',
+      category:String(fd.get('category')||''),
+      concept:String(fd.get('detail')||'').trim()||String(fd.get('category')||''),
+      amount,
+      method:String(fd.get('method')||''),
+      movementDate:String(fd.get('date')||''),
+      manualMovement:true,
+      createdAt:new Date().toISOString()
+    };
+    const btn=form.querySelector('[type=submit]');
+    btn.disabled=true;btn.textContent='Guardando...';
+    try{
+      const st=await fc110SaveMovement(movement);
+      fc110UseState(st);
+      fc110AuditAccounting(false);
+      fc110Close();
+      fc110Toast(expense?'Egreso guardado correctamente':'Ingreso guardado correctamente');
+      fc110RenderFinance();
+    }catch(err){
+      btn.disabled=false;btn.textContent=expense?'Guardar egreso':'Guardar ingreso';
+      fc110Toast('No se pudo guardar: '+err.message);
+    }
+  };
+}
+
+async function fc110ResetFinance(){
+  if(!confirm('¿Poner la contabilidad del salón en $0? Se mantienen salones, proveedores, reservas, personal, productos y stock.'))return;
+  try{
+    let done=false;
+    try{
+      const out=await fc110Post('/api/finance-v94',{action:'reset',salonId:fc110Sid()});
+      if(out.state){fc110UseState(out.state);done=true}
+    }catch(_){}
+    if(!done){
+      const st=await fc110GetState();
+      st.movements=(st.movements||[]).filter(m=>String(m.salonId)!==String(fc110Sid()));
+      st.providerPayments=(st.providerPayments||[]).filter(m=>String(m.salonId)!==String(fc110Sid()));
+      st.servicePayments=(st.servicePayments||[]).filter(m=>String(m.salonId)!==String(fc110Sid()));
+      for(const e of (st.events||[])){
+        if(String(e.salonId)!==String(fc110Sid()))continue;
+        e.deposit=0;e.paid=0;e.balance=fc110N(e.total);
+        e.depositMethod='';e.depositDate='';
+      }
+      await fc110PutState(st);fc110UseState(await fc110GetState());
+    }
+    fc110Toast('Contabilidad reiniciada en $0');
+    fc110RenderFinance();
+  }catch(err){fc110Toast('No se pudo reiniciar: '+err.message)}
+}
+
+function fc110RenderFinance(){
+  if(session?.role!=='salon'||view!=='finance')return;
+  const c=fc110Q('#content');if(!c)return;
+
+  const audit=fc110AuditAccounting(false);
+  const movements=fc110SalonMovements().slice().sort((a,b)=>
+    String(b.movementDate||b.createdAt||'').localeCompare(String(a.movementDate||a.createdAt||''))
+  );
+  const incomes=movements.filter(fc110IsIncome);
+  const expenses=movements.filter(fc110IsExpense);
+  const totalIn=incomes.reduce((s,m)=>s+fc110N(m.amount),0);
+  const totalOut=expenses.reduce((s,m)=>s+fc110N(m.amount),0);
+  const byMethod={Efectivo:0,Transferencia:0,'Mercado Pago':0,Tarjeta:0,Otro:0};
+  incomes.forEach(m=>{
+    const x=fc110Norm(m.method);
+    const k=x.includes('efect')?'Efectivo':
+      x.includes('transfer')?'Transferencia':
+      x.includes('mercado')?'Mercado Pago':
+      x.includes('tarjet')?'Tarjeta':'Otro';
+    byMethod[k]+=fc110N(m.amount);
+  });
+
+  const events=fc110SalonEvents().map(e=>({e,f:fc110EventFigures(e)}));
+  const booked=events.reduce((s,x)=>s+x.f.total,0);
+  const paid=events.reduce((s,x)=>s+x.f.paid,0);
+  const pending=events.reduce((s,x)=>s+x.f.balance,0);
+
+  c.innerHTML=`
+    <div id="fc110-finance">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+        <div>
+          <h2 style="margin:0">Finanzas</h2>
+          <small class="muted">Control integral de caja, reservas y medios de pago.</small>
+        </div>
+        <b style="color:#7257ff">CONTROL V110</b>
+      </div>
+
+      <div class="toolbar" style="margin-bottom:14px">
+        <button class="primary" id="fc110-income">+ Ingresar dinero</button>
+        <button class="danger" id="fc110-expense">- Registrar egreso</button>
+        <button class="secondary" id="fc110-reset">💰 Poner movimientos en $0</button>
+      </div>
+
+      <div class="grid stats">
+        <div class="card stat"><small>Ingresos de caja</small><strong>${fc110Money(totalIn)}</strong><em>Movimientos registrados</em></div>
+        <div class="card stat"><small>Egresos de caja</small><strong>${fc110Money(totalOut)}</strong><em>Compras y gastos</em></div>
+        <div class="card stat"><small>Resultado de caja</small><strong>${fc110Money(totalIn-totalOut)}</strong><em>Ingresos - egresos</em></div>
+        <div class="card stat"><small>Saldo por cobrar</small><strong>${fc110Money(pending)}</strong><em>Reservas activas</em></div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="section-title"><div><h3>💳 Caja por medio de pago</h3><small class="muted">Todo ingreso va a su casillero.</small></div></div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">
+          ${Object.entries(byMethod).map(([k,v])=>`
+            <div style="border:1px solid #e5e7eb;border-radius:12px;padding:13px">
+              <small>${fc110Esc(k)}</small><strong style="display:block;font-size:20px">${fc110Money(v)}</strong>
+            </div>`).join('')}
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="section-title"><div><h3>🎉 Control económico de reservas</h3><small class="muted">Total contratado, abonado y pendiente por fiesta.</small></div></div>
+        ${events.length?`<div class="table-wrap"><table class="table"><thead><tr>
+          <th>Fecha</th><th>Fiesta</th><th>Base</th><th>Adicionales</th><th>Stock</th><th>Cargos personal</th><th>Total</th><th>Pagado</th><th>Saldo</th>
+        </tr></thead><tbody>
+          ${events.map(({e,f})=>`<tr>
+            <td>${fc110Esc(e.date||'')}</td>
+            <td><b>${fc110Esc(e.eventName||e.child||e.client||'Fiesta')}</b></td>
+            <td>${fc110Money(f.base)}</td><td>${fc110Money(f.extras)}</td><td>${fc110Money(f.stock)}</td>
+            <td>${fc110Money(f.staffClient)}</td><td><b>${fc110Money(f.total)}</b></td>
+            <td>${fc110Money(f.paid)}</td><td><b>${fc110Money(f.balance)}</b></td>
+          </tr>`).join('')}
+        </tbody><tfoot><tr><th colspan="6">TOTAL</th><th>${fc110Money(booked)}</th><th>${fc110Money(paid)}</th><th>${fc110Money(pending)}</th></tr></tfoot></table></div>`:
+        '<div class="empty">No hay reservas activas.</div>'}
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="section-title"><div><h3>📒 Libro de movimientos</h3><small class="muted">Cada entrada y salida con su fiesta y medio de pago.</small></div></div>
+        ${movements.length?`<div class="table-wrap"><table class="table"><thead><tr>
+          <th>Fecha</th><th>Tipo</th><th>Categoría</th><th>Fiesta</th><th>Detalle</th><th>Medio</th><th>Importe</th>
+        </tr></thead><tbody>
+          ${movements.map(m=>{
+            const ev=(data.events||[]).find(e=>String(e.id)===String(m.eventId||''));
+            return `<tr><td>${fc110Esc(m.movementDate||'')}</td><td>${fc110Esc(m.type||'')}</td>
+              <td>${fc110Esc(m.category||'')}</td><td>${fc110Esc(ev?(ev.eventName||ev.child||ev.client||'Fiesta'):'General')}</td>
+              <td>${fc110Esc(m.concept||'')}</td><td>${fc110Esc(m.method||'')}</td>
+              <td><b>${fc110Money(m.amount)}</b></td></tr>`;
+          }).join('')}
+        </tbody></table></div>`:'<div class="empty">Todavía no hay movimientos.</div>'}
+      </div>
+
+      ${audit.warnings.length?`<div class="card" style="margin-top:16px;border-color:#f59e0b"><b>⚠️ Revisión contable</b><p>${audit.warnings.map(fc110Esc).join('<br>')}</p></div>`:''}
+    </div>`;
+
+  fc110Q('#fc110-income').onclick=()=>fc110OpenManualMovement(false);
+  fc110Q('#fc110-expense').onclick=()=>fc110OpenManualMovement(true);
+  fc110Q('#fc110-reset').onclick=fc110ResetFinance;
+}
+
+/* Ruta final: Finanzas ya no pasa por V33/V36/V38/V47/V52. */
+const fc110PreviousSalonView=renderSalonView;
+renderSalonView=function(){
+  if(view==='finance')return fc110RenderFinance();
+  return fc110PreviousSalonView();
+};
+
+/* Antes de abrir una fiesta/pago, sincroniza los números sin redibujar la pantalla. */
+const fc110PrevOpenEvent=window.openEvent;
+window.openEvent=function(eid){
+  try{fc110AuditAccounting(false)}catch(_){}
+  return typeof fc110PrevOpenEvent==='function'?fc110PrevOpenEvent(eid):undefined;
+};
+const fc110PrevPayment=window.openPayment;
+window.openPayment=function(eid){
+  try{fc110AuditAccounting(false)}catch(_){}
+  return typeof fc110PrevPayment==='function'?fc110PrevPayment(eid):undefined;
+};
+
+/* ==========================
+   PUBLICACIÓN DESTACADA
+   ========================== */
+
+function fc110Bool(v){return v===true||String(v).toLowerCase()==='true'||String(v)==='1'}
+function fc110PromoFields(s){
+  return {
+    enabled:fc110Bool(s.featuredPromoEnabled)||fc110Bool(s.publicPromoEnabled),
+    active:s.featuredPromoActive!==false && String(s.featuredPromoActive)!=='false' ||
+           fc110Bool(s.publicPromoActive),
+    title:String(s.featuredPromoTitle||s.publicPromoTitle||'').trim(),
+    price:String(s.featuredPromoPrice||s.publicPromoPrice||'').trim(),
+    text:String(s.featuredPromoText||s.publicPromoText||'').trim(),
+    image:String(s.featuredPromoImage||s.publicPromoImage||''),
+    until:String(s.featuredPromoValidUntil||s.publicPromoValidUntil||'')
+  };
+}
+function fc110VisiblePromo(s){
+  const p=fc110PromoFields(s);
+  if(!p.enabled||!p.title)return false;
+  if(p.until && new Date(p.until+'T23:59:59')<new Date())return false;
+  // Si el salón ya cargó la publicación, se muestra. No se cobra una promo invisible.
+  return true;
+}
+let fc110PromoPopupKey='';
+
+async function fc110RenderPublicPromos(){
+  if(session)return;
+  let st;
+  try{st=await fc110GetState()}catch(_){return}
+  const promos=(st.salons||[]).filter(fc110VisiblePromo);
+  fc110Q('#fc110-public-promos')?.remove();
+  if(!promos.length)return;
+
+  const sec=document.createElement('section');
+  sec.id='fc110-public-promos';
+  sec.className='fc110-public-promos';
+  sec.innerHTML=`
+    <div class="fc110-promo-wrap">
+      <div class="fc110-promo-head">
+        <div><span>⭐ PROMOCIONES DESTACADAS</span><h2>Beneficios especiales para tu próxima fiesta</h2>
+        <p>Estas publicaciones fueron destacadas por los salones en FiestaControl.</p></div>
+      </div>
+      <div class="fc110-promo-grid">
+        ${promos.map(s=>{
+          const p=fc110PromoFields(s);
+          return `<article class="fc110-promo-card">
+            ${p.image?`<img src="${p.image}" alt="${fc110Esc(p.title)}">`:`<div class="fc110-promo-placeholder">🎈🎉🎁</div>`}
+            <div class="fc110-promo-body">
+              <span class="fc110-badge">⭐ DESTACADA</span>
+              <h3>${fc110Esc(p.title)}</h3>
+              <b>${fc110Esc(s.name||'Salón')}</b>
+              ${p.price?`<strong>${fc110Esc(p.price)}</strong>`:''}
+              ${p.text?`<p>${fc110Esc(p.text)}</p>`:''}
+              ${p.until?`<small>Vigente hasta ${fc110Esc(p.until)}</small>`:''}
+              <button class="primary w100 fc110-view-salon" data-id="${fc110Esc(s.id)}">Ver salón y promoción</button>
+            </div>
+          </article>`;
+        }).join('')}
+      </div>
+    </div>`;
+
+  sec.querySelectorAll('.fc110-view-salon').forEach(b=>b.onclick=()=>{
+    const id=b.dataset.id;
+    if(typeof renderPublicSalonPage==='function')renderPublicSalonPage(id);
+  });
+
+  const home=fc110Q('.fc-home'), results=fc110Q('#v27-results'), app=fc110Q('#app');
+  if(home){
+    const hero=fc110Q('.fc-home-hero',home);
+    hero?hero.insertAdjacentElement('afterend',sec):home.prepend(sec);
+  }else if(results){
+    results.parentElement.insertBefore(sec,results);
+  }else if(app&&!fc110Q('.sidebar')){
+    app.appendChild(sec);
+  }
+
+  const s=promos[0], p=fc110PromoFields(s);
+  const key=String(s.id)+'|'+p.title+'|'+String(s.featuredPromoUpdatedAt||'');
+  if(fc110PromoPopupKey!==key && !fc110Q('#fc110-promo-popup')){
+    fc110PromoPopupKey=key;
+    const overlay=document.createElement('div');
+    overlay.id='fc110-promo-popup';
+    overlay.className='fc110-promo-overlay';
+    overlay.innerHTML=`
+      <div class="fc110-promo-modal">
+        ${p.image?`<img src="${p.image}" alt="${fc110Esc(p.title)}">`:`<div class="fc110-promo-modal-placeholder">🎈 🎉 🎁</div>`}
+        <div class="fc110-promo-modal-body">
+          <span class="fc110-badge">⭐ PUBLICACIÓN DESTACADA</span>
+          <h2>${fc110Esc(p.title)}</h2>
+          <h3>${fc110Esc(s.name||'Salón')}</h3>
+          ${p.price?`<strong>${fc110Esc(p.price)}</strong>`:''}
+          ${p.text?`<p>${fc110Esc(p.text)}</p>`:''}
+          <div class="fc110-modal-actions">
+            <button class="ghost" id="fc110-promo-close">Seguir mirando</button>
+            <button class="primary" id="fc110-promo-open">Ver esta promoción</button>
+          </div>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    fc110Q('#fc110-promo-close').onclick=()=>overlay.remove();
+    fc110Q('#fc110-promo-open').onclick=()=>{
+      overlay.remove();
+      if(typeof renderPublicSalonPage==='function')renderPublicSalonPage(s.id);
+    };
+  }
+}
+
+/* ==========================
+   PORTADA FESTIVA
+   ========================== */
+
+function fc110DecoratePublic(){
+  if(session)return;
+  if(document.body.classList.contains('fc110-party'))return;
+  document.body.classList.add('fc110-party');
+
+  const app=fc110Q('#app');
+  if(!app)return;
+  const deco=document.createElement('div');
+  deco.id='fc110-confetti';
+  deco.innerHTML='<i>🎈</i><i>🎉</i><i>✨</i><i>🎁</i><i>🎊</i><i>🎈</i>';
+  document.body.appendChild(deco);
+
+  const music=document.createElement('button');
+  music.id='fc110-music';
+  music.type='button';
+  music.textContent='🎵 Música';
+  music.title='Activar música festiva';
+  music.onclick=fc110PlayMusic;
+  document.body.appendChild(music);
+}
+
+let fc110AudioCtx=null;
+function fc110PlayMusic(){
+  try{
+    const AC=window.AudioContext||window.webkitAudioContext;
+    if(!AC)return fc110Toast('Este navegador no permite audio aquí');
+    fc110AudioCtx=fc110AudioCtx||new AC();
+    const ctx=fc110AudioCtx, now=ctx.currentTime;
+    const notes=[523.25,659.25,783.99,659.25,698.46,783.99,1046.5];
+    notes.forEach((freq,i)=>{
+      const o=ctx.createOscillator(), g=ctx.createGain();
+      o.type='sine';o.frequency.value=freq;
+      g.gain.setValueAtTime(0.0001,now+i*.18);
+      g.gain.exponentialRampToValueAtTime(.07,now+i*.18+.02);
+      g.gain.exponentialRampToValueAtTime(.0001,now+i*.18+.16);
+      o.connect(g);g.connect(ctx.destination);o.start(now+i*.18);o.stop(now+i*.18+.17);
+    });
+    fc110Q('#fc110-music').textContent='🎵 FiestaControl';
+  }catch(_){}
+}
+
+/* CSS V110 */
+const fc110Style=document.createElement('style');
+fc110Style.textContent=`
+.fc110-public-promos{max-width:1460px;margin:22px auto 30px;padding:0 18px}
+.fc110-promo-wrap{background:linear-gradient(135deg,#fff7ed,#f5f3ff,#eef2ff);border:1px solid #e9d5ff;border-radius:28px;padding:24px;box-shadow:0 18px 48px rgba(30,41,59,.13)}
+.fc110-promo-head span{font-size:12px;font-weight:900;letter-spacing:.09em;color:#7c3aed}.fc110-promo-head h2{font-size:30px;margin:5px 0}.fc110-promo-head p{color:#64748b}
+.fc110-promo-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(275px,1fr));gap:17px}
+.fc110-promo-card{background:#fff;border:1px solid #e5e7eb;border-radius:21px;overflow:hidden;box-shadow:0 12px 30px rgba(15,23,42,.10);transition:.2s transform}
+.fc110-promo-card:hover{transform:translateY(-4px)}.fc110-promo-card>img{width:100%;height:205px;object-fit:cover;display:block}
+.fc110-promo-placeholder,.fc110-promo-modal-placeholder{height:190px;display:flex;align-items:center;justify-content:center;font-size:55px;background:linear-gradient(135deg,#fce7f3,#ede9fe,#fef3c7)}
+.fc110-promo-body{padding:16px}.fc110-promo-body h3{font-size:22px;margin:9px 0 4px}.fc110-promo-body strong{display:block;font-size:21px;margin-top:8px}.fc110-promo-body p{line-height:1.5}
+.fc110-badge{display:inline-block;background:#ef4444;color:#fff;border-radius:999px;padding:6px 10px;font-size:10px;font-weight:900;letter-spacing:.04em}
+.fc110-promo-overlay{position:fixed;inset:0;z-index:999999;background:rgba(15,23,42,.68);display:flex;align-items:center;justify-content:center;padding:18px;backdrop-filter:blur(5px)}
+.fc110-promo-modal{width:min(560px,96vw);max-height:92vh;overflow:auto;background:#fff;border-radius:26px;box-shadow:0 32px 90px rgba(0,0,0,.38)}
+.fc110-promo-modal>img{width:100%;height:260px;object-fit:cover;display:block}.fc110-promo-modal-body{padding:22px}.fc110-promo-modal-body h2{font-size:30px;margin:8px 0 3px}.fc110-promo-modal-body h3{margin:0;color:#64748b}.fc110-promo-modal-body strong{display:block;font-size:25px;margin-top:10px}
+.fc110-modal-actions{display:flex;gap:9px;margin-top:18px;flex-wrap:wrap}
+#fc110-confetti{pointer-events:none;position:fixed;inset:0;z-index:2;overflow:hidden}
+#fc110-confetti i{position:absolute;font-style:normal;font-size:25px;opacity:.35;animation:fc110float 8s ease-in-out infinite}
+#fc110-confetti i:nth-child(1){left:3%;top:17%}#fc110-confetti i:nth-child(2){left:90%;top:12%;animation-delay:1s}
+#fc110-confetti i:nth-child(3){left:76%;top:66%;animation-delay:2s}#fc110-confetti i:nth-child(4){left:9%;top:73%;animation-delay:3s}
+#fc110-confetti i:nth-child(5){left:52%;top:7%;animation-delay:4s}#fc110-confetti i:nth-child(6){left:95%;top:80%;animation-delay:5s}
+@keyframes fc110float{0%,100%{transform:translateY(0) rotate(-8deg)}50%{transform:translateY(-22px) rotate(10deg)}}
+#fc110-music{position:fixed;right:18px;bottom:18px;z-index:99998;border:0;border-radius:999px;padding:11px 16px;background:#7257ff;color:#fff;font-weight:800;box-shadow:0 10px 25px rgba(0,0,0,.18);cursor:pointer}
+`;
+document.head.appendChild(fc110Style);
+
+/* Lanzamiento sin observers que destruyan botones */
+function fc110Boot(){
+  if(session?.role==='salon'){
+    try{fc110AuditAccounting(false)}catch(_){}
+    if(view==='finance')fc110RenderFinance();
+  }
+  if(!session){
+    fc110DecoratePublic();
+    fc110RenderPublicPromos();
+  }
+}
+setTimeout(fc110Boot,250);
+window.addEventListener('focus',()=>{if(!session){fc110DecoratePublic();fc110RenderPublicPromos()}});
+setInterval(()=>{if(!session)fc110RenderPublicPromos()},6000);
+
+window.FiestaControlV110={
+  audit:fc110AuditAccounting,
+  finance:fc110RenderFinance,
+  income:()=>fc110OpenManualMovement(false),
+  expense:()=>fc110OpenManualMovement(true),
+  reset:fc110ResetFinance,
+  promos:fc110RenderPublicPromos
+};
+
+})();
+
+</script>
+<script>
+
+(function(){
+'use strict';
+
+/* ============================================================
+   FIESTACONTROL V111 PROFESIONAL
+   Comunidad + Agenda + Reservas + Finanzas
+   ============================================================ */
+
+const Q111=(s,r=document)=>r.querySelector(s);
+const QA111=(s,r=document)=>Array.from(r.querySelectorAll(s));
+const N111=v=>Number(v||0);
+const ESC111=v=>String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const NOR111=v=>String(v||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+const MONEY111=v=>{try{return money(N111(v))}catch(_){return '$ '+N111(v).toLocaleString('es-AR')}};
+const SID111=()=>session?.salonId;
+const ROLE111=()=>String(session?.role||'').toLowerCase();
+const uid111=p=>(p||'id')+'_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8);
+
+function toast111(t){try{toast(t)}catch(_){alert(t)}}
+function close111(){try{closeModal()}catch(_){const d=Q111('#modal');if(d)try{d.close()}catch(e){d.removeAttribute('open')}}}
+function modal111(html){
+  try{showModal(html);return true}catch(_){}
+  const d=Q111('#modal'),b=Q111('#modal-body');if(!d||!b)return false;
+  b.innerHTML=html;try{d.showModal()}catch(_){d.setAttribute('open','open')}return true;
+}
+async function state111(){
+  const r=await fetch('/api/data',{cache:'no-store'});if(!r.ok)throw Error('No se pudo leer la base');
+  const j=await r.json();return j?.data||j;
+}
+function use111(st){
+  if(!st||typeof st!=='object')return;
+  Object.keys(data).forEach(k=>delete data[k]);Object.assign(data,st);
+}
+async function put111(st){
+  const r=await fetch('/api/data',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(st),cache:'no-store'});
+  const j=await r.json().catch(()=>({}));if(!r.ok||j.ok===false)throw Error(j.error||'No se pudo guardar');return j;
+}
+
+/* ============================================================
+   1. COMUNIDAD ÚNICA
+   ============================================================ */
+
+function ensureCommunity111(){
+  data.adminCommunityMessages=Array.isArray(data.adminCommunityMessages)?data.adminCommunityMessages:[];
+  data.communityMessages=Array.isArray(data.communityMessages)?data.communityMessages:[];
+  data.communityMessageReads=Array.isArray(data.communityMessageReads)?data.communityMessageReads:[];
+}
+function userKey111(){
+  const s=session||{};
+  return String(s.salonId||s.providerId||s.supplierId||s.marketSupplierId||s.userId||s.id||s.email||s.userEmail||'anon');
+}
+function roleGroup111(){
+  const r=ROLE111();
+  if(r==='salon')return 'salon';
+  if(['provider','supplier'].includes(r))return 'provider';
+  if(['admin','administrator','superadmin'].includes(r))return 'admin';
+  return r;
+}
+function salonName111(idv){
+  return (data.salons||[]).find(x=>String(x.id)===String(idv))?.name||'Salón';
+}
+function providerArrays111(){
+  const all=[...(data.marketSuppliers||[]),...(data.providers||[]),...(data.suppliers||[])];
+  const seen=new Set();return all.filter(x=>{const k=String(x.id||x.email||x.name);if(seen.has(k))return false;seen.add(k);return true});
+}
+function providerName111(idv){
+  return providerArrays111().find(x=>String(x.id)===String(idv))?.name||
+         providerArrays111().find(x=>String(x.id)===String(idv))?.businessName||
+         'Proveedor';
+}
+function allowedAdmin111(m){
+  const g=roleGroup111(),aud=NOR111(m.audience||m.target||'all');
+  if(g!=='salon'&&g!=='provider')return false;
+  if(!aud||['all','todos','ambos'].includes(aud))return true;
+  if(g==='salon'&&['salon','salons','salones'].includes(aud))return true;
+  if(g==='provider'&&['provider','providers','supplier','proveedores'].includes(aud))return true;
+  return false;
+}
+function allowedCommunity111(m){
+  const g=roleGroup111(),u=userKey111();
+  if(g!=='salon'&&g!=='provider')return false;
+  if(String(m.fromUserKey||'')===u)return true;
+  const target=String(m.toUserKey||'');
+  if(target&&target===u)return true;
+  const scope=NOR111(m.scope||m.audience||'all');
+  if(!target && ['all','todos','comunidad'].includes(scope))return true;
+  if(!target && g==='salon'&&['salons','salones'].includes(scope))return true;
+  if(!target && g==='provider'&&['providers','proveedores'].includes(scope))return true;
+  return false;
+}
+function read111(mid){
+  ensureCommunity111();const u=userKey111();
+  return data.communityMessageReads.some(r=>String(r.messageId)===String(mid)&&String(r.userKey)===u);
+}
+function markRead111(mid){
+  ensureCommunity111();if(read111(mid))return;
+  data.communityMessageReads.push({id:uid111('read'),messageId:mid,userKey:userKey111(),readAt:new Date().toISOString()});
+}
+function unread111(){
+  ensureCommunity111();
+  const a=data.adminCommunityMessages.filter(m=>m&&m.active!==false&&allowedAdmin111(m)&&!read111(m.id)).length;
+  const c=data.communityMessages.filter(m=>m&&m.active!==false&&allowedCommunity111(m)&&String(m.fromUserKey||'')!==userKey111()&&!read111(m.id)).length;
+  return a+c;
+}
+function fmtDT111(v){try{return new Date(v).toLocaleString('es-AR')}catch(_){return String(v||'')}}
+function sender111(m){
+  if(m.fromName)return m.fromName;
+  if(m.fromSalonId)return salonName111(m.fromSalonId);
+  if(m.fromProviderId)return providerName111(m.fromProviderId);
+  return m.from||'Comunidad';
+}
+
+window.openAdminCommunity111=function(){
+  if(!['admin','administrator','superadmin'].includes(ROLE111()))return;
+  modal111(`
+    <div class="modal-title"><div><h2>📢 Comunicado a toda la Comunidad</h2>
+      <p>El mensaje quedará pendiente para cada salón y proveedor hasta que lo lea.</p></div>
+      <button class="ghost small" onclick="closeModal()">✕</button></div>
+    <form id="admin-msg111">
+      <div class="form-grid">
+        <div class="field span2"><label>Asunto</label><input name="title" required maxlength="120"></div>
+        <div class="field span2"><label>Mensaje</label><textarea name="text" required maxlength="1500"></textarea></div>
+        <div class="field"><label>Tipo</label><select name="type"><option>Información</option><option>Importante</option><option>Comercial / Abono</option><option>Mantenimiento</option><option>Urgente</option></select></div>
+        <div class="field"><label>Destinatarios</label><select name="audience"><option value="all">Todos: salones y proveedores</option><option value="salons">Solo salones</option><option value="providers">Solo proveedores</option></select></div>
+        <label class="check-card span2"><input type="checkbox" name="popup" checked><span><b>Mostrar aviso emergente</b><small>Se mostrará al usuario al ingresar.</small></span></label>
+      </div>
+      <div class="form-actions"><button type="button" class="ghost" onclick="closeModal()">Cancelar</button><button class="primary">Enviar comunicado</button></div>
+    </form>`);
+  Q111('#admin-msg111').onsubmit=async e=>{
+    e.preventDefault();const f=new FormData(e.target);
+    try{
+      const st=await state111();st.adminCommunityMessages=Array.isArray(st.adminCommunityMessages)?st.adminCommunityMessages:[];
+      st.adminCommunityMessages.push({
+        id:uid111('adminmsg'),title:String(f.get('title')||'').trim(),text:String(f.get('text')||'').trim(),
+        type:String(f.get('type')||'Información'),priority:['Importante','Urgente'].includes(String(f.get('type')))?'important':'normal',
+        audience:String(f.get('audience')||'all'),popup:f.has('popup'),from:'Administrador',active:true,createdAt:new Date().toISOString()
+      });
+      await put111(st);use111(await state111());close111();toast111('Mensaje enviado a la Comunidad');
+    }catch(err){toast111('No se pudo enviar: '+err.message)}
+  };
+};
+
+window.openCommunityMessage111=function(){
+  const salons=(data.salons||[]).filter(s=>s.status!=='Suspendido'&&String(s.id)!==String(SID111()));
+  const providers=providerArrays111().filter(p=>p.active!==false&&p.status!=='Suspendido');
+  modal111(`
+    <div class="modal-title"><div><h2>💬 Nuevo mensaje de Comunidad</h2>
+      <p>Podés escribir a toda la comunidad o a un salón/proveedor específico.</p></div>
+      <button class="ghost small" onclick="closeModal()">✕</button></div>
+    <form id="community-msg111">
+      <div class="form-grid">
+        <div class="field span2"><label>Destinatario</label>
+          <select name="target">
+            <option value="all">🌐 Toda la comunidad</option>
+            <optgroup label="Salones">${salons.map(s=>`<option value="salon|${ESC111(s.id)}">🏠 ${ESC111(s.name)}</option>`).join('')}</optgroup>
+            <optgroup label="Proveedores">${providers.map(p=>`<option value="provider|${ESC111(p.id)}">🚚 ${ESC111(p.name||p.businessName||'Proveedor')}</option>`).join('')}</optgroup>
+          </select>
+        </div>
+        <div class="field span2"><label>Asunto</label><input name="subject" required maxlength="120"></div>
+        <div class="field span2"><label>Mensaje</label><textarea name="text" required maxlength="1200"></textarea></div>
+        <div class="field"><label>Tipo</label><select name="kind"><option>Mensaje</option><option>Consulta de producto/precio</option><option>Derivación de fiesta</option><option>Consulta de disponibilidad</option><option>Información</option></select></div>
+        <div class="field"><label>Contacto / referencia (opcional)</label><input name="contact" maxlength="120"></div>
+      </div>
+      <div class="form-actions"><button type="button" class="ghost" onclick="closeModal()">Cancelar</button><button class="primary">Enviar</button></div>
+    </form>`);
+  Q111('#community-msg111').onsubmit=async e=>{
+    e.preventDefault();const f=new FormData(e.target),target=String(f.get('target')||'all');
+    let toUserKey='',toType='',toId='',scope='all';
+    if(target!=='all'){[toType,toId]=target.split('|');scope='direct';toUserKey=toType==='salon'?String(toId):String(toId)}
+    const g=roleGroup111();
+    const msg={
+      id:uid111('cmsg'),active:true,createdAt:new Date().toISOString(),
+      fromUserKey:userKey111(),fromType:g,fromSalonId:g==='salon'?SID111():'',fromProviderId:g==='provider'?userKey111():'',
+      fromName:g==='salon'?salonName111(SID111()):providerName111(userKey111()),
+      toUserKey,toType,toId,scope,
+      subject:String(f.get('subject')||'').trim(),text:String(f.get('text')||'').trim(),
+      kind:String(f.get('kind')||'Mensaje'),contact:String(f.get('contact')||'').trim()
+    };
+    try{
+      const st=await state111();st.communityMessages=Array.isArray(st.communityMessages)?st.communityMessages:[];
+      st.communityMessages.push(msg);await put111(st);use111(await state111());close111();toast111('Mensaje enviado');renderCommunity111();
+    }catch(err){toast111('No se pudo enviar: '+err.message)}
+  };
+};
+
+function renderCommunity111(){
+  ensureCommunity111();
+  if(!['salon','provider'].includes(roleGroup111()))return;
+  try{setTitle('Comunidad','Red de salones, proveedores y comunicaciones de FiestaControl')}catch(_){}
+  const c=Q111('#content');if(!c)return;
+
+  const admin=data.adminCommunityMessages.filter(m=>m&&m.active!==false&&allowedAdmin111(m))
+    .sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
+  const feed=data.communityMessages.filter(m=>m&&m.active!==false&&allowedCommunity111(m))
+    .sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
+
+  [...admin,...feed].forEach(m=>{if(!read111(m.id))markRead111(m.id)});
+  try{save()}catch(_){}
+
+  c.innerHTML=`
+    <div class="card" style="background:linear-gradient(135deg,#eef2ff,#fff7ed);margin-bottom:16px">
+      <div class="section-title"><div><h2>🌐 Comunidad FiestaControl</h2>
+        <small class="muted">Salones y proveedores conectados dentro de la misma plataforma.</small></div>
+        <button class="primary" id="new-community111">💬 Nuevo mensaje</button></div>
+      <p style="margin-bottom:0">Consultá proveedores, derivá una fiesta a otro salón, compartí información o coordiná oportunidades comerciales.</p>
+    </div>
+
+    <div class="card" id="admin-community111">
+      <div class="section-title"><div><h3>📢 Mensajes del administrador</h3>
+        <small class="muted">Comunicaciones oficiales de FiestaControl.</small></div></div>
+      ${admin.length?admin.map(m=>`
+        <article style="border:${m.priority==='important'?'2px solid #f59e0b':'1px solid #e5e7eb'};border-radius:13px;padding:14px;margin-top:10px">
+          <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+            <b>${m.priority==='important'?'⚠️ ':'📢 '}${ESC111(m.title||'Comunicado')}</b><small class="muted">${ESC111(fmtDT111(m.createdAt))}</small>
+          </div>
+          ${m.type?`<small style="display:block;margin:4px 0;color:#7257ff;font-weight:800">${ESC111(m.type)}</small>`:''}
+          <div style="white-space:pre-wrap;line-height:1.5">${ESC111(m.text||'')}</div>
+        </article>`).join(''):'<div class="empty">No hay comunicados del administrador.</div>'}
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="section-title"><div><h3>💬 Conversaciones de la Comunidad</h3>
+        <small class="muted">Mensajes entre salones y proveedores.</small></div></div>
+      ${feed.length?feed.map(m=>`
+        <article style="padding:13px 0;border-bottom:1px solid #eee">
+          <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+            <div><b>${ESC111(m.subject||m.kind||'Mensaje')}</b><small style="display:block;color:#64748b">${ESC111(sender111(m))} · ${ESC111(m.kind||'Mensaje')}</small></div>
+            <small class="muted">${ESC111(fmtDT111(m.createdAt))}</small>
+          </div>
+          <div style="margin-top:7px;white-space:pre-wrap">${ESC111(m.text||'')}</div>
+          ${m.contact?`<small style="display:block;margin-top:6px"><b>Referencia:</b> ${ESC111(m.contact)}</small>`:''}
+        </article>`).join(''):'<div class="empty">Todavía no hay mensajes de la comunidad.</div>'}
+    </div>`;
+  Q111('#new-community111').onclick=openCommunityMessage111;
+  updateCommunityBadge111();
+}
+
+function updateCommunityBadge111(){
+  const n=unread111();
+  const candidates=QA111('.sidebar button,.nav button,.sidebar a,.nav a,[role=button]');
+  const item=candidates.find(x=>NOR111(x.textContent).includes('comunidad'));
+  if(!item)return;
+  item.querySelectorAll('.fc111-badge').forEach(x=>x.remove());
+  if(n){
+    const b=document.createElement('span');b.className='fc111-badge';b.textContent=String(n);
+    b.style.cssText='margin-left:7px;background:#ef4444;color:#fff;border-radius:999px;padding:2px 7px;font-size:11px;font-weight:900';
+    item.appendChild(b);
+  }
+}
+function injectAdminCommunity111(){
+  if(!['admin','administrator','superadmin'].includes(ROLE111()))return;
+  if(Q111('#admin-community-send111'))return;
+  const host=Q111('.topbar .toolbar')||Q111('.top-actions')||Q111('.toolbar')||Q111('.nav')||Q111('#app');
+  if(!host)return;
+  const b=document.createElement('button');b.id='admin-community-send111';b.className='primary';b.textContent='📢 Mensaje Comunidad';
+  b.onclick=openAdminCommunity111;host.appendChild(b);
+}
+let popupAdmin111='';
+function adminPopup111(){
+  if(!['salon','provider'].includes(roleGroup111()))return;
+  const m=(data.adminCommunityMessages||[]).filter(x=>x&&x.active!==false&&allowedAdmin111(x)&&x.popup!==false&&!read111(x.id))
+    .sort((a,b)=>String(a.createdAt||'').localeCompare(String(b.createdAt||'')))[0];
+  if(!m||popupAdmin111===String(m.id))return;popupAdmin111=String(m.id);
+  modal111(`<div class="modal-title"><div><h2>${m.priority==='important'?'⚠️':'📢'} ${ESC111(m.title||'Mensaje del administrador')}</h2><p>Comunidad FiestaControl</p></div>
+    <button class="ghost small" id="adminpopclose111">✕</button></div>
+    <div class="card"><div style="white-space:pre-wrap;line-height:1.55">${ESC111(m.text||'')}</div><small class="muted" style="display:block;margin-top:10px">${ESC111(fmtDT111(m.createdAt))}</small></div>
+    <div class="form-actions"><button class="ghost" id="adminlater111">Ver después</button><button class="primary" id="adminread111">Marcar como leído</button></div>`);
+  Q111('#adminpopclose111').onclick=close111;Q111('#adminlater111').onclick=close111;
+  Q111('#adminread111').onclick=()=>{markRead111(m.id);try{save()}catch(_){}close111();updateCommunityBadge111()};
+}
+async function refreshCommunity111(){
+  if(!['salon','provider'].includes(roleGroup111()))return;
+  try{
+    const st=await state111();
+    data.adminCommunityMessages=st.adminCommunityMessages||[];
+    data.communityMessages=st.communityMessages||[];
+    data.communityMessageReads=st.communityMessageReads||[];
+    updateCommunityBadge111();adminPopup111();
+  }catch(_){}
+}
+
+/* Reemplazo final de comunidad del salón y proveedor */
+window.renderCommunityV111=renderCommunity111;
+window.renderCommunityV24=renderCommunity111;
+['59','58','57','56','55','54','53'].forEach(v=>window['renderProviderCommunity'+v]=renderCommunity111);
+
+/* ============================================================
+   2. AGENDA PROFESIONAL
+   ============================================================ */
+
+let calendar111=new Date();
+function salonEvents111(){
+  return (data.events||[]).filter(e=>String(e.salonId)===String(SID111())&&e.status!=='Cancelada');
+}
+function buffer111(){
+  const s=(data.salons||[]).find(x=>String(x.id)===String(SID111()));
+  return Math.max(30,N111(s?.cleanupBufferMinutes||60));
+}
+function mins111(t){
+  const [h,m]=String(t||'').split(':').map(Number);return Number.isFinite(h)&&Number.isFinite(m)?h*60+m:null;
+}
+function conflict111(date,start,end,excludeId=''){
+  const ns=mins111(start),ne=mins111(end),buf=buffer111();if(ns===null||ne===null)return null;
+  return salonEvents111().find(e=>{
+    if(String(e.id)===String(excludeId)||String(e.date)!==String(date))return false;
+    const os=mins111(e.start),oe=mins111(e.end);if(os===null||oe===null)return false;
+    return ns < oe+buf && os < ne+buf;
+  })||null;
+}
+window.openAgendaDay111=function(dateKey){
+  const evs=salonEvents111().filter(e=>String(e.date)===String(dateKey))
+    .sort((a,b)=>String(a.start||'').localeCompare(String(b.start||'')));
+  const rows=evs.map(e=>`
+    <div class="today-event-row" style="align-items:center">
+      <span class="today-time">${ESC111(e.start||'--:--')}–${ESC111(e.end||'--:--')}</span>
+      <span><b>${ESC111(e.eventName||e.child||e.client||'Fiesta')}</b><small>${ESC111(e.status||'')} · saldo ${MONEY111(Math.max(0,N111(e.balance)))}</small></span>
+      <button class="secondary small" data-eid="${ESC111(e.id)}">Abrir</button>
+    </div>`).join('');
+  modal111(`<div class="modal-title"><div><h2>📅 ${ESC111(dateKey)}</h2><p>${evs.length?`${evs.length} reserva(s) cargada(s)`:'Día disponible'} · intervalo de limpieza ${buffer111()} min</p></div>
+    <button class="ghost small" onclick="closeModal()">✕</button></div>
+    ${rows||'<div class="empty">No hay reservas para este día.</div>'}
+    <div class="card" style="margin-top:14px"><b>Regla de disponibilidad</b><p style="margin-bottom:0">FiestaControl bloquea automáticamente ${buffer111()} minutos después de cada evento para limpieza, orden y decoración.</p></div>
+    <div class="form-actions"><button class="ghost" onclick="closeModal()">Cerrar</button><button class="primary" id="newday111">+ Reserva para este día</button></div>`);
+  QA111('[data-eid]',Q111('#modal-body')).forEach(b=>b.onclick=()=>{const id=b.dataset.eid;close111();setTimeout(()=>window.openEvent(id),40)});
+  Q111('#newday111').onclick=()=>{close111();setTimeout(()=>window.openEventForm111('',dateKey),50)};
+};
+window.renderCalendarV111=function(){
+  if(session?.role!=='salon')return;
+  const y=calendar111.getFullYear(),m=calendar111.getMonth(),names=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  try{setTitle('Agenda','Disponibilidad mensual y reservas del salón')}catch(_){}
+  const c=Q111('#content');if(!c)return;
+  const first=new Date(y,m,1).getDay(),days=new Date(y,m+1,0).getDate(),cells=[];
+  for(let i=0;i<first;i++)cells.push('<div class="day off"></div>');
+  for(let d=1;d<=days;d++){
+    const ds=`${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const es=salonEvents111().filter(e=>e.date===ds).sort((a,b)=>String(a.start||'').localeCompare(String(b.start||'')));
+    cells.push(`<button type="button" class="day fc-clickable-day" data-date="${ds}">
+      <div class="day-number">${d}</div>
+      ${es.length?es.slice(0,4).map(e=>`<span class="event-chip">${ESC111(e.start)} · ${ESC111(e.eventName||e.child||'Fiesta')}</span>`).join(''):'<small class="muted">Disponible</small>'}
+      ${es.length>4?`<small>+${es.length-4} más</small>`:''}
+    </button>`);
+  }
+  c.innerHTML=`<div class="card"><div class="calendar-head" style="gap:10px;flex-wrap:wrap">
+    <button class="secondary" id="prev111">←</button><h3 style="min-width:190px;text-align:center">${names[m]} ${y}</h3><button class="secondary" id="next111">→</button>
+    <button class="ghost small" id="today111">Hoy</button>
+    <button class="ghost small" id="buffer111">🧹 Limpieza: ${buffer111()} min</button>
+  </div><div class="calendar">${['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'].map(x=>`<div class="weekday">${x}</div>`).join('')}${cells.join('')}</div></div>`;
+  Q111('#prev111').onclick=()=>{calendar111=new Date(y,m-1,1);renderCalendarV111()};
+  Q111('#next111').onclick=()=>{calendar111=new Date(y,m+1,1);renderCalendarV111()};
+  Q111('#today111').onclick=()=>{calendar111=new Date();renderCalendarV111()};
+  Q111('#buffer111').onclick=configureBuffer111;
+  QA111('[data-date]',c).forEach(b=>b.onclick=()=>openAgendaDay111(b.dataset.date));
+};
+function configureBuffer111(){
+  const cur=buffer111();
+  modal111(`<div class="modal-title"><div><h2>🧹 Intervalo entre fiestas</h2><p>Tiempo mínimo para limpieza y preparación.</p></div><button class="ghost small" onclick="closeModal()">✕</button></div>
+    <form id="buffer-form111"><div class="field"><label>Minutos</label><select name="minutes">${[30,40,45,60,75,90].map(x=>`<option value="${x}" ${x===cur?'selected':''}>${x} minutos</option>`).join('')}</select></div>
+    <div class="form-actions"><button class="primary">Guardar</button></div></form>`);
+  Q111('#buffer-form111').onsubmit=e=>{e.preventDefault();const s=(data.salons||[]).find(x=>String(x.id)===String(SID111()));if(s)s.cleanupBufferMinutes=N111(new FormData(e.target).get('minutes'));save();close111();renderCalendarV111();toast111('Intervalo actualizado')};
+}
+
+/* ============================================================
+   3. RESERVA: FECHA PREFIJADA + BLOQUEO DE SUPERPOSICIÓN
+   ============================================================ */
+
+const baseEventForm111=window.openEventForm;
+window.openEventForm111=function(eid='',prefillDate=''){
+  baseEventForm111(eid||'');
+  setTimeout(()=>{
+    const modal=Q111('#modal-body'),form=modal?.querySelector('form');if(!form)return;
+    const date=form.querySelector('[name="date"]'),start=form.querySelector('[name="start"]'),end=form.querySelector('[name="end"]');
+    if(prefillDate&&date){date.value=prefillDate;date.dispatchEvent(new Event('change',{bubbles:true}))}
+    if(form.dataset.fc111Validation)return;form.dataset.fc111Validation='1';
+    form.addEventListener('submit',ev=>{
+      const d=date?.value,st=start?.value,en=end?.value;
+      if(!d||!st||!en)return;
+      const hit=conflict111(d,st,en,eid);
+      if(hit){
+        ev.preventDefault();ev.stopImmediatePropagation();
+        toast111(`No se puede reservar. Hay una fiesta de ${hit.start} a ${hit.end} y deben quedar ${buffer111()} minutos para limpieza.`);
+      }
+    },true);
+  },60);
+};
+window.openEventForm=window.openEventForm111;
+
+/* Captura Nueva reserva para garantizar que use V111. */
+document.addEventListener('click',e=>{
+  if(session?.role!=='salon')return;
+  const b=e.target.closest('button');if(!b)return;
+  const t=NOR111(b.textContent);
+  if(t.includes('nueva reserva')||t.includes('nueva fiesta')){
+    if(b.closest('#modal-body'))return;
+    e.preventDefault();e.stopImmediatePropagation();window.openEventForm111();
+  }
+},true);
+
+/* ============================================================
+   4. DETALLE DE FIESTA / MOVIMIENTOS
+   ============================================================ */
+
+const baseOpenEvent111=window.openEvent;
+window.openEvent111=function(eid){
+  baseOpenEvent111(eid);
+  setTimeout(()=>{
+    const e=(data.events||[]).find(x=>String(x.id)===String(eid));const m=Q111('#modal-body');if(!e||!m)return;
+    m.querySelector('#controls111')?.remove();
+    const pays=(data.movements||[]).filter(x=>String(x.eventId)===String(eid)&&['ingreso','cobro'].includes(NOR111(x.type))).sort((a,b)=>String(b.createdAt||b.movementDate||'').localeCompare(String(a.createdAt||a.movementDate||'')));
+    const bar=document.createElement('div');bar.id='controls111';bar.className='card';bar.style.marginTop='14px';
+    bar.innerHTML=`<div class="section-title"><div><h3>🧾 Control de la reserva</h3><small class="muted">Pagos, adicionales, edición e impresión.</small></div></div>
+      <div class="toolbar">
+        <button class="primary" id="pay111">💰 Ingresar pago</button>
+        <button class="secondary" id="extras111">➕ Añadir / editar adicionales</button>
+        <button class="secondary" id="edit111">✏️ Editar reserva</button>
+        <button class="secondary" id="print111">🖨 Estado y movimientos</button>
+        ${pays.length?'<button class="secondary" id="receipt111">🧾 Último recibo</button>':''}
+        <button class="ghost" id="note111">📝 Nota operativa</button>
+        ${typeof window.confirmDeleteEvent==='function'?'<button class="danger" id="delete111">🗑 Borrar fiesta</button>':''}
+      </div>
+      ${e.operationalNote?`<div style="margin-top:10px;padding:10px;border-radius:10px;background:#fff7ed"><b>📝 Indicación:</b> ${ESC111(e.operationalNote)}</div>`:''}`;
+    m.appendChild(bar);
+    Q111('#pay111',bar).onclick=()=>{close111();setTimeout(()=>window.openPayment(eid),50)};
+    Q111('#edit111',bar).onclick=()=>{close111();setTimeout(()=>window.openEventForm111(eid),50)};
+    Q111('#extras111',bar).onclick=()=>{close111();setTimeout(()=>{window.openEventForm111(eid);setTimeout(()=>{const nodes=QA111('h3,label,b',Q111('#modal-body'));nodes.find(x=>NOR111(x.textContent).includes('adicional'))?.scrollIntoView({behavior:'smooth',block:'center'})},180)},50)};
+    Q111('#print111',bar).onclick=()=>{if(typeof window.printReservationStatus50==='function')window.printReservationStatus50(eid,true);else if(typeof window.printReservationStatus46==='function')window.printReservationStatus46(eid,true);else window.print()};
+    if(pays.length)Q111('#receipt111',bar).onclick=()=>{const p=pays[0];if(typeof window.printReceipt46==='function')window.printReceipt46(eid,p.id,true);else toast111('El recibo queda incluido en Estado y movimientos')};
+    Q111('#note111',bar).onclick=()=>openNote111(eid);
+    if(Q111('#delete111',bar))Q111('#delete111',bar).onclick=()=>window.confirmDeleteEvent(eid);
+  },180);
+};
+window.openEvent=window.openEvent111;
+
+function openNote111(eid){
+  const e=(data.events||[]).find(x=>String(x.id)===String(eid));if(!e)return;
+  modal111(`<div class="modal-title"><div><h2>📝 Nota operativa</h2><p>Indicaciones para el día de la fiesta.</p></div><button class="ghost small" onclick="openEvent('${ESC111(eid)}')">✕</button></div>
+    <form id="note-form111"><div class="field"><label>Nota</label><textarea name="note" maxlength="600" placeholder="Ej.: La familia llega 30 minutos antes.">${ESC111(e.operationalNote||'')}</textarea></div>
+    <div class="form-actions"><button class="primary">Guardar nota</button></div></form>`);
+  Q111('#note-form111').onsubmit=ev=>{ev.preventDefault();e.operationalNote=String(new FormData(ev.target).get('note')||'').trim();save();toast111('Nota guardada');openEvent111(eid)};
+}
+
+/* Alerta diaria */
+function todayAlert111(){
+  if(session?.role!=='salon')return;
+  const today=new Date().toISOString().slice(0,10),key='fc111_today_'+SID111()+'_'+today;
+  try{if(sessionStorage.getItem(key))return}catch(_){}
+  const evs=salonEvents111().filter(e=>e.date===today).sort((a,b)=>String(a.start||'').localeCompare(String(b.start||'')));
+  if(!evs.length)return;
+  try{sessionStorage.setItem(key,'1')}catch(_){}
+  modal111(`<div class="modal-title"><div><h2>🎉 Fiestas de hoy</h2><p>Agenda operativa del ${ESC111(today)}</p></div><button class="ghost small" onclick="closeModal()">✕</button></div>
+    ${evs.map(e=>`<div class="today-event-row"><span class="today-time">${ESC111(e.start)}–${ESC111(e.end)}</span><span><b>${ESC111(e.eventName||e.child||e.client||'Fiesta')}</b>
+      <small>${N111(e.balance)<=0?'✅ Pago':'💰 Saldo '+MONEY111(e.balance)}${e.operationalNote?' · 📝 '+ESC111(e.operationalNote):''}</small></span>
+      <button class="secondary small" data-today="${ESC111(e.id)}">Abrir</button></div>`).join('')}
+    <div class="form-actions"><button class="primary" onclick="closeModal()">Entendido</button></div>`);
+  QA111('[data-today]',Q111('#modal-body')).forEach(b=>b.onclick=()=>{const id=b.dataset.today;close111();setTimeout(()=>openEvent111(id),50)});
+}
+
+/* ============================================================
+   5. FINANZAS V111: CÁLCULO CORRECTO DE RESERVAS
+   ============================================================ */
+
+function payments111(eid){
+  const seen=new Set();
+  return (data.movements||[]).filter(m=>String(m.salonId)===String(SID111())&&String(m.eventId||'')===String(eid)&&['ingreso','cobro'].includes(NOR111(m.type))).filter(m=>{
+    const k=String(m.sourceKey||m.id);if(seen.has(k))return false;seen.add(k);return true;
+  });
+}
+function figures111(e){
+  const base=N111(e.basePrice??e.baseTotal);
+  const general=N111(e.extrasTotal);
+  const stock=N111(e.stockItemsTotal);
+  const typeExtras=N111(e.typeExtrasTotal) || (
+    N111(e.extraAdultTotal)+N111(e.extraChildTotal)+N111(e.extraWaiterTotal)+N111(e.extraKitchenTotal)+N111(e.extraAnimatorTotal)+N111(e.extraHourTotal)
+  );
+  const computed=base+general+stock+typeExtras;
+  const total=N111(e.total)>0?N111(e.total):computed;
+  const p=payments111(e.id);let paid=p.reduce((s,x)=>s+N111(x.amount),0);
+  if(paid<=0)paid=N111(e.paid||e.deposit);
+  return {base,general,stock,typeExtras,total,paid,balance:Math.max(0,total-paid)};
+}
+function salonMoves111(){return (data.movements||[]).filter(m=>String(m.salonId)===String(SID111()))}
+function income111(m){return ['ingreso','cobro'].includes(NOR111(m.type))}
+function expense111(m){return ['gasto','egreso'].includes(NOR111(m.type))}
+function renderFinance111(){
+  if(session?.role!=='salon')return;
+  try{setTitle('Finanzas','Control integral de caja y reservas')}catch(_){}
+  const c=Q111('#content');if(!c)return;
+  const moves=salonMoves111().slice().sort((a,b)=>String(b.movementDate||b.createdAt||'').localeCompare(String(a.movementDate||a.createdAt||'')));
+  const inc=moves.filter(income111),out=moves.filter(expense111);
+  const tin=inc.reduce((s,m)=>s+N111(m.amount),0),tout=out.reduce((s,m)=>s+N111(m.amount),0);
+  const methods={Efectivo:0,Transferencia:0,'Mercado Pago':0,Tarjeta:0,Otro:0};
+  inc.forEach(m=>{const x=NOR111(m.method);const k=x.includes('efect')?'Efectivo':x.includes('transfer')?'Transferencia':x.includes('mercado')?'Mercado Pago':x.includes('tarjet')?'Tarjeta':'Otro';methods[k]+=N111(m.amount)});
+  const evs=salonEvents111().map(e=>({e,f:figures111(e)}));
+  const contracted=evs.reduce((s,x)=>s+x.f.total,0),collected=evs.reduce((s,x)=>s+x.f.paid,0),pending=evs.reduce((s,x)=>s+x.f.balance,0);
+  c.innerHTML=`<div id="finance111">
+    <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px"><div><h2 style="margin:0">Finanzas</h2><small class="muted">Caja general + control económico por fiesta.</small></div><b style="color:#7257ff">CONTROL V111</b></div>
+    <div class="toolbar"><button class="primary" id="income111">+ Ingresar dinero</button><button class="danger" id="expense111">- Registrar egreso</button><button class="secondary" id="reset111">💰 Poner movimientos en $0</button></div>
+    <div class="grid stats" style="margin-top:14px">
+      <div class="card stat"><small>Ingresos de caja</small><strong>${MONEY111(tin)}</strong></div><div class="card stat"><small>Egresos</small><strong>${MONEY111(tout)}</strong></div>
+      <div class="card stat"><small>Resultado</small><strong>${MONEY111(tin-tout)}</strong></div><div class="card stat"><small>Saldo a cobrar</small><strong>${MONEY111(pending)}</strong></div>
+    </div>
+    <div class="card" style="margin-top:16px"><div class="section-title"><div><h3>💳 Ingresos por medio de pago</h3><small class="muted">Cada cobro en su casillero.</small></div></div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:9px">${Object.entries(methods).map(([k,v])=>`<div style="border:1px solid #e5e7eb;border-radius:11px;padding:11px"><small>${k}</small><b style="display:block">${MONEY111(v)}</b></div>`).join('')}</div>
+    </div>
+    <div class="card" style="margin-top:16px"><div class="section-title"><div><h3>🎉 Contabilidad por reserva</h3><small class="muted">Base + adicionales + stock + adicionales del tipo.</small></div></div>
+      ${evs.length?`<div class="table-wrap"><table class="table"><thead><tr><th>Fecha</th><th>Fiesta</th><th>Base</th><th>Adicionales</th><th>Stock</th><th>Extras tipo</th><th>Total</th><th>Pagado</th><th>Saldo</th></tr></thead><tbody>
+      ${evs.map(({e,f})=>`<tr><td>${ESC111(e.date||'')}</td><td><b>${ESC111(e.eventName||e.child||e.client||'Fiesta')}</b></td><td>${MONEY111(f.base)}</td><td>${MONEY111(f.general)}</td><td>${MONEY111(f.stock)}</td><td>${MONEY111(f.typeExtras)}</td><td><b>${MONEY111(f.total)}</b></td><td>${MONEY111(f.paid)}</td><td><b>${MONEY111(f.balance)}</b></td></tr>`).join('')}
+      </tbody><tfoot><tr><th colspan="6">TOTAL RESERVAS</th><th>${MONEY111(contracted)}</th><th>${MONEY111(collected)}</th><th>${MONEY111(pending)}</th></tr></tfoot></table></div>`:'<div class="empty">Sin reservas activas.</div>'}
+    </div>
+    <div class="card" style="margin-top:16px"><div class="section-title"><div><h3>📒 Libro de movimientos</h3><small class="muted">Ingresos y egresos del salón.</small></div></div>
+      ${moves.length?`<div class="table-wrap"><table class="table"><thead><tr><th>Fecha</th><th>Tipo</th><th>Concepto</th><th>Fiesta</th><th>Medio</th><th>Importe</th></tr></thead><tbody>
+      ${moves.map(m=>{const e=(data.events||[]).find(x=>String(x.id)===String(m.eventId||''));return `<tr><td>${ESC111(m.movementDate||'')}</td><td>${ESC111(m.type||'')}</td><td>${ESC111(m.concept||m.category||'')}</td><td>${ESC111(e?(e.eventName||e.child||e.client||'Fiesta'):'General')}</td><td>${ESC111(m.method||'')}</td><td><b>${MONEY111(m.amount)}</b></td></tr>`}).join('')}
+      </tbody></table></div>`:'<div class="empty">Sin movimientos.</div>'}
+    </div></div>`;
+  Q111('#income111').onclick=()=>window.FiestaControlV110?.income?.();
+  Q111('#expense111').onclick=()=>window.FiestaControlV110?.expense?.();
+  Q111('#reset111').onclick=()=>window.FiestaControlV110?.reset?.();
+}
+
+/* ============================================================
+   6. NAVEGACIÓN FINAL
+   ============================================================ */
+
+const route111=renderSalonView;
+renderSalonView=function(){
+  if(view==='finance')return renderFinance111();
+  if(view==='calendar')return renderCalendarV111();
+  if(view==='community')return renderCommunity111();
+  return route111();
+};
+
+/* Conserva acciones rápidas y refuerza accesos importantes */
+function quickAccess111(){
+  if(session?.role!=='salon'||view!=='dashboard')return;
+  const c=Q111('#content');if(!c||Q111('#quick111'))return;
+  const card=document.createElement('div');card.id='quick111';card.className='card';card.style.marginTop='16px';
+  card.innerHTML=`<div class="section-title"><div><h3>⚡ Accesos rápidos</h3><small class="muted">Operación diaria del salón.</small></div></div>
+    <div class="quick-grid">
+      <button class="quick" data-v="new">➕ <strong>Nueva reserva</strong></button><button class="quick" data-v="calendar">📅 <strong>Agenda</strong></button>
+      <button class="quick" data-v="stock">📦 <strong>Stock</strong></button><button class="quick" data-v="suppliers">🚚 <strong>Proveedores</strong></button>
+      <button class="quick" data-v="finance">💰 <strong>Finanzas</strong></button><button class="quick" data-v="community">🌐 <strong>Comunidad</strong></button>
+    </div>`;
+  c.appendChild(card);
+  QA111('[data-v]',card).forEach(b=>b.onclick=()=>{const v=b.dataset.v;if(v==='new')openEventForm111();else{view=v;renderSalonShell()}});
+}
+const shell111=window.renderSalonShell;
+window.renderSalonShell=function(){
+  const r=shell111.apply(this,arguments);
+  setTimeout(()=>{quickAccess111();updateCommunityBadge111()},80);
+  return r;
+};
+
+/* ============================================================
+   7. INICIALIZACIÓN
+   ============================================================ */
+
+function init111(){
+  ensureCommunity111();
+  injectAdminCommunity111();
+  updateCommunityBadge111();
+  setTimeout(adminPopup111,700);
+  setTimeout(todayAlert111,1300);
+  setTimeout(quickAccess111,150);
+}
+setTimeout(init111,350);
+setInterval(()=>{injectAdminCommunity111();updateCommunityBadge111()},1800);
+setInterval(refreshCommunity111,6000);
+
+/* Clic Comunidad de cualquier menú: asegurar renderer V111 */
+document.addEventListener('click',e=>{
+  const el=e.target.closest('button,a,[role=button]');if(!el)return;
+  if(NOR111(el.textContent).includes('comunidad')&&['salon','provider'].includes(roleGroup111())){
+    setTimeout(()=>{if(Q111('#content'))renderCommunity111()},120);
+  }
+},true);
+
+window.FiestaControlV111={
+  community:renderCommunity111,agenda:renderCalendarV111,finance:renderFinance111,
+  openDay:openAgendaDay111,newReservation:openEventForm111,conflict:conflict111
+};
+
+})();
+
+</script>
+</body></html>
