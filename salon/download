@@ -1,6 +1,0 @@
-fiestacontrol.db
-fiestacontrol.db-wal
-fiestacontrol.db-shm
-__pycache__/
-*.pyc
-.env
