@@ -20720,3 +20720,123 @@ window.printReservationStatus=window.printReservationStatus82;
 
 })();
 
+// ============================================================
+// V86 - FINANZAS SALÓN: TABLERO COMPACTO POR MEDIO DE PAGO
+// ============================================================
+(function(){
+'use strict';
+
+function sid86(){
+  try{return session?.salonId}catch(_){return window.session?.salonId}
+}
+
+function normMethod86(v){
+  const s=String(v||'').trim().toLowerCase();
+  if(!s)return 'Sin especificar';
+  if(s.includes('efect'))return 'Efectivo';
+  if(s.includes('transfer'))return 'Transferencia';
+  if(s.includes('mercado')||s==='mp')return 'Mercado Pago';
+  if(s.includes('tarjet')||s.includes('debito')||s.includes('débito')||s.includes('credito')||s.includes('crédito'))return 'Tarjeta';
+  if(s.includes('otro'))return 'Otro';
+  return String(v||'Otro').trim();
+}
+
+function money86(v){
+  try{return money(Number(v||0))}catch(_){
+    return '$ '+Number(v||0).toLocaleString('es-AR');
+  }
+}
+
+function incomeMovements86(){
+  const sid=sid86();
+  return (data.movements||[]).filter(m=>
+    String(m.salonId)===String(sid) &&
+    ['Ingreso','Cobro'].includes(String(m.type||'')) &&
+    Number(m.amount||0)>0
+  );
+}
+
+function totals86(){
+  const out={
+    'Efectivo':0,
+    'Transferencia':0,
+    'Mercado Pago':0,
+    'Tarjeta':0,
+    'Otro':0,
+    'Sin especificar':0
+  };
+
+  incomeMovements86().forEach(m=>{
+    const key=normMethod86(m.method||m.paymentMethod);
+    if(!(key in out)) out.Otro+=Number(m.amount||0);
+    else out[key]+=Number(m.amount||0);
+  });
+  return out;
+}
+
+function renderPaymentDashboard86(){
+  const content=document.querySelector('#content');
+  if(!content)return;
+
+  // Saca el dashboard antiguo V11 para no duplicar ni mostrar importes incompletos.
+  content.querySelector('#v11-finance-dashboard')?.remove();
+  content.querySelector('#v86-payment-dashboard')?.remove();
+
+  const t=totals86();
+  const total=Object.values(t).reduce((s,v)=>s+Number(v||0),0);
+
+  const board=document.createElement('div');
+  board.id='v86-payment-dashboard';
+  board.className='card';
+  board.style.cssText='margin-bottom:14px;padding:14px 16px';
+
+  const cards=[
+    ['💵','Efectivo',t['Efectivo']],
+    ['🏦','Transferencia',t['Transferencia']],
+    ['📱','Mercado Pago',t['Mercado Pago']],
+    ['💳','Tarjeta',t['Tarjeta']],
+    ['➕','Otro',t['Otro']]
+  ];
+
+  if(t['Sin especificar']>0){
+    cards.push(['❔','Sin especificar',t['Sin especificar']]);
+  }
+
+  board.innerHTML=`
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+      <div>
+        <h3 style="margin:0;font-size:16px">📊 Ingresos por medio de pago</h3>
+        <small class="muted">Suma automática de los ingresos registrados en Finanzas.</small>
+      </div>
+      <div style="text-align:right">
+        <small class="muted">TOTAL INGRESADO</small>
+        <strong style="display:block;font-size:20px">${money86(total)}</strong>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:8px">
+      ${cards.map(([icon,label,amount])=>`
+        <div style="border:1px solid #e5e7eb;border-radius:10px;padding:10px 12px;background:#fff">
+          <small style="display:block;margin-bottom:4px">${icon} ${label}</small>
+          <strong style="font-size:16px">${money86(amount)}</strong>
+        </div>
+      `).join('')}
+    </div>
+  `;
+
+  content.prepend(board);
+}
+
+const prevRenderFinanceV86=renderFinance;
+renderFinance=function(){
+  const r=prevRenderFinanceV86();
+  renderPaymentDashboard86();
+  // Segunda pasada por si algún wrapper anterior termina de modificar Finanzas luego.
+  setTimeout(renderPaymentDashboard86,0);
+  return r;
+};
+
+window.renderPaymentDashboardV86=renderPaymentDashboard86;
+
+})();
+
