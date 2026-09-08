@@ -21990,3 +21990,151 @@ renderSalonView=function(){
 
 })();
 
+// ============================================================
+// V90 - PROMOS DESTACADAS VISIBLES EN HOME / LOGIN / VER SALONES
+// ============================================================
+(function(){
+'use strict';
+
+const esc90=v=>String(v??'').replace(/[&<>"']/g,ch=>({
+  '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+}[ch]));
+
+function promoEligible90(s){
+  if(!s)return false;
+  if(s.status!=='Aprobado')return false;
+  if(s.publicProfileEnabled===false)return false;
+  if(s.featuredPromoEnabled!==true)return false;
+  if(s.featuredPromoActive!==true)return false;
+  if(!s.featuredPromoTitle)return false;
+
+  if(s.featuredPromoValidUntil){
+    const end=new Date(String(s.featuredPromoValidUntil)+'T23:59:59');
+    if(end < new Date())return false;
+  }
+  return true;
+}
+
+function featuredPromos90(){
+  return (data.salons||[])
+    .filter(promoEligible90)
+    .sort((a,b)=>String(b.featuredPromoUpdatedAt||'').localeCompare(String(a.featuredPromoUpdatedAt||'')));
+}
+
+function promoSection90(){
+  const list=featuredPromos90();
+  if(!list.length)return '';
+
+  return `
+    <section id="v90-home-featured" style="margin:22px auto 0;max-width:1460px;padding:0 18px">
+      <div style="background:linear-gradient(135deg,#fff7ed,#f5f3ff);border:1px solid #e9d5ff;border-radius:24px;padding:18px;box-shadow:0 12px 35px rgba(30,41,59,.08)">
+        <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:14px;flex-wrap:wrap;margin-bottom:14px">
+          <div>
+            <div style="font-size:12px;font-weight:900;letter-spacing:.08em">⭐ PROMOS DESTACADAS</div>
+            <h2 style="margin:4px 0 0;font-size:28px">Ofertas especiales de nuestros salones</h2>
+            <small style="color:#64748b">Promociones pagas habilitadas por FiestaControl</small>
+          </div>
+          <button class="ghost small" type="button" onclick="renderPublicSalonDirectory()">Ver todos los salones →</button>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px">
+          ${list.slice(0,6).map(s=>`
+            <article style="background:#fff;border:1px solid #e5e7eb;border-radius:18px;overflow:hidden;box-shadow:0 10px 25px rgba(15,23,42,.07)">
+              ${s.featuredPromoImage
+                ? `<img src="${s.featuredPromoImage}" alt="${esc90(s.featuredPromoTitle)}" style="width:100%;height:180px;object-fit:cover;display:block">`
+                : `<div style="height:150px;background:linear-gradient(135deg,#ede9fe,#fee2e2);display:flex;align-items:center;justify-content:center;font-size:56px">🎉</div>`}
+              <div style="padding:14px">
+                <span style="display:inline-block;background:#ef4444;color:#fff;border-radius:999px;padding:5px 9px;font-size:10px;font-weight:900">DESTACADO</span>
+                <h3 style="margin:9px 0 3px;font-size:20px">${esc90(s.featuredPromoTitle)}</h3>
+                <b style="display:block">${esc90(s.name||'Salón')}</b>
+                ${s.zone?`<small style="color:#64748b">📍 ${esc90(s.zone)}</small>`:''}
+                ${s.featuredPromoPrice?`<div style="font-size:20px;font-weight:900;margin-top:9px">${esc90(s.featuredPromoPrice)}</div>`:''}
+                ${s.featuredPromoText?`<p style="margin:8px 0 0;line-height:1.45">${esc90(s.featuredPromoText)}</p>`:''}
+                ${s.featuredPromoValidUntil?`<small style="display:block;color:#64748b;margin-top:8px">Vigente hasta ${esc90(s.featuredPromoValidUntil)}</small>`:''}
+                <button class="primary w100" style="margin-top:12px" onclick="renderPublicSalonPage('${esc90(s.id)}')">Ver salón</button>
+              </div>
+            </article>
+          `).join('')}
+        </div>
+      </div>
+    </section>`;
+}
+
+function injectHomePromos90(){
+  const app=document.querySelector('#app');
+  if(!app)return;
+
+  document.querySelector('#v90-home-featured')?.remove();
+
+  const html=promoSection90();
+  if(!html)return;
+
+  const wrap=document.createElement('div');
+  wrap.innerHTML=html;
+  const sec=wrap.firstElementChild;
+  if(!sec)return;
+
+  // HOME pública
+  const home=app.querySelector('.fc-home');
+  if(home){
+    const features=home.querySelector('.fc-home-features');
+    if(features)home.insertBefore(sec,features);
+    else home.appendChild(sec);
+    return;
+  }
+
+  // LOGIN / REGISTRO
+  const auth=app.querySelector('.auth');
+  if(auth){
+    app.appendChild(sec);
+    return;
+  }
+
+  // Directorio público
+  const results=document.querySelector('#v27-results');
+  if(results){
+    results.parentElement.insertBefore(sec,results);
+  }
+}
+
+// ------------------------------------------------------------
+// IMPORTANTE: interceptamos TODOS los renders públicos finales.
+// Había varias capas antiguas redefiniendo renderPublicHome/renderAuth.
+// V90 inyecta después del render real visible.
+// ------------------------------------------------------------
+const oldPublicHome90=window.renderPublicHome;
+if(typeof oldPublicHome90==='function'){
+  window.renderPublicHome=function(){
+    const r=oldPublicHome90.apply(this,arguments);
+    setTimeout(injectHomePromos90,0);
+    setTimeout(injectHomePromos90,120);
+    return r;
+  };
+}
+
+const oldRenderAuth90=window.renderAuth;
+if(typeof oldRenderAuth90==='function'){
+  window.renderAuth=function(mode='home'){
+    const r=oldRenderAuth90.apply(this,arguments);
+    setTimeout(injectHomePromos90,0);
+    setTimeout(injectHomePromos90,120);
+    return r;
+  };
+}
+
+const oldDirectory90=window.renderPublicSalonDirectory;
+if(typeof oldDirectory90==='function'){
+  window.renderPublicSalonDirectory=function(){
+    const r=oldDirectory90.apply(this,arguments);
+    setTimeout(injectHomePromos90,0);
+    setTimeout(injectHomePromos90,120);
+    return r;
+  };
+}
+
+// Si la app ya está dibujada al cargar V90, también inyecta.
+setTimeout(injectHomePromos90,200);
+window.injectHomePromos90=injectHomePromos90;
+
+})();
+
