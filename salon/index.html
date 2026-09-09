@@ -959,12 +959,27 @@ function buffer111(){
 function mins111(t){
   const [h,m]=String(t||'').split(':').map(Number);return Number.isFinite(h)&&Number.isFinite(m)?h*60+m:null;
 }
+function fcDateTime111(date,time,overnight=false){
+  const d=new Date(String(date||'')+'T'+String(time||'00:00')+':00');
+  if(Number.isNaN(d.getTime()))return null;
+  if(overnight)d.setDate(d.getDate()+1);
+  return d;
+}
 function conflict111(date,start,end,excludeId=''){
-  const ns=mins111(start),ne=mins111(end),buf=buffer111();if(ns===null||ne===null)return null;
+  const ns=mins111(start),ne=mins111(end),buf=buffer111();
+  if(ns===null||ne===null||!date)return null;
+  const nStart=fcDateTime111(date,start,false);
+  const nEnd=fcDateTime111(date,end,ne<=ns); // si termina <= inicio, finaliza al día siguiente
+  if(!nStart||!nEnd)return null;
+  const bufMs=buf*60000;
   return salonEvents111().find(e=>{
-    if(String(e.id)===String(excludeId)||String(e.date)!==String(date))return false;
-    const os=mins111(e.start),oe=mins111(e.end);if(os===null||oe===null)return false;
-    return ns < oe+buf && os < ne+buf;
+    if(String(e.id)===String(excludeId))return false;
+    const os=mins111(e.start),oe=mins111(e.end);if(os===null||oe===null||!e.date)return false;
+    const oStart=fcDateTime111(e.date,e.start,false);
+    const oEnd=fcDateTime111(e.date,e.end,oe<=os);
+    if(!oStart||!oEnd)return false;
+    // El intervalo de limpieza se aplica después de cada fiesta.
+    return nStart.getTime() < oEnd.getTime()+bufMs && oStart.getTime() < nEnd.getTime()+bufMs;
   })||null;
 }
 window.openAgendaDay111=function(dateKey){
@@ -1037,7 +1052,7 @@ window.openEventForm111=function(eid='',prefillDate=''){
       const hit=conflict111(d,st,en,eid);
       if(hit){
         ev.preventDefault();ev.stopImmediatePropagation();
-        toast111(`No se puede reservar. Hay una fiesta de ${hit.start} a ${hit.end} y deben quedar ${buffer111()} minutos para limpieza.`);
+        toast111(`No se puede reservar. Se cruza con la fiesta del ${hit.date} de ${hit.start} a ${hit.end} y deben quedar ${buffer111()} minutos para limpieza.`);
       }
     },true);
   },60);

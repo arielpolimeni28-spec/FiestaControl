@@ -6577,7 +6577,7 @@ window.openEventFormV24=(eid='')=>{let x=eid?data.events.find(e=>e.id===eid):nul
 <div class="field"><label>Invitados</label><input name="guests" type="number" value="${x?.guests||0}"></div><div class="field"><label>Precio de la fiesta</label><input name="total" type="number" value="${x?.total||0}"></div>
 <div class="field"><label>Valor de la seña</label><input name="deposit" type="number" value="${x?.deposit||x?.paid||0}"></div><div class="field span2"><label>Notas</label><textarea name="notes">${esc(x?.notes||'')}</textarea></div></div><div class="card" id="same24"></div><div class="form-actions"><button class="primary">Guardar reserva</button></div></form>`);
  let f=$('#ev24'),same=$('#same24');function day(){let a=EV().filter(e=>e.id!==eid&&e.date===f.date.value&&e.status!=='Cancelada');same.innerHTML=`<b>Fiestas ya creadas ese día</b>${a.length?a.map(e=>`<div>${e.start}–${e.end} · ${esc(e.child||e.client)}</div>`).join(''):'<small>Día libre</small>'}`}f.date.onchange=day;day();
- f.onsubmit=e=>{e.preventDefault();let v=Object.fromEntries(new FormData(f));if(v.end<=v.start)return toast('Revisá el horario');let c=EV().find(e=>e.id!==eid&&e.date===v.date&&e.status!=='Cancelada'&&v.start<e.end&&v.end>e.start);if(c)return toast(`Se superpone con ${c.start} a ${c.end}`);let o=x||{id:id(),salonId:SID(),rsvps:[],createdAt:now()};Object.assign(o,v,{age:Number(v.age||0),guests:Number(v.guests||0),total:Number(v.total||0),deposit:Number(v.deposit||0),paid:Number(v.deposit||0)});if(o.status==='Señada')o.status='Confirmada';if(!x)data.events.push(o);if(Number(o.deposit)>0)movement({type:'Ingreso',category:'Seña',concept:`Seña ${o.child}`,amount:Number(o.deposit),eventId:o.id});save();closeModal();renderSalonShell()}};
+ f.onsubmit=e=>{e.preventDefault();let v=Object.fromEntries(new FormData(f));/* V115: fin <= inicio significa que termina al día siguiente */let c=EV().find(e=>e.id!==eid&&e.date===v.date&&e.status!=='Cancelada'&&v.start<e.end&&v.end>e.start);if(c)return toast(`Se superpone con ${c.start} a ${c.end}`);let o=x||{id:id(),salonId:SID(),rsvps:[],createdAt:now()};Object.assign(o,v,{age:Number(v.age||0),guests:Number(v.guests||0),total:Number(v.total||0),deposit:Number(v.deposit||0),paid:Number(v.deposit||0)});if(o.status==='Señada')o.status='Confirmada';if(!x)data.events.push(o);if(Number(o.deposit)>0)movement({type:'Ingreso',category:'Seña',concept:`Seña ${o.child}`,amount:Number(o.deposit),eventId:o.id});save();closeModal();renderSalonShell()}};
 
 // AGENDA TODOS LOS MESES/AÑOS
 let cv24=new Date();
@@ -7764,7 +7764,7 @@ window.openEventFormV28=function(eid=''){
   form.onsubmit=ev=>{
     ev.preventDefault();
     const f=Object.fromEntries(new FormData(form));
-    if(f.end<=f.start)return toast('El horario de finalización debe ser posterior');
+    /* V115: fin <= inicio significa que termina al día siguiente */
 
     const conflict=EV28().find(x=>x.id!==eid&&x.date===f.date&&x.status!=='Cancelada'&&f.start<x.end&&f.end>x.start);
     if(conflict)return toast(`Se superpone con ${conflict.start} a ${conflict.end}`);
@@ -8535,7 +8535,7 @@ window.openEventFormV30=function(eid=''){
     ev.preventDefault();
     const f=Object.fromEntries(new FormData(form));
 
-    if(f.end<=f.start)return toast('El horario de finalización debe ser posterior');
+    /* V115: fin <= inicio significa que termina al día siguiente */
     const conflict=EVENTS30().find(x=>x.id!==eid&&x.date===f.date&&x.status!=='Cancelada'&&f.start<x.end&&f.end>x.start);
     if(conflict)return toast(`Se superpone con ${conflict.start} a ${conflict.end}`);
 
