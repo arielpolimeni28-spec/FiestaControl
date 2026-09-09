@@ -1471,4 +1471,177 @@ window.FiestaControlV114={cleanup:window.fc114ClearSupplierOrders,promos:fc114En
 
 </script>
 <!-- FiestaControl V114 EMBEBIDA -->
+
+<script>
+/* ============================================================
+   FIESTACONTROL V116 - CONTABILIDAD CANONICA Y PRECISA
+   ============================================================ */
+(function(){
+'use strict';
+const q=(s,r=document)=>r.querySelector(s);
+const esc=v=>String(v??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+const n=v=>{const x=Number(v||0);return Number.isFinite(x)?x:0};
+const norm=v=>String(v||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+const money=v=>{try{return new Intl.NumberFormat('es-AR',{style:'currency',currency:'ARS',maximumFractionDigits:0}).format(n(v))}catch(_){return '$ '+Math.round(n(v)).toLocaleString('es-AR')}};
+const sid=()=>String(session?.salonId||'');
+const salonEvents=()=> (data.events||[]).filter(e=>String(e.salonId)===sid()&&e.status!=='Cancelada');
+const salonMoves=()=> (data.movements||[]).filter(m=>String(m.salonId)===sid());
+const isIncome=m=>['ingreso','cobro'].includes(norm(m?.type));
+const isExpense=m=>['gasto','egreso'].includes(norm(m?.type));
+const isDeposit=m=>{const c=norm(m?.category),x=norm(m?.concept),k=String(m?.sourceKey||'').toLowerCase();return c.includes('sena')||x.includes('sena')||k.includes(':deposit:')};
+
+function eventFigures(e){
+  const base=n(e.basePrice??e.baseTotal), general=n(e.extrasTotal), stock=n(e.stockItemsTotal);
+  const typeExtras=n(e.typeExtrasTotal)||(n(e.extraAdultTotal)+n(e.extraChildTotal)+n(e.extraWaiterTotal)+n(e.extraKitchenTotal)+n(e.extraAnimatorTotal)+n(e.extraHourTotal));
+  const computed=base+general+stock+typeExtras;
+  const total=n(e.total)>0?n(e.total):computed;
+  const paid=Math.min(Math.max(0,n(e.paid||e.deposit)),Math.max(total,n(e.paid||e.deposit)));
+  return {base,general,stock,typeExtras,total,paid,balance:Math.max(0,total-paid)};
+}
+
+function renderFinance116(){
+  if(session?.role!=='salon')return;
+  try{setTitle('Finanzas','Contabilidad precisa de caja y reservas')}catch(_){ }
+  const c=q('#content');if(!c)return;
+  const moves=salonMoves().slice().sort((a,b)=>String(b.movementDate||b.createdAt||'').localeCompare(String(a.movementDate||a.createdAt||'')));
+  const inc=moves.filter(isIncome), out=moves.filter(isExpense);
+  const tin=inc.reduce((s,m)=>s+n(m.amount),0), tout=out.reduce((s,m)=>s+n(m.amount),0);
+  const methods={Efectivo:0,Transferencia:0,'Mercado Pago':0,Tarjeta:0,Otro:0};
+  inc.forEach(m=>{const x=norm(m.method);const k=x.includes('efect')?'Efectivo':x.includes('transfer')?'Transferencia':x.includes('mercado')?'Mercado Pago':x.includes('tarjet')?'Tarjeta':'Otro';methods[k]+=n(m.amount)});
+  const evs=salonEvents().map(e=>({e,f:eventFigures(e)}));
+  const contracted=evs.reduce((s,x)=>s+x.f.total,0), collected=evs.reduce((s,x)=>s+x.f.paid,0), pending=evs.reduce((s,x)=>s+x.f.balance,0);
+  c.innerHTML=`<div id="finance116">
+    <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px"><div><h2 style="margin:0">Finanzas</h2><small class="muted">Caja contable + control económico por reserva.</small></div><b style="color:#7257ff">CONTROL CONTABLE V116</b></div>
+    <div class="toolbar"><button class="primary" id="income116">+ Ingresar dinero</button><button class="danger" id="expense116">- Registrar egreso</button><button class="secondary" id="reset116">💰 Poner movimientos en $0</button></div>
+    <div class="grid stats" style="margin-top:14px">
+      <div class="card stat"><small>Ingresos de caja</small><strong>${money(tin)}</strong></div><div class="card stat"><small>Egresos</small><strong>${money(tout)}</strong></div>
+      <div class="card stat"><small>Resultado</small><strong>${money(tin-tout)}</strong></div><div class="card stat"><small>Saldo a cobrar</small><strong>${money(pending)}</strong></div>
+    </div>
+    <div class="card" style="margin-top:16px"><div class="section-title"><div><h3>💳 Ingresos por medio de pago</h3><small class="muted">Solo movimientos contables confirmados, sin duplicados.</small></div></div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:9px">${Object.entries(methods).map(([k,v])=>`<div style="border:1px solid #e5e7eb;border-radius:11px;padding:11px"><small>${k}</small><b style="display:block">${money(v)}</b></div>`).join('')}</div>
+    </div>
+    <div class="card" style="margin-top:16px"><div class="section-title"><div><h3>🎉 Contabilidad por reserva</h3><small class="muted">El total pagado de cada fiesta se toma del estado económico de la reserva.</small></div></div>
+      ${evs.length?`<div class="table-wrap"><table class="table"><thead><tr><th>Fecha</th><th>Fiesta</th><th>Base</th><th>Adicionales</th><th>Stock</th><th>Extras tipo</th><th>Total</th><th>Pagado</th><th>Saldo</th></tr></thead><tbody>${evs.map(({e,f})=>`<tr><td>${esc(e.date||'')}</td><td><b>${esc(e.eventName||e.child||e.client||'Fiesta')}</b></td><td>${money(f.base)}</td><td>${money(f.general)}</td><td>${money(f.stock)}</td><td>${money(f.typeExtras)}</td><td><b>${money(f.total)}</b></td><td>${money(f.paid)}</td><td><b>${money(f.balance)}</b></td></tr>`).join('')}</tbody><tfoot><tr><th colspan="6">TOTAL RESERVAS</th><th>${money(contracted)}</th><th>${money(collected)}</th><th>${money(pending)}</th></tr></tfoot></table></div>`:'<div class="empty">Sin reservas activas.</div>'}
+    </div>
+    <div class="card" style="margin-top:16px"><div class="section-title"><div><h3>📒 Libro de movimientos</h3><small class="muted">Una sola línea por cada movimiento real de dinero.</small></div></div>
+      ${moves.length?`<div class="table-wrap"><table class="table"><thead><tr><th>Fecha</th><th>Tipo</th><th>Concepto</th><th>Fiesta</th><th>Medio</th><th>Importe</th></tr></thead><tbody>${moves.map(m=>{const e=(data.events||[]).find(x=>String(x.id)===String(m.eventId||''));return `<tr><td>${esc(m.movementDate||'')}</td><td>${esc(m.type||'')}</td><td>${esc(m.concept||m.category||'')}</td><td>${esc(e?(e.eventName||e.child||e.client||'Fiesta'):'General')}</td><td>${esc(m.method||'')}</td><td><b>${money(m.amount)}</b></td></tr>`}).join('')}</tbody></table></div>`:'<div class="empty">Sin movimientos.</div>'}
+    </div></div>`;
+  q('#income116').onclick=()=>window.FiestaControlV110?.income?.();
+  q('#expense116').onclick=()=>window.FiestaControlV110?.expense?.();
+  q('#reset116').onclick=()=>window.FiestaControlV110?.reset?.();
+}
+
+async function repairAndRender116(){
+  const c=q('#content');
+  if(c)c.innerHTML='<div class="card"><h3>🔎 Validando contabilidad…</h3><p class="muted">FiestaControl está conciliando los movimientos para evitar duplicados.</p></div>';
+  try{
+    const r=await fetch('/api/accounting-repair-v116',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({salonId:sid()}),cache:'no-store'});
+    const j=await r.json();
+    if(!r.ok||j.ok===false)throw new Error(j.error||'No se pudo validar la contabilidad');
+    if(j.state)data=j.state;
+    window.__fc116LastRepair=Date.now();
+    renderFinance116();
+    if((j.result?.removed||0)>0 && typeof toast==='function')toast(`Contabilidad corregida: ${j.result.removed} duplicado(s) eliminado(s)`);
+  }catch(err){
+    console.error('V116 accounting repair',err);
+    if(c)c.innerHTML=`<div class="card"><h3>⚠️ No se muestran cifras sin validar</h3><p>${esc(err.message||'Error contable')}</p><button class="primary" onclick="renderSalonView()">Reintentar</button></div>`;
+  }
+}
+
+const previousRoute116=renderSalonView;
+renderSalonView=function(){
+  if(view==='finance')return repairAndRender116();
+  return previousRoute116();
+};
+window.FiestaControlV116={repair:repairAndRender116,render:renderFinance116};
+})();
+</script>
+<!-- FiestaControl V116 CONTABILIDAD CANONICA -->
+
+<script>
+/* ============================================================
+   FIESTACONTROL V117 - BORRADO DE PROVEEDORES AUTORITATIVO
+   Corrige la causa real: el botón final de enhancements seguía
+   llamando clearSupplierTests112(), que borraba localmente y hacía
+   save() del estado completo. Ahora TODOS los aliases de borrado
+   usan exclusivamente el endpoint atómico del servidor.
+   ============================================================ */
+(function(){
+'use strict';
+const q117=(s,r=document)=>r.querySelector(s);
+const sid117=()=>String(session?.salonId||'');
+const toast117=m=>{try{toast(m)}catch(_){alert(m)}};
+
+function modal117(html){
+  try{showModal(html)}catch(_){const d=document.createElement('div');d.innerHTML=html;document.body.appendChild(d)}
+}
+async function getFresh117(){
+  const r=await fetch('/api/data?_='+Date.now(),{cache:'no-store'});
+  if(!r.ok)throw new Error('No se pudo verificar el estado del servidor');
+  const st=await r.json();
+  if(!st||typeof st!=='object')throw new Error('Estado inválido del servidor');
+  data=st;
+  window.__FC_SERVER_DATA__=st;
+  return st;
+}
+async function post117(url,payload){
+  const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),cache:'no-store'});
+  const j=await r.json().catch(()=>({ok:false,error:'Respuesta inválida'}));
+  if(!r.ok||j.ok===false)throw new Error(j.error||'No se pudo completar la operación');
+  if(j.state){data=j.state;window.__FC_SERVER_DATA__=j.state}
+  return j;
+}
+
+window.fc117ClearSupplierOrders=async function(){
+  const salonId=sid117();
+  if(!salonId)return toast117('No se pudo identificar el salón');
+  // El conteo visible es informativo. El servidor vuelve a contar y decide.
+  const visible=(data.stockPurchases||[]).filter(x=>String(x.salonId||'')===salonId).length+
+                (data.orders||[]).filter(x=>String(x.salonId||'')===salonId).length;
+  modal117(`<div class="modal-title"><div><h2>🧹 Borrar pedidos y compras</h2><p>Borrado definitivo en servidor.</p></div><button class="ghost small" onclick="closeModal()">✕</button></div>
+    <div class="card" style="margin:0 0 14px"><b>Se eliminarán ${visible} operaciones visibles.</b><p class="muted" style="margin:7px 0 0">Incluye pedidos manuales y de proveedores de la comunidad, pagos, chats y movimientos vinculados. Los proveedores y sus productos no se eliminan.</p></div>
+    <div class="form-actions"><button class="ghost" onclick="closeModal()">Cancelar</button><button class="danger" id="confirmDelete117">Sí, borrar definitivamente</button></div>`);
+  const b=q117('#confirmDelete117'); if(!b)return;
+  b.onclick=async()=>{
+    b.disabled=true;b.textContent='Borrando y verificando…';
+    try{
+      const out=await post117('/api/supplier-cleanup-v117',{salonId});
+      await getFresh117();
+      const remain=(data.stockPurchases||[]).filter(x=>String(x.salonId||'')===salonId).length+
+                   (data.orders||[]).filter(x=>String(x.salonId||'')===salonId).length;
+      if(remain!==0)throw new Error(`El servidor todavía informa ${remain} operación(es). No se confirma el borrado.`);
+      try{closeModal()}catch(_){ }
+      toast117(`Borrado confirmado: ${out.result?.deleted??visible} pedido(s)/compra(s)`);
+      // Render solo desde el estado recién leído del servidor.
+      if(typeof renderSuppliersV57==='function')renderSuppliersV57();
+      else if(typeof renderSalonView==='function')renderSalonView();
+    }catch(e){
+      b.disabled=false;b.textContent='Sí, borrar definitivamente';
+      toast117(e.message||'No se pudo borrar');
+    }
+  };
+};
+
+// IMPORTANTE: el render final de Proveedores todavía imprime onclick="clearSupplierTests112()".
+// Se reemplaza el alias viejo por la operación atómica; ya no hace save() local.
+window.clearSupplierTests112=window.fc117ClearSupplierOrders;
+window.fc114ClearSupplierOrders=window.fc117ClearSupplierOrders;
+window.fc113ClearSupplierOrders=window.fc117ClearSupplierOrders;
+
+// Defensa adicional: cualquier botón legacy con este texto ejecuta V117.
+document.addEventListener('click',function(ev){
+  const b=ev.target?.closest?.('button'); if(!b)return;
+  const t=String(b.textContent||'').trim().toLowerCase();
+  if(t.includes('borrar pedidos y compras')){
+    const fn=String(b.getAttribute('onclick')||'');
+    if(fn.includes('clearSupplierTests112')||fn.includes('fc114ClearSupplierOrders')){
+      ev.preventDefault();ev.stopImmediatePropagation();window.fc117ClearSupplierOrders();
+    }
+  }
+},true);
+
+window.FiestaControlV117={clearSupplierOrders:window.fc117ClearSupplierOrders,getFresh:getFresh117};
+})();
+</script>
+<!-- FiestaControl V117 BORRADO AUTORITATIVO -->
 </body></html>
