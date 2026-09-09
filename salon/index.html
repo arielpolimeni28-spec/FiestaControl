@@ -1511,7 +1511,7 @@ function renderFinance116(){
   const evs=salonEvents().map(e=>({e,f:eventFigures(e)}));
   const contracted=evs.reduce((s,x)=>s+x.f.total,0), collected=evs.reduce((s,x)=>s+x.f.paid,0), pending=evs.reduce((s,x)=>s+x.f.balance,0);
   c.innerHTML=`<div id="finance116">
-    <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px"><div><h2 style="margin:0">Finanzas</h2><small class="muted">Caja contable + control económico por reserva.</small></div><b style="color:#7257ff">CONTROL CONTABLE V116</b></div>
+    <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px"><div><h2 style="margin:0">Finanzas</h2><small class="muted">Caja contable + control económico por reserva.</small></div><b style="color:#7257ff">CONTROL CONTABLE V118</b></div>
     <div class="toolbar"><button class="primary" id="income116">+ Ingresar dinero</button><button class="danger" id="expense116">- Registrar egreso</button><button class="secondary" id="reset116">💰 Poner movimientos en $0</button></div>
     <div class="grid stats" style="margin-top:14px">
       <div class="card stat"><small>Ingresos de caja</small><strong>${money(tin)}</strong></div><div class="card stat"><small>Egresos</small><strong>${money(tout)}</strong></div>
@@ -1531,32 +1531,74 @@ function renderFinance116(){
   q('#reset116').onclick=()=>window.FiestaControlV110?.reset?.();
 }
 
-async function repairAndRender116(){
-  const c=q('#content');
-  if(c)c.innerHTML='<div class="card"><h3>🔎 Validando contabilidad…</h3><p class="muted">FiestaControl está conciliando los movimientos para evitar duplicados.</p></div>';
-  try{
-    const r=await fetch('/api/accounting-repair-v116',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({salonId:sid()}),cache:'no-store'});
-    const j=await r.json();
-    if(!r.ok||j.ok===false)throw new Error(j.error||'No se pudo validar la contabilidad');
-    if(j.state)data=j.state;
-    window.__fc116LastRepair=Date.now();
-    renderFinance116();
-    if((j.result?.removed||0)>0 && typeof toast==='function')toast(`Contabilidad corregida: ${j.result.removed} duplicado(s) eliminado(s)`);
-  }catch(err){
-    console.error('V116 accounting repair',err);
-    if(c)c.innerHTML=`<div class="card"><h3>⚠️ No se muestran cifras sin validar</h3><p>${esc(err.message||'Error contable')}</p><button class="primary" onclick="renderSalonView()">Reintentar</button></div>`;
-  }
+let fc118RepairPromise=null;
+let fc118LastRepair=0;
+const FC118_REPAIR_TTL=5*60*1000;
+
+async function repairAccountingBackground118(force=false){
+  const now=Date.now();
+  if(!force && (now-fc118LastRepair)<FC118_REPAIR_TTL) return;
+  if(fc118RepairPromise) return fc118RepairPromise;
+
+  fc118RepairPromise=(async()=>{
+    try{
+      const r=await fetch('/api/accounting-repair-v116',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({salonId:sid()}),
+        cache:'no-store'
+      });
+      const j=await r.json();
+      if(!r.ok||j.ok===false)throw new Error(j.error||'No se pudo conciliar la contabilidad');
+
+      fc118LastRepair=Date.now();
+      window.__fc116LastRepair=fc118LastRepair;
+
+      if(j.state){
+        data=j.state;
+        window.__FC_SERVER_DATA__=j.state;
+      }
+
+      // Solo redibuja si Finanzas sigue abierta y realmente hubo una corrección.
+      if(view==='finance' && Number(j.result?.removed||0)>0){
+        renderFinance116();
+        if(typeof toast==='function'){
+          toast(`Contabilidad conciliada: ${j.result.removed} duplicado(s) eliminado(s)`);
+        }
+      }
+    }catch(err){
+      console.error('V118 background accounting repair',err);
+      // Nunca bloquea ni reemplaza la pantalla de Finanzas.
+    }finally{
+      fc118RepairPromise=null;
+    }
+  })();
+
+  return fc118RepairPromise;
 }
 
 const previousRoute116=renderSalonView;
 renderSalonView=function(){
-  if(view==='finance')return repairAndRender116();
+  if(view==='finance'){
+    // La pantalla aparece de inmediato. La conciliación corre silenciosamente detrás.
+    renderFinance116();
+    repairAccountingBackground118(false);
+    return;
+  }
   return previousRoute116();
 };
-window.FiestaControlV116={repair:repairAndRender116,render:renderFinance116};
+
+window.FiestaControlV116={
+  repair:()=>repairAccountingBackground118(true),
+  render:renderFinance116
+};
+window.FiestaControlV118={
+  repair:()=>repairAccountingBackground118(true),
+  render:renderFinance116
+};
 })();
 </script>
-<!-- FiestaControl V116 CONTABILIDAD CANONICA -->
+<!-- FiestaControl V118 FINANZAS ESTABLE: render inmediato + conciliación en segundo plano -->
 
 <script>
 /* ============================================================
