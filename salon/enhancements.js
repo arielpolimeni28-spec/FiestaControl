@@ -19704,7 +19704,10 @@ window.renderSuppliersV57=function(){
     </div>
 
     <div class="card" style="margin-top:14px">
-      <h3>Pedidos / compras</h3>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+        <h3 style="margin:0">Pedidos / compras</h3>
+        <button type="button" class="danger small" onclick="clearSupplierTests112()">🧹 Borrar pedidos y compras</button>
+      </div>
       ${purchases.length?`
         <div class="table-wrap">
           <table class="table">
