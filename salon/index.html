@@ -1842,7 +1842,7 @@ function renderFinance120(){
   c.innerHTML=`<div id="finance120">
     <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
       <div><h2 style="margin:0">Finanzas</h2><small class="muted">Caja real del salón y cuenta exacta de cada reserva.</small></div>
-      <b style="color:#7257ff">CONTABILIDAD V120</b>
+      <b style="color:#7257ff">CONTABILIDAD V121</b>
     </div>
 
     <div class="toolbar">
@@ -1959,5 +1959,100 @@ window.FiestaControlV120={render:renderFinance120,reset:reset120,canonicalize:ca
 })();
 </script>
 <!-- FiestaControl V120 CONTABILIDAD PROFESIONAL -->
+
+
+<script>
+/* ============================================================
+   FIESTACONTROL V121 - RESERVAS ESTABLES
+   Elimina el doble guardado V44/V45 y repara el caso histórico
+   "personal adicional = valor base" cuando no había personal extra.
+   ============================================================ */
+(function(){
+'use strict';
+const n121=v=>{const x=Number(v||0);return Number.isFinite(x)?x:0};
+const sid121=()=>String(session?.salonId||'');
+
+function repairEvent121(e){
+  if(!e || String(e.salonId||'')!==sid121()) return false;
+  let changed=false;
+
+  const noStaff =
+    n121(e.extraWaiters)===0 &&
+    n121(e.extraKitchen)===0 &&
+    n121(e.extraAnimators)===0 &&
+    n121(e.extraWaiterTotal)===0 &&
+    n121(e.extraKitchenTotal)===0 &&
+    n121(e.extraAnimatorTotal)===0 &&
+    n121(e.typeExtrasTotal)===0;
+
+  const base=n121(e.basePrice??e.baseTotal);
+  const generic=n121(e.extrasTotal);
+  const stock=n121(e.stockItemsTotal);
+
+  // Corrupción conocida de V44:
+  // staffClientChargeTotal recibió v.total (a veces exactamente el valor base).
+  if(noStaff && n121(e.staffClientChargeTotal)>0){
+    e.staffClientChargeTotal=0;
+    e.genericExtraStaffTotal=0;
+    e.autoExtraStaffTotal=0;
+    changed=true;
+  }
+
+  const typeExtras=n121(e.typeExtrasTotal) || (
+    n121(e.extraAdultTotal)+n121(e.extraChildTotal)+
+    n121(e.extraWaiterTotal)+n121(e.extraKitchenTotal)+
+    n121(e.extraAnimatorTotal)+n121(e.extraHourTotal)
+  );
+  const correctTotal=base+generic+stock+typeExtras;
+
+  if(correctTotal>0 && n121(e.total)!==correctTotal){
+    e.total=correctTotal;
+    changed=true;
+  }
+
+  const paid=Math.max(n121(e.deposit),n121(e.paid));
+  if(n121(e.paid)!==paid){e.paid=paid;changed=true}
+  const balance=Math.max(0,n121(e.total)-paid);
+  if(n121(e.balance)!==balance){e.balance=balance;changed=true}
+
+  return changed;
+}
+
+let saving121=false;
+async function persistRepair121(){
+  if(saving121)return;
+  saving121=true;
+  try{ await save(); }catch(e){ console.error('V121 repair save',e); }
+  finally{saving121=false}
+}
+
+// Repara una sola vez al cargar, sin intervalos ni refrescos de pantalla.
+let changed121=false;
+(data.events||[]).forEach(e=>{if(repairEvent121(e))changed121=true});
+if(changed121) persistRepair121();
+
+// Antes de abrir el detalle, los campos ya están saneados.
+// Así el usuario nunca ve "personal adicional" igual al valor de la fiesta.
+const OPEN121=window.openEvent;
+if(typeof OPEN121==='function'){
+  window.openEvent=function(eid){
+    const e=(data.events||[]).find(x=>String(x.id)===String(eid));
+    const changed=repairEvent121(e);
+    if(changed) persistRepair121();
+    return OPEN121.apply(this,arguments);
+  };
+}
+
+// Antes de cualquier guardado, coherencia matemática de las reservas.
+const SAVE121=save;
+save=function(){
+  (data.events||[]).forEach(repairEvent121);
+  return SAVE121.apply(this,arguments);
+};
+
+window.FiestaControlV121={repairEvent:repairEvent121};
+})();
+</script>
+<!-- FiestaControl V121 RESERVAS ESTABLES -->
 
 </body></html>
