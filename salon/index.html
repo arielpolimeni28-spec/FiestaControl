@@ -2,7 +2,7 @@
 <html lang="es"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>FiestaControl · V113</title><link rel="stylesheet" href="style.css?v=113"/></head>
 <body><div id="app"></div><dialog id="modal"><div id="modal-body"></div></dialog><div id="toast" class="toast"></div>
-<script src="/api/bootstrap.js?v=110"></script><script src="app.js?v=113"></script><script src="enhancements.js?v=113"></script>
+<script src="/api/bootstrap.js?v=114"></script><script src="app.js?v=114"></script><script src="enhancements.js?v=114"></script>
 <script>
 
 (function(){
@@ -1315,4 +1315,145 @@ if(typeof old112==='function'){
 
 </script>
 <!-- V113: botón de limpieza visible dentro de Pedidos / compras -->
+<script>
+/* FiestaControl V114 - Proveedores estables + publicaciones destacadas múltiples */
+(function(){
+'use strict';
+const q=(s,r=document)=>r.querySelector(s), qa=(s,r=document)=>[...r.querySelectorAll(s)];
+const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const sid=()=>String(session?.salonId||session?.id||session?.userId||'');
+const salon=()=> (data.salons||[]).find(s=>String(s.id)===sid());
+const toast114=(m)=>{ try{toast(m)}catch(_){alert(m)} };
+const modal114=(html)=>{ try{showModal(html)}catch(_){ const d=document.createElement('div'); d.innerHTML=html; document.body.appendChild(d); } };
+function replaceState114(st){ if(st&&typeof st==='object'){ data=st; window.__FC_SERVER_DATA__=st; } }
+async function post114(url,payload){
+  const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  const out=await r.json().catch(()=>({ok:false,error:'Respuesta inválida del servidor'}));
+  if(!r.ok||out.ok===false) throw new Error(out.error||'No se pudo guardar');
+  if(out.state)replaceState114(out.state);
+  return out;
+}
+
+/* ================= PROVEEDORES: BORRADO REAL EN SERVIDOR ================= */
+window.fc114ClearSupplierOrders=async function(){
+  const salonId=sid();
+  const purchases=(data.stockPurchases||[]).filter(x=>String(x.salonId)===salonId);
+  const orders=(data.orders||[]).filter(x=>String(x.salonId)===salonId);
+  const total=purchases.length+orders.length;
+  if(!total){toast114('No hay pedidos ni compras para borrar');return;}
+  modal114(`<div class="modal-title"><div><h2>🧹 Borrar pedidos y compras</h2><p>Esta limpieza se guarda directamente en el servidor.</p></div><button class="ghost small" onclick="closeModal()">✕</button></div>
+  <div class="card" style="margin:0 0 14px"><b>Se eliminarán ${total} operaciones.</b><p class="muted" style="margin:7px 0 0">Se borran pedidos manuales y de comunidad, chats, pagos y movimientos relacionados. No se borran proveedores ni productos. Si una compra entregada agregó stock, se revierte esa cantidad.</p></div>
+  <div class="form-actions"><button class="ghost" onclick="closeModal()">Cancelar</button><button class="danger" id="fc114ConfirmClear">Sí, borrar definitivamente</button></div>`);
+  const b=q('#fc114ConfirmClear'); if(!b)return;
+  b.onclick=async()=>{
+    b.disabled=true;b.textContent='Borrando…';
+    try{
+      const out=await post114('/api/supplier-cleanup-v114',{salonId});
+      closeModal();
+      toast114(`Se borraron ${out.result?.deleted||total} pedidos/compras`);
+      if(typeof renderSalonShell==='function')renderSalonShell();
+      setTimeout(fc114EnsureSupplierButton,100);
+    }catch(e){b.disabled=false;b.textContent='Sí, borrar definitivamente';toast114(e.message||'No se pudo borrar');}
+  };
+};
+
+function fc114EnsureSupplierButton(){
+  if(session?.role!=='salon'||view!=='suppliers')return;
+  const content=q('#content'); if(!content)return;
+  const h=qa('h1,h2,h3,h4',content).find(x=>String(x.textContent||'').trim().toLowerCase()==='pedidos / compras');
+  if(!h)return;
+  const card=h.closest('.card')||h.parentElement; if(!card)return;
+  let bar=h.parentElement;
+  if(!bar)return;
+  if(q('#fc114ClearSupplierOrders',card))return;
+  if(getComputedStyle(bar).display!=='flex'){
+    const wrap=document.createElement('div');
+    wrap.style.cssText='display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px';
+    h.parentNode.insertBefore(wrap,h);wrap.appendChild(h);bar=wrap;
+  }
+  const btn=document.createElement('button');
+  btn.id='fc114ClearSupplierOrders';btn.type='button';btn.className='danger small';btn.textContent='🧹 Borrar pedidos y compras';btn.onclick=window.fc114ClearSupplierOrders;
+  bar.appendChild(btn);
+}
+
+/* ================= PROMOS MÚLTIPLES ================= */
+function promoList114(s){
+  if(!s)return[];
+  if(Array.isArray(s.featuredPromos)&&s.featuredPromos.length)return s.featuredPromos;
+  if(String(s.featuredPromoTitle||'').trim())return [{id:`legacy-${s.id}`,title:s.featuredPromoTitle||'',price:s.featuredPromoPrice||'',text:s.featuredPromoText||'',image:s.featuredPromoImage||'',validUntil:s.featuredPromoValidUntil||'',active:s.featuredPromoActive===true,updatedAt:s.featuredPromoUpdatedAt||''}];
+  return[];
+}
+function promoLive114(p){
+  if(!p||p.active!==true||!String(p.title||'').trim())return false;
+  if(p.validUntil){const end=new Date(String(p.validUntil)+'T23:59:59');if(end<new Date())return false;}
+  return true;
+}
+function promoStatus114(p){
+  if(p.active!==true)return 'BORRADOR';
+  if(p.validUntil&&new Date(String(p.validUntil)+'T23:59:59')<new Date())return 'VENCIDA';
+  return 'PUBLICADA';
+}
+window.fc114OpenPromo=function(id=''){
+  const s=salon(); if(!s)return;
+  if(s.featuredPromoEnabled!==true){toast114('El administrador debe habilitar las publicaciones destacadas');return;}
+  const p=promoList114(s).find(x=>String(x.id)===String(id))||{};
+  modal114(`<div class="modal-title"><div><h2>⭐ ${p.id?'Editar publicación':'Nueva publicación destacada'}</h2><p>Podés guardar como borrador o publicar ahora.</p></div><button class="ghost small" onclick="closeModal()">✕</button></div>
+  <form id="fc114PromoForm"><div class="form-grid">
+    <div class="field span2"><label>Título</label><input name="title" maxlength="80" required value="${esc(p.title||'')}" placeholder="Ej.: 20% OFF domingos"></div>
+    <div class="field"><label>Precio / beneficio</label><input name="price" maxlength="60" value="${esc(p.price||'')}" placeholder="Ej.: Desde $450.000"></div>
+    <div class="field"><label>Vigente hasta</label><input name="validUntil" type="date" value="${esc(p.validUntil||'')}"></div>
+    <div class="field span2"><label>Texto de venta</label><textarea name="text" maxlength="350">${esc(p.text||'')}</textarea></div>
+    <div class="field span2"><label>Imagen</label><input id="fc114PromoImage" type="file" accept="image/*">${p.image?`<img id="fc114PromoPreview" src="${p.image}" style="display:block;margin-top:8px;width:100%;max-width:440px;max-height:230px;object-fit:cover;border-radius:12px">`:`<img id="fc114PromoPreview" style="display:none;margin-top:8px;width:100%;max-width:440px;max-height:230px;object-fit:cover;border-radius:12px">`}</div>
+    <div class="field span2"><label style="display:flex;align-items:center;gap:9px"><input name="active" type="checkbox" ${p.active===true?'checked':''}><span><b>Publicar ahora</b><br><small>Si lo desmarcás queda guardada como borrador.</small></span></label></div>
+  </div><div class="form-actions"><button type="button" class="ghost" onclick="closeModal()">Cancelar</button><button class="primary">Guardar publicación</button></div></form>`);
+  let image=p.image||'';
+  const fi=q('#fc114PromoImage'); if(fi)fi.onchange=e=>{const f=e.target.files?.[0];if(!f)return;const r=new FileReader();r.onload=()=>{image=r.result;const pr=q('#fc114PromoPreview');pr.src=image;pr.style.display='block'};r.readAsDataURL(f)};
+  const form=q('#fc114PromoForm'); if(!form)return;
+  form.onsubmit=async e=>{e.preventDefault();const fd=new FormData(form);const submit=form.querySelector('button.primary');submit.disabled=true;submit.textContent='Guardando…';try{
+    await post114('/api/promos-v114',{action:'save',salonId:s.id,promo:{id:p.id||'',title:String(fd.get('title')||'').trim(),price:String(fd.get('price')||'').trim(),text:String(fd.get('text')||'').trim(),validUntil:String(fd.get('validUntil')||''),image,active:form.elements.active.checked}});
+    closeModal();toast114('Publicación guardada');if(typeof renderSalonShell==='function')renderSalonShell();setTimeout(fc114EnsurePromoManager,100);
+  }catch(err){submit.disabled=false;submit.textContent='Guardar publicación';toast114(err.message||'No se pudo guardar')}};
+};
+window.fc114TogglePromo=async function(id,active){try{await post114('/api/promos-v114',{action:'toggle',salonId:sid(),promoId:id,active});toast114(active?'Publicación publicada':'Publicación retirada');if(typeof renderSalonShell==='function')renderSalonShell();setTimeout(fc114EnsurePromoManager,100)}catch(e){toast114(e.message)}};
+window.fc114DeletePromo=function(id){
+  modal114(`<div class="modal-title"><div><h2>Eliminar publicación</h2><p>La publicación se eliminará definitivamente.</p></div><button class="ghost small" onclick="closeModal()">✕</button></div><div class="form-actions"><button class="ghost" onclick="closeModal()">Cancelar</button><button class="danger" id="fc114DeletePromoConfirm">Eliminar</button></div>`);
+  const b=q('#fc114DeletePromoConfirm');if(!b)return;b.onclick=async()=>{b.disabled=true;try{await post114('/api/promos-v114',{action:'delete',salonId:sid(),promoId:id});closeModal();toast114('Publicación eliminada');if(typeof renderSalonShell==='function')renderSalonShell();setTimeout(fc114EnsurePromoManager,100)}catch(e){b.disabled=false;toast114(e.message)}};
+};
+function fc114EnsurePromoManager(){
+  if(session?.role!=='salon'||view!=='profile')return;
+  const content=q('#content'),s=salon(); if(!content||!s)return;
+  q('#v89-featured-panel',content)?.remove(); q('#v87-promo-panel',content)?.remove(); q('#fc114PromoManager',content)?.remove();
+  const box=document.createElement('div');box.id='fc114PromoManager';box.className='card';box.style.cssText='margin-top:16px;padding:16px';
+  if(s.featuredPromoEnabled!==true){box.innerHTML=`<div class="section-title"><div><h3>⭐ Publicaciones destacadas</h3><small class="muted">Promoción paga administrada por FiestaControl.</small></div></div><div class="admin-notice"><span>🔒</span><div><b>Opción no habilitada</b><small>El administrador debe habilitar este salón para crear publicaciones destacadas.</small></div></div>`;content.appendChild(box);return;}
+  const list=promoList114(s);
+  box.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap"><div><h3 style="margin:0">⭐ Publicaciones destacadas</h3><small class="muted">Podés crear varias, editarlas y decidir cuáles están publicadas.</small></div><button class="primary" onclick="fc114OpenPromo()">+ Nueva publicación</button></div>
+  <div style="display:grid;gap:10px;margin-top:14px">${list.length?list.map(p=>`<div style="display:grid;grid-template-columns:72px 1fr auto;gap:12px;align-items:center;border:1px solid #e5e7eb;border-radius:14px;padding:10px">${p.image?`<img src="${p.image}" style="width:72px;height:60px;object-fit:cover;border-radius:10px">`:`<div style="width:72px;height:60px;display:flex;align-items:center;justify-content:center;background:#f5f3ff;border-radius:10px;font-size:28px">🎉</div>`}<div><b>${esc(p.title||'Sin título')}</b>${p.price?`<div>${esc(p.price)}</div>`:''}<small class="muted">${promoStatus114(p)}${p.validUntil?` · hasta ${esc(p.validUntil)}`:''}</small></div><div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="secondary small" onclick="fc114OpenPromo('${esc(p.id)}')">Editar</button><button class="${p.active===true?'ghost':'primary'} small" onclick="fc114TogglePromo('${esc(p.id)}',${p.active===true?'false':'true'})">${p.active===true?'Dejar de publicar':'Publicar'}</button><button class="danger small" onclick="fc114DeletePromo('${esc(p.id)}')">Eliminar</button></div></div>`).join(''):`<div class="empty">Todavía no creaste ninguna publicación. Usá “Nueva publicación”.</div>`}</div>`;
+  content.appendChild(box);
+}
+
+function allLivePromos114(){
+  const out=[];(data.salons||[]).forEach(s=>{if(s.status!=='Aprobado'||s.publicProfileEnabled===false||s.featuredPromoEnabled!==true)return;promoList114(s).filter(promoLive114).forEach(p=>out.push({s,p}))});
+  return out.sort((a,b)=>String(b.p.updatedAt||'').localeCompare(String(a.p.updatedAt||'')));
+}
+function fc114RenderPublicPromos(){
+  const home=q('.fc-home'); if(!home)return;
+  q('#fc110-public-promos')?.remove();qa('.v89-featured').forEach(x=>x.remove());q('#fc114-public-promos')?.remove();
+  const list=allLivePromos114();if(!list.length)return;
+  const sec=document.createElement('section');sec.id='fc114-public-promos';sec.style.cssText='max-width:1460px;margin:22px auto 30px;padding:0 18px';
+  sec.innerHTML=`<div style="background:linear-gradient(135deg,#fff7ed,#f5f3ff,#eef2ff);border:1px solid #e9d5ff;border-radius:28px;padding:24px;box-shadow:0 18px 48px rgba(30,41,59,.13)"><div style="margin-bottom:14px"><span style="font-size:12px;font-weight:900;letter-spacing:.09em;color:#7c3aed">⭐ PUBLICACIONES DESTACADAS</span><h2 style="font-size:30px;margin:5px 0">Promociones de nuestros salones</h2></div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(275px,1fr));gap:17px">${list.slice(0,12).map(({s,p})=>`<article class="card" style="padding:0;overflow:hidden"><div>${p.image?`<img src="${p.image}" style="width:100%;height:205px;object-fit:cover;display:block">`:`<div style="height:180px;display:flex;align-items:center;justify-content:center;font-size:55px;background:#f5f3ff">🎉</div>`}</div><div style="padding:16px"><span style="font-size:10px;font-weight:900;padding:5px 8px;border-radius:999px;background:#fee2e2">DESTACADO</span><h3 style="font-size:22px;margin:9px 0 3px">${esc(p.title)}</h3><b>${esc(s.name||'Salón')}</b>${p.price?`<strong style="display:block;font-size:21px;margin-top:8px">${esc(p.price)}</strong>`:''}${p.text?`<p style="line-height:1.5">${esc(p.text)}</p>`:''}${p.validUntil?`<small class="muted">Vigente hasta ${esc(p.validUntil)}</small>`:''}<button class="primary w100" style="margin-top:12px" onclick="renderPublicSalonPage('${esc(s.id)}')">Ver salón</button></div></article>`).join('')}</div></div>`;
+  const features=q('.fc-home-features',home);if(features)home.insertBefore(sec,features);else home.appendChild(sec);
+}
+
+function fc114Repair(){
+  fc114EnsureSupplierButton();fc114EnsurePromoManager();fc114RenderPublicPromos();
+}
+const obs=new MutationObserver(()=>{clearTimeout(window.__fc114RepairTimer);window.__fc114RepairTimer=setTimeout(fc114Repair,60)});
+obs.observe(document.documentElement,{childList:true,subtree:true});
+document.addEventListener('click',()=>setTimeout(fc114Repair,80),true);
+setTimeout(fc114Repair,250);setInterval(()=>{if(view==='suppliers'||view==='profile'||q('.fc-home'))fc114Repair()},1800);
+window.FiestaControlV114={cleanup:window.fc114ClearSupplierOrders,promos:fc114EnsurePromoManager,publicPromos:fc114RenderPublicPromos};
+})();
+
+</script>
+<!-- FiestaControl V114 EMBEBIDA -->
 </body></html>

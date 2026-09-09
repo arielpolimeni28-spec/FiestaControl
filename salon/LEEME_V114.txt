@@ -1,0 +1,20 @@
+FIESTACONTROL V114
+
+Cambios principales:
+- Proveedores: botón visible "Borrar pedidos y compras" en la tarjeta Pedidos / compras.
+- El borrado se ejecuta de forma atómica en el servidor y usa tombstones para impedir que un navegador con datos viejos vuelva a crear pedidos eliminados.
+- Borra pedidos manuales y de comunidad, chats, pagos y movimientos relacionados.
+- No borra proveedores ni productos. Revierte solo stock acreditado por esas compras.
+- Publicaciones destacadas: ahora un salón habilitado puede crear varias publicaciones.
+- Cada publicación puede editarse, publicarse, dejar de publicarse o eliminarse.
+- Las publicaciones activas aparecen en la página pública.
+- Se mantiene compatibilidad con la publicación destacada antigua.
+
+PARA ACTUALIZAR DESDE V113:
+Reemplazar solamente:
+1. index.html
+2. wsgi_app.py
+3. enhancements.js
+
+No borrar ni reemplazar fiestacontrol.db.
+Después: PythonAnywhere > Web > Reload y Ctrl+F5.

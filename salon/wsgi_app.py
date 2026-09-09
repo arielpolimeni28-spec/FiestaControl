@@ -290,6 +290,29 @@ def _merge_state_protecting_movements(incoming):
 
     merged["movements"] = list(by_id.values())
     merged["financeMovementResetAtV93"] = epochs
+
+    # V114: un navegador con estado viejo no puede resucitar pedidos/compras borrados.
+    tombstones = {str(x) for x in (current.get("deletedSupplierOrderIdsV114") or []) if x}
+    merged["deletedSupplierOrderIdsV114"] = list(tombstones)
+    merged["supplierCleanupAtV114"] = current.get("supplierCleanupAtV114") or {}
+    if tombstones:
+        merged["stockPurchases"] = [x for x in (merged.get("stockPurchases") or []) if str((x or {}).get("id") or "") not in tombstones]
+        merged["orders"] = [x for x in (merged.get("orders") or []) if str((x or {}).get("id") or "") not in tombstones]
+        merged["orderMessages"] = [x for x in (merged.get("orderMessages") or []) if str((x or {}).get("orderId") or "") not in tombstones]
+        merged["providerPayments"] = [x for x in (merged.get("providerPayments") or []) if str((x or {}).get("orderId") or "") not in tombstones]
+        merged["movements"] = [m for m in (merged.get("movements") or []) if str((m or {}).get("orderId") or "") not in tombstones and str((m or {}).get("stockPurchaseId") or "") not in tombstones]
+
+    # V114: las promos múltiples se modifican por endpoint atómico; conservar la versión del servidor.
+    cur_salons = {str((s or {}).get("id") or ""): s for s in (current.get("salons") or [])}
+    for salon in (merged.get("salons") or []):
+        sid = str((salon or {}).get("id") or "")
+        cur = cur_salons.get(sid)
+        if cur and "featuredPromos" in cur:
+            salon["featuredPromos"] = cur.get("featuredPromos") or []
+            # Mantener compatibilidad legacy sincronizada con el servidor.
+            for k in ("featuredPromoTitle","featuredPromoPrice","featuredPromoText","featuredPromoImage","featuredPromoValidUntil","featuredPromoActive","featuredPromoUpdatedAt"):
+                if k in cur:
+                    salon[k] = cur.get(k)
     return merged
 
 
@@ -506,6 +529,187 @@ def _promo_action_v94(req):
     return st
 
 
+
+# ============================================================
+# V114 - Operaciones atómicas de proveedores y promos múltiples
+# ============================================================
+def _order_items_v114(order):
+    items = (order or {}).get("items") or []
+    if isinstance(items, list) and items:
+        return items
+    return [{
+        "productId": (order or {}).get("productId") or "",
+        "productName": (order or {}).get("productName") or "",
+        "qty": (order or {}).get("qty") or (order or {}).get("quantity") or 0,
+    }]
+
+def _num_v114(v):
+    try:
+        return float(v or 0)
+    except Exception:
+        return 0.0
+
+def _norm_v114(v):
+    return str(v or "").strip().lower()
+
+def _supplier_cleanup_v114(req):
+    salon_id = str((req or {}).get("salonId") or "")
+    if not salon_id:
+        raise ValueError("Falta el salón")
+
+    def mutate(st):
+        purchases = [x for x in st.get("stockPurchases", []) if str((x or {}).get("salonId") or "") == salon_id]
+        orders = [x for x in st.get("orders", []) if str((x or {}).get("salonId") or "") == salon_id]
+        all_orders = purchases + orders
+        ids = {str((x or {}).get("id") or "") for x in all_orders if (x or {}).get("id")}
+
+        # Revertir solo stock que haya sido acreditado por esas compras entregadas.
+        products = st.get("stockProducts", []) or []
+        for order in all_orders:
+            if str((order or {}).get("targetType") or "").lower() != "stock":
+                continue
+            if (order or {}).get("stockAdded") is not True:
+                continue
+            for it in _order_items_v114(order):
+                pid = str((it or {}).get("productId") or (it or {}).get("id") or "")
+                pname = _norm_v114((it or {}).get("productName") or (it or {}).get("name"))
+                qty = _num_v114((it or {}).get("qty") or (it or {}).get("quantity"))
+                for prod in products:
+                    if str((prod or {}).get("salonId") or "") != salon_id:
+                        continue
+                    same = bool(pid and str((prod or {}).get("id") or "") == pid) or bool(pname and _norm_v114((prod or {}).get("name")) == pname)
+                    if same:
+                        prod["stock"] = max(0, _num_v114((prod or {}).get("stock")) - qty)
+                        break
+
+        st["stockPurchases"] = [x for x in st.get("stockPurchases", []) if str((x or {}).get("salonId") or "") != salon_id]
+        st["orders"] = [x for x in st.get("orders", []) if str((x or {}).get("salonId") or "") != salon_id]
+        st["orderMessages"] = [x for x in st.get("orderMessages", []) if str((x or {}).get("orderId") or "") not in ids]
+        st["providerPayments"] = [x for x in st.get("providerPayments", []) if str((x or {}).get("orderId") or "") not in ids]
+        st["movements"] = [
+            m for m in st.get("movements", [])
+            if not (
+                str((m or {}).get("salonId") or "") == salon_id and (
+                    str((m or {}).get("orderId") or "") in ids or
+                    str((m or {}).get("stockPurchaseId") or "") in ids or
+                    any(str((m or {}).get("sourceKey") or "") in (f"stock-purchase:{oid}", f"provider-order:{oid}") for oid in ids)
+                )
+            )
+        ]
+
+        # Tombstones: impiden que un PUT viejo del navegador resucite pedidos borrados.
+        tomb = [str(x) for x in (st.get("deletedSupplierOrderIdsV114") or []) if x]
+        tomb = list(dict.fromkeys(tomb + sorted(ids)))[-5000:]
+        st["deletedSupplierOrderIdsV114"] = tomb
+        epochs = st.get("supplierCleanupAtV114") or {}
+        if not isinstance(epochs, dict):
+            epochs = {}
+        epochs[salon_id] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        st["supplierCleanupAtV114"] = epochs
+        return {"deleted": len(all_orders), "ids": sorted(ids)}
+
+    result, st = _atomic_state_v94(mutate)
+    return result, st
+
+def _ensure_promos_v114(salon):
+    promos = salon.get("featuredPromos")
+    if not isinstance(promos, list):
+        promos = []
+    if not promos and str(salon.get("featuredPromoTitle") or "").strip():
+        promos.append({
+            "id": f"legacy-{salon.get('id')}",
+            "title": str(salon.get("featuredPromoTitle") or "").strip(),
+            "price": str(salon.get("featuredPromoPrice") or "").strip(),
+            "text": str(salon.get("featuredPromoText") or "").strip(),
+            "image": str(salon.get("featuredPromoImage") or ""),
+            "validUntil": str(salon.get("featuredPromoValidUntil") or ""),
+            "active": salon.get("featuredPromoActive") is True,
+            "createdAt": str(salon.get("featuredPromoUpdatedAt") or ""),
+            "updatedAt": str(salon.get("featuredPromoUpdatedAt") or ""),
+        })
+    salon["featuredPromos"] = promos
+    return promos
+
+def _sync_legacy_promo_v114(salon):
+    promos = _ensure_promos_v114(salon)
+    active = [p for p in promos if isinstance(p, dict) and p.get("active") is True]
+    chosen = (active or promos)[-1] if (active or promos) else {}
+    salon["featuredPromoTitle"] = str(chosen.get("title") or "")
+    salon["featuredPromoPrice"] = str(chosen.get("price") or "")
+    salon["featuredPromoText"] = str(chosen.get("text") or "")
+    salon["featuredPromoImage"] = str(chosen.get("image") or "")
+    salon["featuredPromoValidUntil"] = str(chosen.get("validUntil") or "")
+    salon["featuredPromoActive"] = bool(chosen.get("active")) if chosen else False
+    salon["featuredPromoUpdatedAt"] = str(chosen.get("updatedAt") or chosen.get("createdAt") or "")
+
+def _promos_action_v114(req):
+    action = str((req or {}).get("action") or "")
+    salon_id = str((req or {}).get("salonId") or "")
+    if not salon_id:
+        raise ValueError("Falta el salón")
+
+    def mutate(st):
+        salon = next((x for x in st.get("salons", []) if str((x or {}).get("id") or "") == salon_id), None)
+        if not salon:
+            raise ValueError("Salón inexistente")
+        promos = _ensure_promos_v114(salon)
+
+        if action == "permission":
+            salon["featuredPromoEnabled"] = bool((req or {}).get("enabled"))
+            if not salon["featuredPromoEnabled"]:
+                for p in promos:
+                    if isinstance(p, dict):
+                        p["active"] = False
+            _sync_legacy_promo_v114(salon)
+            return {"enabled": salon["featuredPromoEnabled"]}
+
+        if salon.get("featuredPromoEnabled") is not True:
+            raise ValueError("La publicación destacada no está habilitada por el administrador")
+
+        if action == "save":
+            promo = (req or {}).get("promo") or {}
+            pid = str(promo.get("id") or "").strip()
+            now = time.strftime("%Y-%m-%dT%H:%M:%S")
+            target = next((p for p in promos if str((p or {}).get("id") or "") == pid), None) if pid else None
+            if target is None:
+                pid = f"promo-{int(time.time()*1000)}-{len(promos)+1}"
+                target = {"id": pid, "createdAt": now}
+                promos.append(target)
+            target.update({
+                "title": str(promo.get("title") or "").strip(),
+                "price": str(promo.get("price") or "").strip(),
+                "text": str(promo.get("text") or "").strip(),
+                "image": str(promo.get("image") or ""),
+                "validUntil": str(promo.get("validUntil") or ""),
+                "active": bool(promo.get("active")),
+                "updatedAt": now,
+            })
+            if not target["title"]:
+                raise ValueError("La publicación necesita un título")
+            _sync_legacy_promo_v114(salon)
+            return {"saved": True, "id": pid}
+
+        pid = str((req or {}).get("promoId") or "")
+        target = next((p for p in promos if str((p or {}).get("id") or "") == pid), None)
+        if not target:
+            raise ValueError("Publicación inexistente")
+
+        if action == "toggle":
+            target["active"] = bool((req or {}).get("active"))
+            target["updatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+            _sync_legacy_promo_v114(salon)
+            return {"active": target["active"]}
+
+        if action == "delete":
+            salon["featuredPromos"] = [p for p in promos if str((p or {}).get("id") or "") != pid]
+            _sync_legacy_promo_v114(salon)
+            return {"deleted": True}
+
+        raise ValueError("Acción de publicación inválida")
+
+    result, st = _atomic_state_v94(mutate)
+    return result, st
+
 def application(environ, start_response):
     _ensure_community_reset_v85()
     method = environ.get("REQUEST_METHOD", "GET").upper()
@@ -554,6 +758,14 @@ def application(environ, start_response):
 
         if method == "POST":
             req = leer_json(environ)
+
+            if path == "/api/supplier-cleanup-v114":
+                result, state = _supplier_cleanup_v114(req)
+                return json_response(start_response, {"ok": True, "result": result, "state": state})
+
+            if path == "/api/promos-v114":
+                result, state = _promos_action_v114(req)
+                return json_response(start_response, {"ok": True, "result": result, "state": state})
 
             if path == "/api/finance-v94":
                 state = _finance_action_v94(req)
