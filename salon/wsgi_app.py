@@ -391,25 +391,20 @@ def _merge_state_protecting_movements(incoming):
             for k in ("featuredPromoTitle","featuredPromoPrice","featuredPromoText","featuredPromoImage","featuredPromoValidUntil","featuredPromoActive","featuredPromoUpdatedAt"):
                 if k in cur:
                     salon[k] = cur.get(k)
-    # V120: reservas autoritativas. Un PUT viejo no puede hacer desaparecer una reserva
-    # existente ni resucitar una reserva borrada explícitamente.
-    deleted_events = {str(x) for x in (current.get("deletedEventIdsV120") or []) if x}
+    # V123: reservas autoritativas.
+    deleted_events = {str(x) for x in (current.get("deletedEventIdsV123") or []) if x}
     cur_events = {str((e or {}).get("id") or ""): e for e in (current.get("events") or []) if isinstance(e, dict) and (e or {}).get("id")}
     inc_events = {str((e or {}).get("id") or ""): e for e in (incoming.get("events") or []) if isinstance(e, dict) and (e or {}).get("id")}
-    event_ids = set(cur_events) | set(inc_events)
     merged_events = []
-    for eid in event_ids:
+    for eid in (set(cur_events) | set(inc_events)):
         if eid in deleted_events:
             continue
-        # Si viene una versión de la reserva en el PUT, puede actualizarla.
-        # Si falta por ser un estado atrasado del navegador, se conserva la del servidor.
         merged_events.append(inc_events.get(eid) or cur_events.get(eid))
     merged["events"] = merged_events
-    merged["deletedEventIdsV120"] = list(deleted_events)
+    merged["deletedEventIdsV123"] = list(deleted_events)
 
     _apply_supplier_cleanup_barrier_v117(current, merged)
-    # V120: la contabilidad no se reescribe automáticamente en cada PUT.
-    # Los datos financieros se manejan por operaciones explícitas y el render canónico.
+    # V123: no reescribir contabilidad automáticamente en cada PUT.
     return merged
 
 
@@ -963,44 +958,38 @@ def application(environ, start_response):
         if method == "POST":
             req = leer_json(environ)
 
-            if path == "/api/accounting-v120":
+            if path == "/api/accounting-v123":
                 action = str(req.get("action") or "")
                 salon_id = str(req.get("salonId") or "")
                 if not salon_id:
                     raise ValueError("Falta el salón")
+                if action != "reset":
+                    raise ValueError("Acción contable inválida")
 
-                if action == "reset":
-                    def reset_v120(st):
-                        st["movements"] = [m for m in st.get("movements", [])
-                                           if str((m or {}).get("salonId") or "") != salon_id]
-                        st["providerPayments"] = [m for m in st.get("providerPayments", [])
-                                                  if str((m or {}).get("salonId") or "") != salon_id]
-                        st["servicePayments"] = [m for m in st.get("servicePayments", [])
-                                                 if str((m or {}).get("salonId") or "") != salon_id]
-                        for e in st.get("events", []):
-                            if str((e or {}).get("salonId") or "") != salon_id:
-                                continue
-                            e["deposit"] = 0
-                            e["depositMethod"] = ""
-                            e["depositDate"] = ""
-                            e["paid"] = 0
-                            e["payments"] = []
-                            try:
-                                e["balance"] = float(e.get("total") or 0)
-                            except Exception:
-                                e["balance"] = e.get("total") or 0
-                        epochs = st.get("financeMovementResetAtV93") or {}
-                        if not isinstance(epochs, dict):
-                            epochs = {}
-                        epochs[salon_id] = time.strftime("%Y-%m-%dT%H:%M:%S")
-                        st["financeMovementResetAtV93"] = epochs
-                        st["accountingResetAtV120"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-                        return {"reset": True}
+                def reset_v123(st):
+                    st["movements"] = [m for m in st.get("movements", [])
+                                       if str((m or {}).get("salonId") or "") != salon_id]
+                    st["providerPayments"] = [m for m in st.get("providerPayments", [])
+                                              if str((m or {}).get("salonId") or "") != salon_id]
+                    st["servicePayments"] = [m for m in st.get("servicePayments", [])
+                                             if str((m or {}).get("salonId") or "") != salon_id]
+                    for e in st.get("events", []):
+                        if str((e or {}).get("salonId") or "") != salon_id:
+                            continue
+                        e["deposit"] = 0
+                        e["depositMethod"] = ""
+                        e["depositDate"] = ""
+                        e["paid"] = 0
+                        e["payments"] = []
+                        try:
+                            e["balance"] = float(e.get("total") or 0)
+                        except Exception:
+                            e["balance"] = e.get("total") or 0
+                    st["accountingResetAtV123"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+                    return {"reset": True}
 
-                    result, st = _atomic_state_v94(reset_v120)
-                    return json_response(start_response, {"ok": True, "result": result, "state": st})
-
-                raise ValueError("Acción contable V120 inválida")
+                result, st = _atomic_state_v94(reset_v123)
+                return json_response(start_response, {"ok": True, "result": result, "state": st})
 
             if path == "/api/accounting-repair-v116":
                 result, state = _accounting_repair_v116(req)
@@ -1112,31 +1101,23 @@ def application(environ, start_response):
                 if not event_id or not salon_id or not password:
                     raise ValueError("Faltan datos para borrar la fiesta")
 
-                def delete_event_v120(st):
-                    _require_salon_password(st, salon_id, password)
-                    events = st.get("events", [])
-                    target = next((x for x in events if str((x or {}).get("id") or "") == event_id
-                                   and str((x or {}).get("salonId") or "") == salon_id), None)
-                    if not target:
-                        raise ValueError("Fiesta inexistente")
+                st = server.get_state()
+                _require_salon_password(st, salon_id, password)
 
-                    st["events"] = [x for x in events if str((x or {}).get("id") or "") != event_id]
+                events = st.get("events", [])
+                before = len(events)
+                st["events"] = [
+                    x for x in events
+                    if not (str(x.get("id")) == event_id and str(x.get("salonId")) == salon_id)
+                ]
+                if len(st["events"]) == before:
+                    raise ValueError("Fiesta inexistente")
 
-                    # Borrado contable y operativo en cascada.
-                    for key in ("cards", "assignments", "orders"):
-                        st[key] = [x for x in st.get(key, []) if str((x or {}).get("eventId") or "") != event_id]
+                for key in ("cards", "assignments", "orders"):
+                    st[key] = [x for x in st.get(key, []) if str(x.get("eventId") or "") != event_id]
 
-                    for key in ("movements", "servicePayments", "providerPayments"):
-                        st[key] = [x for x in st.get(key, []) if str((x or {}).get("eventId") or "") != event_id]
-
-                    deleted = {str(x) for x in (st.get("deletedEventIdsV120") or []) if x}
-                    deleted.add(event_id)
-                    st["deletedEventIdsV120"] = list(deleted)
-                    st["eventDeleteAtV120"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-                    return {"eventId": event_id}
-
-                result, st = _atomic_state_v94(delete_event_v120)
-                return json_response(start_response, {"ok": True, "result": result, "state": st})
+                server.put_state(st)
+                return json_response(start_response, {"ok": True, "state": st})
 
             if path == "/api/email-confirmation":
                 event_id = str(req.get("eventId") or "")

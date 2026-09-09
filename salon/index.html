@@ -1491,107 +1491,176 @@ const isExpense=m=>['gasto','egreso'].includes(norm(m?.type));
 const isDeposit=m=>{const c=norm(m?.category),x=norm(m?.concept),k=String(m?.sourceKey||'').toLowerCase();return c.includes('sena')||x.includes('sena')||k.includes(':deposit:')};
 
 function eventFigures(e){
-  const base=n(e.basePrice??e.baseTotal), general=n(e.extrasTotal), stock=n(e.stockItemsTotal);
+  const base=n(e.basePrice??e.baseTotal);
+  const general=n(e.extrasTotal);
+  const stock=n(e.stockItemsTotal);
   const typeExtras=n(e.typeExtrasTotal)||(n(e.extraAdultTotal)+n(e.extraChildTotal)+n(e.extraWaiterTotal)+n(e.extraKitchenTotal)+n(e.extraAnimatorTotal)+n(e.extraHourTotal));
   const computed=base+general+stock+typeExtras;
-  const total=n(e.total)>0?n(e.total):computed;
-  const paid=Math.min(Math.max(0,n(e.paid||e.deposit)),Math.max(total,n(e.paid||e.deposit)));
+
+  // El total contable sale de los componentes reales.
+  // Solo usa e.total cuando no existen componentes calculables.
+  const total=computed>0?computed:n(e.total);
+
+  // La seña YA está incluida dentro de pagado. Nunca se suma dos veces.
+  const paid=Math.min(Math.max(n(e.deposit),n(e.paid)),Math.max(0,total));
+
   return {base,general,stock,typeExtras,total,paid,balance:Math.max(0,total-paid)};
 }
 
+
+function methodKey123(v){
+  const x=norm(v);
+  return x.includes('efect')?'Efectivo':x.includes('transfer')?'Transferencia':x.includes('mercado')?'Mercado Pago':x.includes('tarjet')?'Tarjeta':'Otro';
+}
+function uniqueMoves123(arr){
+  const seen=new Set(), out=[];
+  for(const m of arr){
+    const k=String(m.sourceKey||m.id||[m.type,m.amount,m.method,m.movementDate,m.concept,m.eventId].join('|'));
+    if(seen.has(k))continue;
+    seen.add(k);out.push(m);
+  }
+  return out;
+}
+function paymentRows123(e){
+  const f=eventFigures(e), rows=[];
+  let remaining=f.paid;
+  const dep=Math.min(n(e.deposit),remaining);
+  if(dep>0){
+    rows.push({
+      type:'Ingreso',
+      concept:'Seña '+(e.eventName||e.child||e.client||'Fiesta'),
+      amount:dep,
+      method:e.depositMethod||'Otro',
+      movementDate:e.depositDate||e.date||'',
+      eventId:e.id,
+      salonId:e.salonId
+    });
+    remaining-=dep;
+  }
+  const candidates=uniqueMoves123(salonMoves().filter(m=>
+    String(m.eventId||'')===String(e.id) && isIncome(m) && !isDeposit(m)
+  )).sort((a,b)=>String(a.createdAt||a.movementDate||'').localeCompare(String(b.createdAt||b.movementDate||'')));
+
+  for(const m of candidates){
+    if(remaining<=0)break;
+    const amount=Math.min(Math.max(0,n(m.amount)),remaining);
+    if(amount<=0)continue;
+    rows.push({...m,amount});
+    remaining-=amount;
+  }
+  if(remaining>0){
+    rows.push({
+      type:'Ingreso',
+      concept:'Pago '+(e.eventName||e.child||e.client||'Fiesta'),
+      amount:remaining,
+      method:e.paymentMethod||e.lastPaymentMethod||'Otro',
+      movementDate:e.lastPaymentDate||e.date||'',
+      eventId:e.id,
+      salonId:e.salonId
+    });
+  }
+  return rows;
+}
+function generalMoves123(){
+  return uniqueMoves123(salonMoves().filter(m=>{
+    if(isExpense(m))return true;
+    if(!isIncome(m))return false;
+    return !m.eventId;
+  }));
+}
 function renderFinance116(){
   if(session?.role!=='salon')return;
-  try{setTitle('Finanzas','Contabilidad precisa de caja y reservas')}catch(_){ }
+  try{setTitle('Finanzas','Caja real + cuentas por cobrar')}catch(_){ }
   const c=q('#content');if(!c)return;
-  const moves=salonMoves().slice().sort((a,b)=>String(b.movementDate||b.createdAt||'').localeCompare(String(a.movementDate||a.createdAt||'')));
-  const inc=moves.filter(isIncome), out=moves.filter(isExpense);
-  const tin=inc.reduce((s,m)=>s+n(m.amount),0), tout=out.reduce((s,m)=>s+n(m.amount),0);
-  const methods={Efectivo:0,Transferencia:0,'Mercado Pago':0,Tarjeta:0,Otro:0};
-  inc.forEach(m=>{const x=norm(m.method);const k=x.includes('efect')?'Efectivo':x.includes('transfer')?'Transferencia':x.includes('mercado')?'Mercado Pago':x.includes('tarjet')?'Tarjeta':'Otro';methods[k]+=n(m.amount)});
+
   const evs=salonEvents().map(e=>({e,f:eventFigures(e)}));
-  const contracted=evs.reduce((s,x)=>s+x.f.total,0), collected=evs.reduce((s,x)=>s+x.f.paid,0), pending=evs.reduce((s,x)=>s+x.f.balance,0);
-  c.innerHTML=`<div id="finance116">
-    <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px"><div><h2 style="margin:0">Finanzas</h2><small class="muted">Caja contable + control económico por reserva.</small></div><b style="color:#7257ff">CONTROL CONTABLE V119</b></div>
-    <div class="toolbar"><button class="primary" id="income116">+ Ingresar dinero</button><button class="danger" id="expense116">- Registrar egreso</button><button class="secondary" id="reset116">💰 Poner movimientos en $0</button></div>
+  const reservationRows=evs.flatMap(({e})=>paymentRows123(e));
+  const general=generalMoves123();
+
+  const manualIncome=general.filter(isIncome);
+  const expenses=general.filter(isExpense);
+
+  const reservationIncome=evs.reduce((s,x)=>s+x.f.paid,0);
+  const generalIncome=manualIncome.reduce((s,m)=>s+n(m.amount),0);
+  const tin=reservationIncome+generalIncome;
+  const tout=expenses.reduce((s,m)=>s+n(m.amount),0);
+  const pending=evs.reduce((s,x)=>s+x.f.balance,0);
+
+  const methods={Efectivo:0,Transferencia:0,'Mercado Pago':0,Tarjeta:0,Otro:0};
+  [...reservationRows,...manualIncome].forEach(m=>methods[methodKey123(m.method)]+=n(m.amount));
+
+  const ledger=[...reservationRows,...general]
+    .sort((a,b)=>String(b.movementDate||b.createdAt||'').localeCompare(String(a.movementDate||a.createdAt||'')));
+
+  c.innerHTML=`<div id="finance123">
+    <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
+      <div><h2 style="margin:0">Finanzas</h2><small class="muted">Caja real del salón y cuenta exacta por reserva.</small></div>
+      <b style="color:#7257ff">CONTABILIDAD V123</b>
+    </div>
+
+    <div class="toolbar">
+      <button class="primary" id="income116">+ Ingresar dinero</button>
+      <button class="danger" id="expense116">- Registrar egreso</button>
+      <button class="secondary" id="reset123">💰 Borrar todos los movimientos contables</button>
+    </div>
+
     <div class="grid stats" style="margin-top:14px">
-      <div class="card stat"><small>Ingresos de caja</small><strong>${money(tin)}</strong></div><div class="card stat"><small>Egresos</small><strong>${money(tout)}</strong></div>
-      <div class="card stat"><small>Resultado</small><strong>${money(tin-tout)}</strong></div><div class="card stat"><small>Saldo a cobrar</small><strong>${money(pending)}</strong></div>
+      <div class="card stat"><small>Dinero ingresado</small><strong>${money(tin)}</strong></div>
+      <div class="card stat"><small>Dinero egresado</small><strong>${money(tout)}</strong></div>
+      <div class="card stat"><small>Dinero activo del salón</small><strong>${money(tin-tout)}</strong></div>
+      <div class="card stat"><small>Saldo a cobrar</small><strong>${money(pending)}</strong></div>
     </div>
-    <div class="card" style="margin-top:16px"><div class="section-title"><div><h3>💳 Ingresos por medio de pago</h3><small class="muted">Solo movimientos contables confirmados, sin duplicados.</small></div></div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:9px">${Object.entries(methods).map(([k,v])=>`<div style="border:1px solid #e5e7eb;border-radius:11px;padding:11px"><small>${k}</small><b style="display:block">${money(v)}</b></div>`).join('')}</div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="section-title"><div><h3>💳 Entradas por medio de pago</h3><small class="muted">Cada peso cobrado aparece una sola vez.</small></div></div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:9px">
+        ${Object.entries(methods).map(([k,v])=>`<div style="border:1px solid #e5e7eb;border-radius:11px;padding:11px"><small>${k}</small><b style="display:block">${money(v)}</b></div>`).join('')}
+      </div>
     </div>
-    <div class="card" style="margin-top:16px"><div class="section-title"><div><h3>🎉 Contabilidad por reserva</h3><small class="muted">El total pagado de cada fiesta se toma del estado económico de la reserva.</small></div></div>
-      ${evs.length?`<div class="table-wrap"><table class="table"><thead><tr><th>Fecha</th><th>Fiesta</th><th>Base</th><th>Adicionales</th><th>Stock</th><th>Extras tipo</th><th>Total</th><th>Pagado</th><th>Saldo</th></tr></thead><tbody>${evs.map(({e,f})=>`<tr><td>${esc(e.date||'')}</td><td><b>${esc(e.eventName||e.child||e.client||'Fiesta')}</b></td><td>${money(f.base)}</td><td>${money(f.general)}</td><td>${money(f.stock)}</td><td>${money(f.typeExtras)}</td><td><b>${money(f.total)}</b></td><td>${money(f.paid)}</td><td><b>${money(f.balance)}</b></td></tr>`).join('')}</tbody><tfoot><tr><th colspan="6">TOTAL RESERVAS</th><th>${money(contracted)}</th><th>${money(collected)}</th><th>${money(pending)}</th></tr></tfoot></table></div>`:'<div class="empty">Sin reservas activas.</div>'}
+
+    <div class="card" style="margin-top:16px">
+      <div class="section-title"><div><h3>🎉 Contabilidad por reserva</h3><small class="muted">Total = base + adicionales + stock + extras reales. Pagado incluye la seña.</small></div></div>
+      ${evs.length?`<div class="table-wrap"><table class="table"><thead><tr><th>Fecha</th><th>Fiesta</th><th>Base</th><th>Adicionales</th><th>Stock</th><th>Extras tipo</th><th>Total</th><th>Pagado</th><th>Saldo</th></tr></thead><tbody>
+        ${evs.map(({e,f})=>`<tr><td>${esc(e.date||'')}</td><td><b>${esc(e.eventName||e.child||e.client||'Fiesta')}</b></td><td>${money(f.base)}</td><td>${money(f.general)}</td><td>${money(f.stock)}</td><td>${money(f.typeExtras)}</td><td><b>${money(f.total)}</b></td><td>${money(f.paid)}</td><td><b>${money(f.balance)}</b></td></tr>`).join('')}
+      </tbody></table></div>`:'<div class="empty">Sin reservas activas.</div>'}
     </div>
-    <div class="card" style="margin-top:16px"><div class="section-title"><div><h3>📒 Libro de movimientos</h3><small class="muted">Una sola línea por cada movimiento real de dinero.</small></div></div>
-      ${moves.length?`<div class="table-wrap"><table class="table"><thead><tr><th>Fecha</th><th>Tipo</th><th>Concepto</th><th>Fiesta</th><th>Medio</th><th>Importe</th></tr></thead><tbody>${moves.map(m=>{const e=(data.events||[]).find(x=>String(x.id)===String(m.eventId||''));return `<tr><td>${esc(m.movementDate||'')}</td><td>${esc(m.type||'')}</td><td>${esc(m.concept||m.category||'')}</td><td>${esc(e?(e.eventName||e.child||e.client||'Fiesta'):'General')}</td><td>${esc(m.method||'')}</td><td><b>${money(m.amount)}</b></td></tr>`}).join('')}</tbody></table></div>`:'<div class="empty">Sin movimientos.</div>'}
-    </div></div>`;
+
+    <div class="card" style="margin-top:16px">
+      <div class="section-title"><div><h3>📒 Libro de movimientos</h3><small class="muted">Cobros canónicos de reservas + ingresos y egresos generales.</small></div></div>
+      ${ledger.length?`<div class="table-wrap"><table class="table"><thead><tr><th>Fecha</th><th>Tipo</th><th>Concepto</th><th>Fiesta</th><th>Medio</th><th>Importe</th></tr></thead><tbody>
+        ${ledger.map(m=>{const e=(data.events||[]).find(x=>String(x.id)===String(m.eventId||''));return `<tr><td>${esc(m.movementDate||'')}</td><td>${esc(m.type||'')}</td><td>${esc(m.concept||m.category||'')}</td><td>${esc(e?(e.eventName||e.child||e.client||'Fiesta'):'General')}</td><td>${esc(m.method||'')}</td><td><b>${money(m.amount)}</b></td></tr>`}).join('')}
+      </tbody></table></div>`:'<div class="empty">Sin movimientos contables.</div>'}
+    </div>
+  </div>`;
+
   q('#income116').onclick=()=>window.FiestaControlV110?.income?.();
   q('#expense116').onclick=()=>window.FiestaControlV110?.expense?.();
-  q('#reset116').onclick=()=>window.FiestaControlV110?.reset?.();
+  q('#reset123').onclick=resetAccounting123;
 }
 
-// FiestaControl V119 - Finanzas estable sin validación automática.
-// La pantalla financiera nunca se bloquea ni se reemplaza por procesos de conciliación.
-const previousRoute119 = renderSalonView;
-
-renderSalonView = function(){
-  if(view === 'finance'){
-    renderFinance116();
-    return;
-  }
-  return previousRoute119();
-};
-
-// La conciliación queda disponible únicamente como acción manual/técnica.
-// No se ejecuta al entrar, al refrescar, por intervalos ni por MutationObserver.
-async function reconcileAccounting119(){
+async function resetAccounting123(){
+  if(!confirm('¿Borrar TODOS los movimientos contables del salón? Las reservas se conservan, pero sus señas y pagos quedan en $0.'))return;
   try{
-    const r = await fetch('/api/accounting-repair-v116',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({salonId:sid()}),
-      cache:'no-store'
-    });
-    const j = await r.json();
-    if(!r.ok || j.ok===false) throw new Error(j.error || 'No se pudo conciliar la contabilidad');
-
-    if(j.state){
-      data = j.state;
-      window.__FC_SERVER_DATA__ = j.state;
-    }
-
-    if(view === 'finance') renderFinance116();
-
-    if(typeof toast === 'function'){
-      const n = Number(j.result?.removed || 0);
-      toast(n > 0 ? `Contabilidad conciliada: ${n} duplicado(s) corregido(s)` : 'Contabilidad verificada sin duplicados');
-    }
-    return j;
+    const r=await fetch('/api/accounting-v123',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'reset',salonId:sid()}),cache:'no-store'});
+    const j=await r.json();
+    if(!r.ok||j.ok===false)throw new Error(j.error||'No se pudo reiniciar');
+    if(j.state){data=j.state;window.__FC_SERVER_DATA__=j.state}
+    renderFinance116();
+    if(typeof toast==='function')toast('Contabilidad en $0');
   }catch(err){
-    console.error('V119 reconcile accounting', err);
-    if(typeof toast === 'function') toast('No se pudo verificar la contabilidad');
-    throw err;
+    if(typeof toast==='function')toast('No se pudo borrar la contabilidad: '+err.message);
   }
 }
 
-window.FiestaControlV116 = {
-  repair: reconcileAccounting119,
-  render: renderFinance116
+const previousRoute116=renderSalonView;
+renderSalonView=function(){
+  if(view==='finance')return renderFinance116();
+  return previousRoute116();
 };
-
-window.FiestaControlV118 = {
-  repair: reconcileAccounting119,
-  render: renderFinance116
-};
-
-window.FiestaControlV119 = {
-  repair: reconcileAccounting119,
-  render: renderFinance116
-};
+window.FiestaControlV116={render:renderFinance116};
 })();
 </script>
-<!-- FiestaControl V118 FINANZAS ESTABLE: render inmediato + conciliación en segundo plano -->
+<!-- FiestaControl V116 CONTABILIDAD CANONICA -->
 
 <script>
 /* ============================================================
@@ -1681,378 +1750,45 @@ window.FiestaControlV117={clearSupplierOrders:window.fc117ClearSupplierOrders,ge
 <!-- FiestaControl V117 BORRADO AUTORITATIVO -->
 
 <script>
-/* ============================================================
-   FIESTACONTROL V120 - CONTABILIDAD PROFESIONAL
-   Regla: una reserva tiene UN total, UN pagado y UN saldo.
-   Finanzas se deriva de esos valores, no de movimientos duplicados.
-   ============================================================ */
+/* V123: solo repone botones faltantes del detalle. No reemplaza el contenido existente. */
 (function(){
 'use strict';
-
-const Q120=(s,r=document)=>r.querySelector(s);
-const N120=v=>{const x=Number(v||0);return Number.isFinite(x)?x:0};
-const E120=v=>String(v??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
-const NOR120=v=>String(v||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
-const M120=v=>{try{return new Intl.NumberFormat('es-AR',{style:'currency',currency:'ARS',maximumFractionDigits:0}).format(N120(v))}catch(_){return '$ '+Math.round(N120(v)).toLocaleString('es-AR')}};
-const SID120=()=>String(session?.salonId||'');
-
-function components120(e){
-  const base=N120(e.basePrice??e.baseTotal);
-  const adicionales=N120(e.extrasTotal);
-  const stock=N120(e.stockItemsTotal);
-  const extrasTipo=N120(e.typeExtrasTotal) || (
-    N120(e.extraAdultTotal)+N120(e.extraChildTotal)+N120(e.extraWaiterTotal)+
-    N120(e.extraKitchenTotal)+N120(e.extraAnimatorTotal)+N120(e.extraHourTotal)
-  );
-  const computed=base+adicionales+stock+extrasTipo;
-  const total=computed>0?computed:N120(e.total);
-  const deposit=Math.max(0,N120(e.deposit));
-  // paid YA incluye la seña. Nunca sumar deposit + paid.
-  let paid=Math.max(deposit,N120(e.paid));
-  if(total>0)paid=Math.min(paid,total);
-  return {base,adicionales,stock,extrasTipo,total,deposit,paid,balance:Math.max(0,total-paid)};
+const txt123=(el)=>String(el?.textContent||'').trim().toLowerCase();
+function has123(root,words){return [...root.querySelectorAll('button')].some(b=>words.some(w=>txt123(b).includes(w)))}
+function add123(root,label,fn,cls='secondary'){
+  const bar=root.querySelector('.toolbar') || root.querySelector('.form-actions') || root;
+  const b=document.createElement('button');b.type='button';b.className=cls;b.textContent=label;b.onclick=fn;bar.appendChild(b);
 }
-
-function canonicalize120(e){
-  if(!e||String(e.salonId||'')!==SID120())return e;
-  const f=components120(e);
-  e.total=f.total;
-  e.paid=f.paid;
-  e.balance=f.balance;
-  return e;
-}
-function canonicalizeAll120(){
-  (data.events||[]).forEach(canonicalize120);
-}
-
-// Antes de cualquier guardado tradicional, corregir total/pagado/saldo.
-// NO crea movimientos y NO suma la seña dos veces.
-try{
-  const SAVE120=save;
-  save=function(){
-    canonicalizeAll120();
-    return SAVE120.apply(this,arguments);
-  };
-}catch(_){}
-
-try{
-  const OPEN120=window.openEvent;
+const openBase123=window.openEvent;
+if(typeof openBase123==='function'){
   window.openEvent=function(eid){
-    const e=(data.events||[]).find(x=>String(x.id)===String(eid));
-    if(e)canonicalize120(e);
-    return OPEN120.apply(this,arguments);
-  };
-}catch(_){}
+    const r=openBase123.apply(this,arguments);
+    setTimeout(()=>{
+      const root=document.querySelector('#modal-body'); if(!root)return;
 
-function salonEvents120(){
-  return (data.events||[]).filter(e=>String(e.salonId||'')===SID120() && e.status!=='Cancelada').map(e=>{canonicalize120(e);return e});
-}
-function moves120(){
-  return (data.movements||[]).filter(m=>String(m.salonId||'')===SID120());
-}
-function income120(m){return ['ingreso','cobro'].includes(NOR120(m?.type))}
-function expense120(m){return ['gasto','egreso'].includes(NOR120(m?.type))}
-function depositMove120(m){
-  const c=NOR120(m?.category),x=NOR120(m?.concept),k=String(m?.sourceKey||'').toLowerCase();
-  return c.includes('sena')||x.includes('sena')||k.includes('deposit');
-}
-function methodKey120(v){
-  const x=NOR120(v);
-  return x.includes('efect')?'Efectivo':x.includes('transfer')?'Transferencia':x.includes('mercado')?'Mercado Pago':x.includes('tarjet')?'Tarjeta':'Otro';
-}
-function uniq120(arr){
-  const seen=new Set(),out=[];
-  for(const m of arr){
-    const k=String(m.sourceKey||m.id||[m.type,m.amount,m.method,m.movementDate,m.concept].join('|'));
-    if(seen.has(k))continue;seen.add(k);out.push(m);
-  }
-  return out;
-}
+      if(!has123(root,['seguimiento']) && typeof window.openMovementsV48==='function')
+        add123(root,'📋 Seguimiento',()=>window.openMovementsV48(eid));
 
-/* Convierte los pagos de una reserva en asientos canónicos.
-   El total de estas filas SIEMPRE es exactamente event.paid. */
-function eventPaymentRows120(e){
-  const f=components120(e), rows=[];
-  let remaining=f.paid;
+      if(!has123(root,['imprimir seguimiento']) && typeof window.printReservationStatus50==='function')
+        add123(root,'🖨 Imprimir seguimiento',()=>window.printReservationStatus50(eid,true));
 
-  const dep=Math.min(f.deposit,remaining);
-  if(dep>0){
-    rows.push({
-      type:'Ingreso',concept:'Seña '+(e.eventName||e.child||e.client||'Fiesta'),
-      amount:dep,method:e.depositMethod||'Otro',
-      movementDate:e.depositDate||e.date||'',eventId:e.id,canonical:true
-    });
-    remaining-=dep;
-  }
+      if(!has123(root,['imprimir pago','recibo']) && typeof window.printReceipt46==='function'){
+        add123(root,'🧾 Imprimir pago',()=>{
+          const ms=(data.movements||[]).filter(m=>String(m.eventId||'')===String(eid));
+          const last=ms.slice().reverse().find(m=>['ingreso','cobro'].includes(String(m.type||'').toLowerCase()));
+          if(last)window.printReceipt46(eid,last.id,true);
+          else if(typeof toast==='function')toast('La reserva todavía no tiene un pago para imprimir.');
+        });
+      }
 
-  const candidates=uniq120(moves120().filter(m=>
-    String(m.eventId||'')===String(e.id) && income120(m) && !depositMove120(m)
-  )).sort((a,b)=>String(a.createdAt||a.movementDate||'').localeCompare(String(b.createdAt||b.movementDate||'')));
-
-  for(const m of candidates){
-    if(remaining<=0)break;
-    const a=Math.min(Math.max(0,N120(m.amount)),remaining);
-    if(a<=0)continue;
-    rows.push({...m,amount:a,canonical:true});
-    remaining-=a;
-  }
-
-  if(remaining>0){
-    rows.push({
-      type:'Ingreso',concept:'Pago '+(e.eventName||e.child||e.client||'Fiesta'),
-      amount:remaining,method:e.paymentMethod||e.lastPaymentMethod||'Otro',
-      movementDate:e.lastPaymentDate||e.date||'',eventId:e.id,canonical:true
-    });
-  }
-  return rows;
-}
-
-function generalMoves120(){
-  // Solo movimientos que no son cobros de una reserva.
-  // Los cobros de reserva se reconstruyen desde event.paid para impedir duplicaciones.
-  return uniq120(moves120().filter(m=>{
-    if(expense120(m))return true;
-    if(!income120(m))return false;
-    return !m.eventId;
-  }));
-}
-
-function renderFinance120(){
-  if(session?.role!=='salon')return;
-  try{setTitle('Finanzas','Caja real + cuentas por cobrar')}catch(_){}
-  const c=Q120('#content');if(!c)return;
-
-  const events=salonEvents120();
-  const paymentRows=events.flatMap(eventPaymentRows120);
-  const general=generalMoves120();
-
-  const generalIncome=general.filter(income120);
-  const expenses=general.filter(expense120);
-  const totalReservationIncome=events.reduce((s,e)=>s+components120(e).paid,0);
-  const totalManualIncome=generalIncome.reduce((s,m)=>s+N120(m.amount),0);
-  const totalIn=totalReservationIncome+totalManualIncome;
-  const totalOut=expenses.reduce((s,m)=>s+N120(m.amount),0);
-  const pending=events.reduce((s,e)=>s+components120(e).balance,0);
-
-  const methods={Efectivo:0,Transferencia:0,'Mercado Pago':0,Tarjeta:0,Otro:0};
-  [...paymentRows,...generalIncome].forEach(m=>methods[methodKey120(m.method)]+=N120(m.amount));
-
-  const ledger=[...paymentRows,...general].sort((a,b)=>String(b.movementDate||b.createdAt||'').localeCompare(String(a.movementDate||a.createdAt||'')));
-
-  c.innerHTML=`<div id="finance120">
-    <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
-      <div><h2 style="margin:0">Finanzas</h2><small class="muted">Caja real del salón y cuenta exacta de cada reserva.</small></div>
-      <b style="color:#7257ff">CONTABILIDAD V121</b>
-    </div>
-
-    <div class="toolbar">
-      <button class="primary" id="income120">+ Ingresar dinero</button>
-      <button class="danger" id="expense120">- Registrar egreso</button>
-      <button class="secondary" id="reset120">💰 Borrar todos los movimientos contables</button>
-    </div>
-
-    <div class="grid stats" style="margin-top:14px">
-      <div class="card stat"><small>Dinero ingresado</small><strong>${M120(totalIn)}</strong></div>
-      <div class="card stat"><small>Dinero egresado</small><strong>${M120(totalOut)}</strong></div>
-      <div class="card stat"><small>Dinero activo del salón</small><strong>${M120(totalIn-totalOut)}</strong></div>
-      <div class="card stat"><small>Saldo pendiente de reservas</small><strong>${M120(pending)}</strong></div>
-    </div>
-
-    <div class="card" style="margin-top:16px">
-      <div class="section-title"><div><h3>💳 Entradas por medio de pago</h3><small class="muted">Cada peso cobrado aparece una sola vez.</small></div></div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:9px">
-        ${Object.entries(methods).map(([k,v])=>`<div style="border:1px solid #e5e7eb;border-radius:11px;padding:11px"><small>${k}</small><b style="display:block">${M120(v)}</b></div>`).join('')}
-      </div>
-    </div>
-
-    <div class="card" style="margin-top:16px">
-      <div class="section-title"><div><h3>🎉 Cuenta por reserva</h3><small class="muted">Total = base + adicionales + stock + extras del tipo. Pagado incluye la seña.</small></div></div>
-      ${events.length?`<div class="table-wrap"><table class="table"><thead><tr><th>Fecha</th><th>Fiesta</th><th>Base</th><th>Adicionales</th><th>Stock</th><th>Extras tipo</th><th>Total</th><th>Pagado</th><th>A cobrar</th></tr></thead><tbody>
-        ${events.map(e=>{const f=components120(e);return `<tr><td>${E120(e.date||'')}</td><td><b>${E120(e.eventName||e.child||e.client||'Fiesta')}</b></td><td>${M120(f.base)}</td><td>${M120(f.adicionales)}</td><td>${M120(f.stock)}</td><td>${M120(f.extrasTipo)}</td><td><b>${M120(f.total)}</b></td><td>${M120(f.paid)}</td><td><b>${M120(f.balance)}</b></td></tr>`}).join('')}
-      </tbody></table></div>`:'<div class="empty">Sin reservas activas.</div>'}
-    </div>
-
-    <div class="card" style="margin-top:16px">
-      <div class="section-title"><div><h3>📒 Libro de movimientos</h3><small class="muted">Cobros de reservas canónicos + ingresos/egresos generales.</small></div></div>
-      ${ledger.length?`<div class="table-wrap"><table class="table"><thead><tr><th>Fecha</th><th>Tipo</th><th>Concepto</th><th>Fiesta</th><th>Medio</th><th>Importe</th></tr></thead><tbody>
-        ${ledger.map(m=>{const e=events.find(x=>String(x.id)===String(m.eventId||''));return `<tr><td>${E120(m.movementDate||'')}</td><td>${E120(m.type||'')}</td><td>${E120(m.concept||m.category||'')}</td><td>${E120(e?(e.eventName||e.child||e.client||'Fiesta'):'General')}</td><td>${E120(m.method||'')}</td><td><b>${M120(m.amount)}</b></td></tr>`}).join('')}
-      </tbody></table></div>`:'<div class="empty">Sin movimientos contables.</div>'}
-    </div>
-  </div>`;
-
-  Q120('#income120').onclick=()=>manual120(false);
-  Q120('#expense120').onclick=()=>manual120(true);
-  Q120('#reset120').onclick=reset120;
-}
-
-async function post120(url,body){
-  const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),cache:'no-store'});
-  const j=await r.json();
-  if(!r.ok||j.ok===false)throw new Error(j.error||'Error del servidor');
-  return j;
-}
-function useState120(st){if(st){data=st;window.__FC_SERVER_DATA__=st}}
-
-function modal120(body){
-  const b=document.getElementById('modal-body');
-  const m=document.getElementById('modal');
-  if(!b||!m)return false;
-  b.innerHTML=body;m.classList.add('open');m.setAttribute('aria-hidden','false');return true;
-}
-function close120(){try{closeModal()}catch(_){document.getElementById('modal')?.classList.remove('open')}}
-
-function manual120(expense){
-  if(!modal120(`<div class="modal-title"><div><h2>${expense?'Registrar egreso':'Ingresar dinero'}</h2><p>${expense?'Salida real de dinero del salón':'Entrada general de dinero al salón'}</p></div><button type="button" class="ghost small" id="x120">✕</button></div>
-    <form id="money120">
-      <div class="form-grid">
-        <div class="field"><label>Concepto</label><input name="concept" required maxlength="160" placeholder="${expense?'Ej.: Pago de luz':'Ej.: Aporte de caja'}"></div>
-        <div class="field"><label>Importe</label><input name="amount" type="number" min="1" step="0.01" required></div>
-        <div class="field"><label>Medio</label><select name="method"><option>Efectivo</option><option>Transferencia</option><option>Mercado Pago</option><option>Tarjeta</option><option>Otro</option></select></div>
-        <div class="field"><label>Fecha</label><input name="date" type="date" value="${new Date().toISOString().slice(0,10)}" required></div>
-      </div>
-      <div class="form-actions"><button type="button" class="ghost" id="cancel120">Cancelar</button><button class="${expense?'danger':'primary'}" type="submit">Guardar</button></div>
-    </form>`))return;
-
-  Q120('#x120').onclick=close120;Q120('#cancel120').onclick=close120;
-  Q120('#money120').onsubmit=async ev=>{
-    ev.preventDefault();
-    const fd=new FormData(ev.target), amount=N120(fd.get('amount'));
-    if(amount<=0)return;
-    const movement={
-      id:'mov120_'+Date.now()+'_'+Math.random().toString(36).slice(2,8),
-      salonId:SID120(),eventId:'',
-      sourceKey:'v120:manual:'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
-      type:expense?'Egreso':'Ingreso',
-      category:expense?'Egreso general':'Ingreso general',
-      concept:String(fd.get('concept')||'').trim(),
-      amount,method:String(fd.get('method')||'Otro'),
-      movementDate:String(fd.get('date')||''),
-      manualMovement:true,createdAt:new Date().toISOString()
-    };
-    const btn=ev.target.querySelector('[type=submit]');btn.disabled=true;
-    try{
-      const j=await post120('/api/finance-v94',{action:'add',salonId:SID120(),movement});
-      useState120(j.state);close120();renderFinance120();
-      if(typeof toast==='function')toast(expense?'Egreso registrado':'Ingreso registrado');
-    }catch(err){btn.disabled=false;if(typeof toast==='function')toast('No se pudo guardar: '+err.message)}
+      if(!has123(root,['borrar fiesta','borrar reserva']) && typeof window.confirmDeleteEvent==='function')
+        add123(root,'🗑 Borrar reserva',()=>window.confirmDeleteEvent(eid),'danger');
+    },180);
+    return r;
   };
 }
-
-async function reset120(){
-  if(!confirm('¿Borrar TODOS los movimientos contables del salón? Las reservas se conservan, pero sus señas y pagos quedan en $0.'))return;
-  try{
-    const j=await post120('/api/accounting-v120',{action:'reset',salonId:SID120()});
-    useState120(j.state);
-    renderFinance120();
-    if(typeof toast==='function')toast('Contabilidad del salón en $0');
-  }catch(err){if(typeof toast==='function')toast('No se pudo reiniciar: '+err.message)}
-}
-
-// V120 es la única ruta final de Finanzas. Sin validaciones automáticas ni refrescos.
-const ROUTE120=renderSalonView;
-renderSalonView=function(){
-  if(view==='finance')return renderFinance120();
-  return ROUTE120();
-};
-
-window.FiestaControlV120={render:renderFinance120,reset:reset120,canonicalize:canonicalizeAll120};
 })();
 </script>
-<!-- FiestaControl V120 CONTABILIDAD PROFESIONAL -->
-
-
-<script>
-/* ============================================================
-   FIESTACONTROL V121 - RESERVAS ESTABLES
-   Elimina el doble guardado V44/V45 y repara el caso histórico
-   "personal adicional = valor base" cuando no había personal extra.
-   ============================================================ */
-(function(){
-'use strict';
-const n121=v=>{const x=Number(v||0);return Number.isFinite(x)?x:0};
-const sid121=()=>String(session?.salonId||'');
-
-function repairEvent121(e){
-  if(!e || String(e.salonId||'')!==sid121()) return false;
-  let changed=false;
-
-  const noStaff =
-    n121(e.extraWaiters)===0 &&
-    n121(e.extraKitchen)===0 &&
-    n121(e.extraAnimators)===0 &&
-    n121(e.extraWaiterTotal)===0 &&
-    n121(e.extraKitchenTotal)===0 &&
-    n121(e.extraAnimatorTotal)===0 &&
-    n121(e.typeExtrasTotal)===0;
-
-  const base=n121(e.basePrice??e.baseTotal);
-  const generic=n121(e.extrasTotal);
-  const stock=n121(e.stockItemsTotal);
-
-  // Corrupción conocida de V44:
-  // staffClientChargeTotal recibió v.total (a veces exactamente el valor base).
-  if(noStaff && n121(e.staffClientChargeTotal)>0){
-    e.staffClientChargeTotal=0;
-    e.genericExtraStaffTotal=0;
-    e.autoExtraStaffTotal=0;
-    changed=true;
-  }
-
-  const typeExtras=n121(e.typeExtrasTotal) || (
-    n121(e.extraAdultTotal)+n121(e.extraChildTotal)+
-    n121(e.extraWaiterTotal)+n121(e.extraKitchenTotal)+
-    n121(e.extraAnimatorTotal)+n121(e.extraHourTotal)
-  );
-  const correctTotal=base+generic+stock+typeExtras;
-
-  if(correctTotal>0 && n121(e.total)!==correctTotal){
-    e.total=correctTotal;
-    changed=true;
-  }
-
-  const paid=Math.max(n121(e.deposit),n121(e.paid));
-  if(n121(e.paid)!==paid){e.paid=paid;changed=true}
-  const balance=Math.max(0,n121(e.total)-paid);
-  if(n121(e.balance)!==balance){e.balance=balance;changed=true}
-
-  return changed;
-}
-
-let saving121=false;
-async function persistRepair121(){
-  if(saving121)return;
-  saving121=true;
-  try{ await save(); }catch(e){ console.error('V121 repair save',e); }
-  finally{saving121=false}
-}
-
-// Repara una sola vez al cargar, sin intervalos ni refrescos de pantalla.
-let changed121=false;
-(data.events||[]).forEach(e=>{if(repairEvent121(e))changed121=true});
-if(changed121) persistRepair121();
-
-// Antes de abrir el detalle, los campos ya están saneados.
-// Así el usuario nunca ve "personal adicional" igual al valor de la fiesta.
-const OPEN121=window.openEvent;
-if(typeof OPEN121==='function'){
-  window.openEvent=function(eid){
-    const e=(data.events||[]).find(x=>String(x.id)===String(eid));
-    const changed=repairEvent121(e);
-    if(changed) persistRepair121();
-    return OPEN121.apply(this,arguments);
-  };
-}
-
-// Antes de cualquier guardado, coherencia matemática de las reservas.
-const SAVE121=save;
-save=function(){
-  (data.events||[]).forEach(repairEvent121);
-  return SAVE121.apply(this,arguments);
-};
-
-window.FiestaControlV121={repairEvent:repairEvent121};
-})();
-</script>
-<!-- FiestaControl V121 RESERVAS ESTABLES -->
+<!-- FiestaControl V123 INTEGRAL ESTABLE -->
 
 </body></html>
