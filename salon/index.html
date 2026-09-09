@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="es"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>FiestaControl · V111</title><link rel="stylesheet" href="style.css?v=110"/></head>
+<title>FiestaControl · V112</title><link rel="stylesheet" href="style.css?v=110"/></head>
 <body><div id="app"></div><dialog id="modal"><div id="modal-body"></div></dialog><div id="toast" class="toast"></div>
 <script src="/api/bootstrap.js?v=110"></script><script src="app.js?v=110"></script><script src="enhancements.js?v=110"></script>
 <script>
@@ -662,7 +662,7 @@ window.FiestaControlV110={
 'use strict';
 
 /* ============================================================
-   FIESTACONTROL V111 PROFESIONAL
+   FIESTACONTROL V112 PROFESIONAL
    Comunidad + Agenda + Reservas + Finanzas
    ============================================================ */
 
@@ -940,7 +940,7 @@ async function refreshCommunity111(){
 }
 
 /* Reemplazo final de comunidad del salón y proveedor */
-window.renderCommunityV111=renderCommunity111;
+window.renderCommunityV112=renderCommunity111;
 window.renderCommunityV24=renderCommunity111;
 ['59','58','57','56','55','54','53'].forEach(v=>window['renderProviderCommunity'+v]=renderCommunity111);
 
@@ -984,7 +984,7 @@ window.openAgendaDay111=function(dateKey){
   QA111('[data-eid]',Q111('#modal-body')).forEach(b=>b.onclick=()=>{const id=b.dataset.eid;close111();setTimeout(()=>window.openEvent(id),40)});
   Q111('#newday111').onclick=()=>{close111();setTimeout(()=>window.openEventForm111('',dateKey),50)};
 };
-window.renderCalendarV111=function(){
+window.renderCalendarV112=function(){
   if(session?.role!=='salon')return;
   const y=calendar111.getFullYear(),m=calendar111.getMonth(),names=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
   try{setTitle('Agenda','Disponibilidad mensual y reservas del salón')}catch(_){}
@@ -1005,9 +1005,9 @@ window.renderCalendarV111=function(){
     <button class="ghost small" id="today111">Hoy</button>
     <button class="ghost small" id="buffer111">🧹 Limpieza: ${buffer111()} min</button>
   </div><div class="calendar">${['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'].map(x=>`<div class="weekday">${x}</div>`).join('')}${cells.join('')}</div></div>`;
-  Q111('#prev111').onclick=()=>{calendar111=new Date(y,m-1,1);renderCalendarV111()};
-  Q111('#next111').onclick=()=>{calendar111=new Date(y,m+1,1);renderCalendarV111()};
-  Q111('#today111').onclick=()=>{calendar111=new Date();renderCalendarV111()};
+  Q111('#prev111').onclick=()=>{calendar111=new Date(y,m-1,1);renderCalendarV112()};
+  Q111('#next111').onclick=()=>{calendar111=new Date(y,m+1,1);renderCalendarV112()};
+  Q111('#today111').onclick=()=>{calendar111=new Date();renderCalendarV112()};
   Q111('#buffer111').onclick=configureBuffer111;
   QA111('[data-date]',c).forEach(b=>b.onclick=()=>openAgendaDay111(b.dataset.date));
 };
@@ -1016,7 +1016,7 @@ function configureBuffer111(){
   modal111(`<div class="modal-title"><div><h2>🧹 Intervalo entre fiestas</h2><p>Tiempo mínimo para limpieza y preparación.</p></div><button class="ghost small" onclick="closeModal()">✕</button></div>
     <form id="buffer-form111"><div class="field"><label>Minutos</label><select name="minutes">${[30,40,45,60,75,90].map(x=>`<option value="${x}" ${x===cur?'selected':''}>${x} minutos</option>`).join('')}</select></div>
     <div class="form-actions"><button class="primary">Guardar</button></div></form>`);
-  Q111('#buffer-form111').onsubmit=e=>{e.preventDefault();const s=(data.salons||[]).find(x=>String(x.id)===String(SID111()));if(s)s.cleanupBufferMinutes=N111(new FormData(e.target).get('minutes'));save();close111();renderCalendarV111();toast111('Intervalo actualizado')};
+  Q111('#buffer-form111').onsubmit=e=>{e.preventDefault();const s=(data.salons||[]).find(x=>String(x.id)===String(SID111()));if(s)s.cleanupBufferMinutes=N111(new FormData(e.target).get('minutes'));save();close111();renderCalendarV112();toast111('Intervalo actualizado')};
 }
 
 /* ============================================================
@@ -1044,7 +1044,7 @@ window.openEventForm111=function(eid='',prefillDate=''){
 };
 window.openEventForm=window.openEventForm111;
 
-/* Captura Nueva reserva para garantizar que use V111. */
+/* Captura Nueva reserva para garantizar que use V112. */
 document.addEventListener('click',e=>{
   if(session?.role!=='salon')return;
   const b=e.target.closest('button');if(!b)return;
@@ -1115,7 +1115,7 @@ function todayAlert111(){
 }
 
 /* ============================================================
-   5. FINANZAS V111: CÁLCULO CORRECTO DE RESERVAS
+   5. FINANZAS V112: CÁLCULO CORRECTO DE RESERVAS
    ============================================================ */
 
 function payments111(eid){
@@ -1152,7 +1152,7 @@ function renderFinance111(){
   const evs=salonEvents111().map(e=>({e,f:figures111(e)}));
   const contracted=evs.reduce((s,x)=>s+x.f.total,0),collected=evs.reduce((s,x)=>s+x.f.paid,0),pending=evs.reduce((s,x)=>s+x.f.balance,0);
   c.innerHTML=`<div id="finance111">
-    <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px"><div><h2 style="margin:0">Finanzas</h2><small class="muted">Caja general + control económico por fiesta.</small></div><b style="color:#7257ff">CONTROL V111</b></div>
+    <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px"><div><h2 style="margin:0">Finanzas</h2><small class="muted">Caja general + control económico por fiesta.</small></div><b style="color:#7257ff">CONTROL V112</b></div>
     <div class="toolbar"><button class="primary" id="income111">+ Ingresar dinero</button><button class="danger" id="expense111">- Registrar egreso</button><button class="secondary" id="reset111">💰 Poner movimientos en $0</button></div>
     <div class="grid stats" style="margin-top:14px">
       <div class="card stat"><small>Ingresos de caja</small><strong>${MONEY111(tin)}</strong></div><div class="card stat"><small>Egresos</small><strong>${MONEY111(tout)}</strong></div>
@@ -1183,7 +1183,7 @@ function renderFinance111(){
 const route111=renderSalonView;
 renderSalonView=function(){
   if(view==='finance')return renderFinance111();
-  if(view==='calendar')return renderCalendarV111();
+  if(view==='calendar')return renderCalendarV112();
   if(view==='community')return renderCommunity111();
   return route111();
 };
@@ -1225,7 +1225,7 @@ setTimeout(init111,350);
 setInterval(()=>{injectAdminCommunity111();updateCommunityBadge111()},1800);
 setInterval(refreshCommunity111,6000);
 
-/* Clic Comunidad de cualquier menú: asegurar renderer V111 */
+/* Clic Comunidad de cualquier menú: asegurar renderer V112 */
 document.addEventListener('click',e=>{
   const el=e.target.closest('button,a,[role=button]');if(!el)return;
   if(NOR111(el.textContent).includes('comunidad')&&['salon','provider'].includes(roleGroup111())){
@@ -1233,11 +1233,84 @@ document.addEventListener('click',e=>{
   }
 },true);
 
-window.FiestaControlV111={
-  community:renderCommunity111,agenda:renderCalendarV111,finance:renderFinance111,
+window.FiestaControlV112={
+  community:renderCommunity111,agenda:renderCalendarV112,finance:renderFinance111,
   openDay:openAgendaDay111,newReservation:openEventForm111,conflict:conflict111
 };
 
+})();
+
+</script>
+
+<script>
+
+
+/* ============================================================
+   V112 - LIMPIEZA DE PEDIDOS / COMPRAS DE PRUEBA EN PROVEEDORES
+   ============================================================ */
+(function(){
+'use strict';
+function sid112(){ return String(session?.salonId||session?.id||session?.userId||''); }
+function n112(v){ v=Number(v); return Number.isFinite(v)?v:0; }
+function items112(o){
+  if(Array.isArray(o?.items)&&o.items.length) return o.items.map(x=>({productId:x.productId||x.id||'',productName:x.productName||x.name||'',qty:n112(x.qty||x.quantity||0)}));
+  return [{productId:o?.productId||'',productName:o?.productName||'',qty:n112(o?.qty||0)}];
+}
+function norm112(s){return String(s||'').trim().toLowerCase();}
+function rollbackStock112(order,sid){
+  if(order?.targetType!=='stock'||order?.stockAdded!==true)return;
+  (items112(order)||[]).forEach(it=>{
+    const p=(data.stockProducts||[]).find(x=>String(x.salonId)===sid&&((it.productId&&String(x.id)===String(it.productId))||norm112(x.name)===norm112(it.productName)));
+    if(p)p.stock=Math.max(0,n112(p.stock)-n112(it.qty));
+  });
+}
+window.clearSupplierTests112=function(){
+  const sid=sid112();
+  const purchases=(data.stockPurchases||[]).filter(o=>String(o.salonId)===sid);
+  const legacy=(data.orders||[]).filter(o=>String(o.salonId)===sid);
+  const ids=new Set([...purchases,...legacy].map(o=>String(o.id)));
+  if(!ids.size){ if(typeof toast==='function')toast('No hay pedidos ni compras para borrar'); return; }
+  showModal(`
+    <div class="modal-title"><div><h2>🧹 Borrar pedidos y compras</h2><p>Limpieza de operaciones de prueba del salón.</p></div><button class="ghost small" onclick="closeModal()">✕</button></div>
+    <div class="card" style="margin:0 0 14px"><b>Se eliminarán ${purchases.length+legacy.length} pedido(s) / compra(s)</b><p class="muted" style="margin:7px 0 0">También se borrarán sus chats, pagos y movimientos contables. Si una compra entregada agregó mercadería al stock, se descontará únicamente esa cantidad. No se borran proveedores ni productos.</p></div>
+    <div class="form-actions"><button class="ghost" onclick="closeModal()">Cancelar</button><button class="danger" id="confirmClearSup112">Sí, borrar pedidos y compras</button></div>`);
+  const b=document.querySelector('#confirmClearSup112');
+  if(!b)return;
+  b.onclick=async()=>{
+    purchases.forEach(o=>rollbackStock112(o,sid));
+    data.stockPurchases=(data.stockPurchases||[]).filter(o=>String(o.salonId)!==sid);
+    data.orders=(data.orders||[]).filter(o=>String(o.salonId)!==sid);
+    data.orderMessages=(data.orderMessages||[]).filter(m=>!ids.has(String(m.orderId)));
+    data.providerPayments=(data.providerPayments||[]).filter(p=>!ids.has(String(p.orderId)));
+    data.movements=(data.movements||[]).filter(m=>{
+      if(String(m.salonId)!==sid)return true;
+      if(ids.has(String(m.orderId||''))||ids.has(String(m.stockPurchaseId||'')))return false;
+      const sk=String(m.sourceKey||'');
+      for(const oid of ids){if(sk===`stock-purchase:${oid}`||sk===`provider-order:${oid}`)return false;}
+      return true;
+    });
+    try{ await save(); }catch(e){}
+    closeModal();
+    if(typeof window.renderSuppliersV57==='function')window.renderSuppliersV57();
+    if(typeof toast==='function')toast('Pedidos y compras eliminados');
+  };
+};
+
+const old112=window.renderSuppliersV57;
+if(typeof old112==='function'){
+  window.renderSuppliersV57=function(){
+    const r=old112.apply(this,arguments);
+    setTimeout(()=>{
+      if(session?.role!=='salon'||view!=='suppliers')return;
+      const content=document.querySelector('#content'); if(!content||document.querySelector('#clearSupplierTests112'))return;
+      const first=content.querySelector('.card'); if(!first)return;
+      const actions=first.querySelector('.section-title > div:last-child'); if(!actions)return;
+      const btn=document.createElement('button'); btn.id='clearSupplierTests112'; btn.className='danger'; btn.textContent='🧹 Borrar pedidos y compras'; btn.onclick=window.clearSupplierTests112; actions.appendChild(btn);
+    },30);
+    return r;
+  };
+  ['56','55','54','53'].forEach(v=>window['renderSuppliersV'+v]=window.renderSuppliersV57);
+}
 })();
 
 </script>
